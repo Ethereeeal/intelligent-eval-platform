@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EvalForge - 智能问答（Demo 占位）</title>
+<style>
+:root {
+  --primary: #0A3D62;
+  --primary-light: #1B6CA8;
+  --primary-pale: #E8F1F8;
+  --accent: #C9A961;
+  --ink: #1A2332;
+  --ink-secondary: #4A5568;
+  --ink-muted: #8896A8;
+  --bg: #F7F9FB;
+  --surface: #FFFFFF;
+  --border: #E2E8F0;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: 'Noto Sans SC', -apple-system, sans-serif;
+  background: var(--bg);
+  color: var(--ink);
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Top bar */
+.topbar {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 0 24px;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-shrink: 0;
+}
+.topbar .logo { font-weight: 700; font-size: 16px; color: var(--primary); }
+.topbar .beta-tag {
+  font-size: 10px;
+  background: var(--accent);
+  color: #fff;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-weight: 600;
+}
+
+/* Placeholder banner */
+.placeholder-banner {
+  background: linear-gradient(135deg, #FFF8E1, #FFF3CD);
+  border-bottom: 1px solid #FFE082;
+  padding: 12px 24px;
+  font-size: 13px;
+  color: #8B6914;
+  text-align: center;
+  flex-shrink: 0;
+}
+.placeholder-banner strong { color: #6D530C; }
+
+/* Chat layout */
+.chat-layout {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+}
+
+/* Chat main area */
+.chat-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+/* Messages area */
+.chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Message bubbles */
+.message {
+  display: flex;
+  gap: 12px;
+  max-width: 720px;
+  animation: fadeIn 0.3s ease;
+}
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.message.user { align-self: flex-end; flex-direction: row-reverse; }
+.message.system { align-self: flex-start; }
+
+.message .avatar {
+  width: 32px; height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.message.user .avatar { background: var(--primary); color: #fff; }
+.message.system .avatar { background: var(--primary-pale); color: var(--primary); }
+
+.message .bubble {
+  padding: 12px 16px;
+  border-radius: 12px;
+  font-size: 14px;
+  line-height: 1.6;
+}
+.message.user .bubble {
+  background: var(--primary);
+  color: #fff;
+  border-bottom-right-radius: 4px;
+}
+.message.system .bubble {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-bottom-left-radius: 4px;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+}
+
+/* Preview card in chat */
+.preview-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 16px;
+  margin-top: 8px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.preview-card .card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+  margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.preview-card .card-item {
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--ink-secondary);
+}
+.preview-card .card-item:last-child { border-bottom: none; }
+
+/* Input area */
+.chat-input-area {
+  padding: 16px 24px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  display: flex;
+  gap: 12px;
+  flex-shrink: 0;
+}
+.chat-input-area input {
+  flex: 1;
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 14px;
+  font-family: inherit;
+  background: var(--bg);
+  color: var(--ink);
+}
+.chat-input-area input:focus {
+  outline: none;
+  border-color: var(--primary-light);
+  box-shadow: 0 0 0 3px rgba(27,108,168,0.1);
+}
+.chat-input-area input::placeholder { color: var(--ink-muted); }
+.chat-input-area button {
+  padding: 12px 24px;
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.chat-input-area button:hover { background: var(--primary-light); }
+.chat-input-area button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* Context panel (right side) */
+.context-panel {
+  width: 280px;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  padding: 20px;
+  overflow-y: auto;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.context-panel h3 {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.context-panel .context-item {
+  font-size: 13px;
+  color: var(--ink-secondary);
+  padding: 8px;
+  background: var(--bg);
+  border-radius: 6px;
+}
+
+/* Responsive: hide context panel on narrow screens */
+@media (max-width: 900px) {
+  .context-panel { display: none; }
+}
+</style>
+</head>
+<body>
+
+<!-- Top bar -->
+<div class="topbar">
+  <span class="logo">EvalForge</span>
+  <span class="beta-tag">BETA</span>
+  <span style="color:var(--ink-muted);font-size:13px;">智能问答（第二阶段开发）</span>
+  <a href="/" style="margin-left:auto;color:var(--primary-light);font-size:13px;text-decoration:none;">← 返回管理台</a>
+</div>
+
+<!-- Placeholder banner -->
+<div class="placeholder-banner">
+  <strong>Demo 占位说明：</strong>
+  智能问答交互功能将在第二阶段完整实现。当前页面仅展示对话界面的基础布局和静态示例消息。
+  Demo 阶段请使用管理台页面完成文档上传、检索和评测集管理操作。
+</div>
+
+<!-- Chat layout -->
+<div class="chat-layout">
+  <!-- Main chat area -->
+  <div class="chat-main">
+    <!-- Messages -->
+    <div class="chat-messages" id="chatMessages">
+      <!-- System greeting -->
+      <div class="message system">
+        <div class="avatar">E</div>
+        <div>
+          <div class="bubble">
+            您好！我是 EvalForge 智能助手。<br><br>
+            <strong>在完整版本中，您可以通过对话完成以下操作：</strong><br>
+            📄 上传文档（直接拖拽或自然语言指令）<br>
+            👁️ 在对话框中预览文档和评测集内容<br>
+            ✏️ 修改评测样本的问题、答案或优先级<br>
+            ❓ 针对文档内容提问并查看证据来源<br>
+            📊 查询覆盖率、评测结果等统计数据<br><br>
+            当前 Demo 阶段，请使用左侧管理台页面进行操作。
+          </div>
+
+          <!-- Example: In-Chat Preview card -->
+          <div class="preview-card">
+            <div class="card-title">📋 评测集预览示例（In-Chat Preview）</div>
+            <div class="card-item">
+              <strong>case_0001</strong> [P0] 该公司的净利润率是多少？<br>
+              <span style="color:var(--ink-muted);">证据: 合并利润表 p.35, 主要财务指标定义 p.8</span>
+            </div>
+            <div class="card-item">
+              <strong>case_0002</strong> [P0] 小微企业流动资金贷款的资产负债率上限？<br>
+              <span style="color:var(--ink-muted);">证据: 授信政策指引 3.2.1 p.12</span>
+            </div>
+            <div class="card-item">
+              <strong>case_0003</strong> [P1] 政策性担保机构全额担保时的例外规则？<br>
+              <span style="color:var(--ink-muted);">证据: 授信政策指引 3.2.1 p.12</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Example: document upload card -->
+      <div class="message user">
+        <div class="avatar">张</div>
+        <div class="bubble">帮我上传《2026年授信政策指引》</div>
+      </div>
+
+      <div class="message system">
+        <div class="avatar">E</div>
+        <div>
+          <div class="bubble">✅ 文件上传成功！已创建任务 #TASK-0042。</div>
+          <div class="preview-card">
+            <div class="card-title">📄 文档卡片</div>
+            <div class="card-item">
+              <strong>文件名：</strong>2026年授信政策指引.pdf<br>
+              <strong>大小：</strong>2.4 MB · <strong>页数：</strong>58页<br>
+              <strong>状态：</strong>已入库 · 解析完成 · EIU 抽取中
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Example: knowledge Q&A -->
+      <div class="message user">
+        <div class="avatar">张</div>
+        <div class="bubble">当前语料库的 P0 覆盖率是多少？还有哪些 P0 EIU 没有覆盖？</div>
+      </div>
+
+      <div class="message system">
+        <div class="avatar">E</div>
+        <div class="bubble">
+          <strong>P0 覆盖率：</strong>96.8%（62/64）<br><br>
+          <strong>未覆盖 P0 EIU：</strong><br>
+          1. EIU-0042 — 关联交易披露须经独立董事事前审批<br>
+          2. EIU-0089 — 不良贷款拨备覆盖率不低于150%<br><br>
+          <a href="#" style="color:var(--primary-light);">→ 查看未覆盖 EIU 清单</a>
+          &nbsp;&nbsp;
+          <a href="#" style="color:var(--primary-light);">→ 生成补题</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- Input area -->
+    <div class="chat-input-area">
+      <input
+        type="text"
+        id="chatInput"
+        placeholder="输入消息...（Demo 阶段仅做界面展示，不处理实际请求）"
+        disabled
+      >
+      <button disabled>发送</button>
+    </div>
+  </div>
+
+  <!-- Context panel -->
+  <div class="context-panel">
+    <h3>当前上下文</h3>
+    <div class="context-item">
+      <strong>语料库：</strong>授信政策指引 v3<br>
+      <span style="color:var(--ink-muted);">5 个文档 · 320 条样本</span>
+    </div>
+    <div class="context-item">
+      <strong>评测集版本：</strong>v2.1.0 (已发布)<br>
+      <span style="color:var(--ink-muted);">加权覆盖率 93.5%</span>
+    </div>
+    <div class="context-item">
+      <strong>最近运行：</strong>#RUN-0142<br>
+      <span style="color:var(--ink-muted);">通过 287/320 · 15 分钟前</span>
+    </div>
+    <h3>快捷操作</h3>
+    <div class="context-item" style="cursor:pointer;">📤 上传文档</div>
+    <div class="context-item" style="cursor:pointer;">📊 查看覆盖率</div>
+    <div class="context-item" style="cursor:pointer;">🔄 重新评测</div>
+    <div class="context-item" style="cursor:pointer;">📥 导出评测集</div>
+  </div>
+</div>
+
+</body>
+</html>

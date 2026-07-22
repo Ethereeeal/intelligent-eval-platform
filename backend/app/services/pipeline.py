@@ -55,8 +55,21 @@ class PipelineService:
             raise ValueError("文件内容不能为空")
 
         file_hash = hashlib.sha256(content).hexdigest()
-        storage_result = self.storage.save_raw_document(file_name=file_name, content=content)
-        raw_path = settings.raw_dir / f"{file_hash}_{file_name}"
+
+        # Duplicate check
+        existing_id = self.database.find_by_hash(file_hash)
+        if existing_id is not None:
+            return DocumentUploadResponse(
+                document_id=existing_id,
+                task_id=existing_id,
+                status="duplicate",
+                file_name=file_name,
+                block_count=len(self._filtered_blocks()),
+            )
+
+        safe_name = f"{file_hash}_{file_name}"
+        storage_result = self.storage.save_raw_document(file_name=safe_name, content=content)
+        raw_path = settings.raw_dir / safe_name
 
         document_id = self.database.save_document(
             corpus_id=corpus_id,
@@ -121,7 +134,7 @@ class PipelineService:
             task_id=document_id,
             status="uploaded",
             file_name=file_name,
-            block_count=len(block_records),
+            block_count=len(block_ids),
         )
 
     def query_retrieval(self, request: QueryRequest) -> QueryResponse:

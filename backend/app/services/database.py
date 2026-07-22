@@ -66,6 +66,12 @@ class DatabaseService:
             session.refresh(row)
             return row.document_id
 
+    def find_by_hash(self, file_hash: str) -> int | None:
+        """Return existing document_id for the given hash, or None."""
+        with SessionLocal() as session:
+            row = session.query(DocumentRow).filter(DocumentRow.file_hash == file_hash).first()
+            return row.document_id if row else None
+
     def save_blocks(self, *, document_id: int, blocks: list[dict]) -> list[int]:
         block_ids: list[int] = []
         with SessionLocal() as session:
