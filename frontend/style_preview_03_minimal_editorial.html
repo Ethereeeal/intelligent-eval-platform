@@ -1,0 +1,1051 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EvalForge - 极简文档编辑器风格</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,700&family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+:root {
+  --ink: #1C1917;
+  --ink-soft: #44403C;
+  --ink-mute: #78716C;
+  --ink-faint: #A8A29E;
+  --paper: #FAFAF9;
+  --paper-warm: #F5F5F4;
+  --line: #E7E5E4;
+  --line-soft: #F5F5F4;
+  --accent: #0F766E;
+  --accent-soft: #CCFBF1;
+  --accent-pale: #F0FDFA;
+  --highlight: #FCD34D;
+  --highlight-pale: #FEF3C7;
+  --rose: #E11D48;
+  --rose-pale: #FFE4E6;
+  --shadow: 0 1px 3px rgba(28, 25, 23, 0.04), 0 1px 2px rgba(28, 25, 23, 0.02);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: 'Inter', -apple-system, sans-serif;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 14px;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* === TOP NAV === */
+.topnav {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: rgba(250, 250, 249, 0.92);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--line);
+  height: 56px;
+  display: flex;
+  align-items: center;
+  padding: 0 32px;
+  gap: 32px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.brand-mark {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  background: var(--ink);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--paper);
+  font-family: 'Fraunces', serif;
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.brand-name {
+  font-family: 'Fraunces', serif;
+  font-size: 18px;
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: -0.3px;
+}
+
+.brand-sub {
+  font-size: 11px;
+  color: var(--ink-faint);
+  padding-left: 10px;
+  border-left: 1px solid var(--line);
+  margin-left: 2px;
+}
+
+.topnav-menu {
+  display: flex;
+  gap: 4px;
+  margin-left: 20px;
+}
+
+.topnav-link {
+  padding: 6px 14px;
+  font-size: 13px;
+  color: var(--ink-mute);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.12s;
+  font-weight: 400;
+}
+
+.topnav-link:hover {
+  color: var(--ink);
+  background: var(--paper-warm);
+}
+
+.topnav-link.active {
+  color: var(--ink);
+  font-weight: 500;
+  background: var(--paper-warm);
+}
+
+.topnav-right {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.cmd-input {
+  width: 200px;
+  padding: 6px 12px 6px 32px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font-size: 12px;
+  font-family: inherit;
+  background: var(--paper-warm);
+  color: var(--ink-soft);
+  position: relative;
+}
+
+.cmd-wrap {
+  position: relative;
+}
+
+.cmd-wrap svg {
+  position: absolute;
+  left: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--ink-faint);
+}
+
+.cmd-input:focus {
+  outline: none;
+  border-color: var(--ink-mute);
+  background: var(--paper);
+}
+
+.btn {
+  padding: 7px 16px;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  transition: all 0.12s;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.btn-dark {
+  background: var(--ink);
+  color: var(--paper);
+}
+
+.btn-dark:hover {
+  background: var(--ink-soft);
+}
+
+/* === LAYOUT === */
+.layout {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+/* === LEFT SIDEBAR === */
+.leftbar {
+  border-right: 1px solid var(--line);
+  padding: 28px 20px;
+  position: sticky;
+  top: 56px;
+  height: calc(100vh - 56px);
+  overflow-y: auto;
+}
+
+.leftbar-section {
+  margin-bottom: 28px;
+}
+
+.leftbar-title {
+  font-size: 11px;
+  color: var(--ink-faint);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 8px;
+  padding: 0 8px;
+  font-weight: 500;
+}
+
+.leftbar-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 5px;
+  font-size: 13px;
+  color: var(--ink-soft);
+  cursor: pointer;
+  transition: all 0.1s;
+}
+
+.leftbar-item:hover {
+  background: var(--paper-warm);
+  color: var(--ink);
+}
+
+.leftbar-item.active {
+  background: var(--accent-pale);
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.leftbar-item .count {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--ink-faint);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.leftbar-item.active .count {
+  color: var(--accent);
+}
+
+.leftbar-divider {
+  height: 1px;
+  background: var(--line);
+  margin: 16px 8px;
+}
+
+/* === MAIN CONTENT === */
+.main {
+  padding: 40px 48px;
+  min-width: 0;
+}
+
+/* === EDITORIAL HEADER === */
+.editorial-header {
+  margin-bottom: 40px;
+}
+
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--accent);
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  margin-bottom: 12px;
+}
+
+.eyebrow .pill {
+  padding: 2px 8px;
+  background: var(--accent-soft);
+  border-radius: 10px;
+  font-size: 10px;
+}
+
+.editorial-title {
+  font-family: 'Fraunces', serif;
+  font-size: 36px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--ink);
+  letter-spacing: -0.8px;
+  margin-bottom: 8px;
+}
+
+.editorial-title em {
+  font-style: italic;
+  font-weight: 400;
+  color: var(--accent);
+}
+
+.editorial-sub {
+  font-size: 14px;
+  color: var(--ink-mute);
+  max-width: 600px;
+}
+
+.editorial-meta {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 14px;
+  font-size: 12px;
+  color: var(--ink-faint);
+}
+
+.editorial-meta .dot { color: var(--line); }
+
+/* === STATS ROW === */
+.stats-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  margin-bottom: 40px;
+}
+
+.stat-block {
+  background: var(--paper);
+  padding: 24px 20px;
+  position: relative;
+}
+
+.stat-block:hover { background: var(--paper-warm); }
+
+.stat-num {
+  font-family: 'Fraunces', serif;
+  font-size: 32px;
+  font-weight: 600;
+  color: var(--ink);
+  line-height: 1.1;
+  letter-spacing: -0.5px;
+}
+
+.stat-num .small {
+  font-size: 15px;
+  color: var(--ink-mute);
+  font-weight: 400;
+}
+
+.stat-label {
+  font-size: 12px;
+  color: var(--ink-mute);
+  margin-top: 6px;
+}
+
+.stat-note {
+  font-size: 11px;
+  margin-top: 8px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.stat-note.good { color: var(--accent); }
+.stat-note.warn { color: #C2410C; }
+
+/* === SECTION === */
+.section {
+  margin-bottom: 40px;
+}
+
+.section-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 20px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.section-title {
+  font-family: 'Fraunces', serif;
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: -0.3px;
+}
+
+.section-title .num {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--ink-faint);
+  font-weight: 400;
+  margin-right: 8px;
+}
+
+.section-link {
+  font-size: 12px;
+  color: var(--accent);
+  cursor: pointer;
+  font-weight: 500;
+}
+
+/* === COVERAGE LIST === */
+.coverage-list {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.cov-row {
+  display: grid;
+  grid-template-columns: 1fr 80px 120px;
+  align-items: center;
+  gap: 16px;
+}
+
+.cov-info .name {
+  font-size: 14px;
+  color: var(--ink);
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cov-info .desc {
+  font-size: 12px;
+  color: var(--ink-faint);
+  margin-top: 2px;
+}
+
+.tag {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-weight: 500;
+}
+
+.tag.p0 { background: var(--rose-pale); color: var(--rose); }
+.tag.p1 { background: var(--highlight-pale); color: #92400E; }
+.tag.p2 { background: var(--accent-pale); color: var(--accent); }
+
+.cov-pct {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 15px;
+  font-weight: 500;
+  text-align: right;
+}
+
+.cov-pct.good { color: var(--accent); }
+.cov-pct.warn { color: #C2410C; }
+.cov-pct.full { color: var(--ink); }
+
+.cov-track {
+  height: 6px;
+  background: var(--paper-warm);
+  border-radius: 3px;
+  overflow: hidden;
+  border: 1px solid var(--line-soft);
+}
+
+.cov-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.5s ease;
+}
+
+.cov-fill.good { background: var(--accent); }
+.cov-fill.warn { background: #F59E0B; }
+.cov-fill.full { background: var(--ink); }
+
+/* === TWO COLUMN === */
+.two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 32px;
+  margin-bottom: 40px;
+}
+
+/* === TASK LIST === */
+.task-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.task-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.task-row:last-child { border-bottom: none; }
+
+.task-marker {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  margin-top: 7px;
+  flex-shrink: 0;
+}
+
+.task-marker.green { background: var(--accent); }
+.task-marker.amber { background: #F59E0B; }
+.task-marker.rose { background: var(--rose); }
+.task-marker.gray { background: var(--ink-faint); }
+
+.task-body { flex: 1; min-width: 0; }
+
+.task-title {
+  font-size: 14px;
+  color: var(--ink);
+  font-weight: 500;
+  margin-bottom: 3px;
+}
+
+.task-desc {
+  font-size: 12px;
+  color: var(--ink-mute);
+  line-height: 1.5;
+}
+
+.task-desc .mono {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--ink-faint);
+}
+
+.task-right {
+  text-align: right;
+  flex-shrink: 0;
+}
+
+.task-time {
+  font-size: 11px;
+  color: var(--ink-faint);
+  font-family: 'JetBrains Mono', monospace;
+}
+
+.task-badge {
+  display: inline-block;
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 500;
+  margin-top: 4px;
+}
+
+.task-badge.done { background: var(--accent-pale); color: var(--accent); }
+.task-badge.run { background: var(--highlight-pale); color: #92400E; }
+.task-badge.fail { background: var(--rose-pale); color: var(--rose); }
+.task-badge.wait { background: var(--paper-warm); color: var(--ink-mute); }
+
+/* === CORPUS TABLE === */
+.corpus-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.corpus-table th {
+  text-align: left;
+  padding: 10px 0;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--ink-faint);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid var(--line);
+}
+
+.corpus-table td {
+  padding: 14px 0;
+  font-size: 13px;
+  color: var(--ink-soft);
+  border-bottom: 1px solid var(--line-soft);
+  vertical-align: middle;
+}
+
+.corpus-table tbody tr {
+  transition: background 0.1s;
+}
+
+.corpus-table tbody tr:hover {
+  background: var(--paper-warm);
+}
+
+.corpus-table .name-cell {
+  color: var(--ink);
+  font-weight: 500;
+  font-size: 14px;
+}
+
+.corpus-table .name-cell .sub {
+  font-size: 11px;
+  color: var(--ink-faint);
+  font-weight: 400;
+  margin-top: 2px;
+}
+
+.mono { font-family: 'JetBrains Mono', monospace; font-size: 12px; }
+
+.inline-cov {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.inline-cov .bar {
+  width: 50px;
+  height: 4px;
+  background: var(--paper-warm);
+  border-radius: 2px;
+  overflow: hidden;
+  border: 1px solid var(--line-soft);
+}
+
+.inline-cov .fill {
+  height: 100%;
+  border-radius: 2px;
+}
+
+/* === ANIMATIONS === */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.stat-block { animation: fadeUp 0.3s ease forwards; }
+.stat-block:nth-child(1) { animation-delay: 0.05s; }
+.stat-block:nth-child(2) { animation-delay: 0.1s; }
+.stat-block:nth-child(3) { animation-delay: 0.15s; }
+.stat-block:nth-child(4) { animation-delay: 0.2s; }
+
+.section { animation: fadeUp 0.4s ease forwards; animation-delay: 0.25s; opacity: 0; }
+</style>
+</head>
+<body>
+
+<!-- TOP NAV -->
+<nav class="topnav">
+  <div class="brand">
+    <div class="brand-mark">E</div>
+    <div class="brand-name">EvalForge</div>
+    <div class="brand-sub">智能评测集平台</div>
+  </div>
+  <div class="topnav-menu">
+    <span class="topnav-link active">总览</span>
+    <span class="topnav-link">语料库</span>
+    <span class="topnav-link">评测集</span>
+    <span class="topnav-link">运行记录</span>
+    <span class="topnav-link">失败诊断</span>
+    <span class="topnav-link">配置</span>
+  </div>
+  <div class="topnav-right">
+    <div class="cmd-wrap">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+      <input class="cmd-input" type="text" placeholder="搜索或输入命令...">
+    </div>
+    <button class="btn btn-dark">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+      新建
+    </button>
+  </div>
+</nav>
+
+<!-- LAYOUT -->
+<div class="layout">
+  <!-- LEFT SIDEBAR -->
+  <aside class="leftbar">
+    <div class="leftbar-section">
+      <div class="leftbar-title">工作区</div>
+      <div class="leftbar-item active">
+        <span>📊 仪表盘</span>
+      </div>
+      <div class="leftbar-item">
+        <span>📁 全部语料库</span>
+        <span class="count">8</span>
+      </div>
+      <div class="leftbar-item">
+        <span>📄 评测集</span>
+        <span class="count">12</span>
+      </div>
+      <div class="leftbar-item">
+        <span>🔍 检索测试</span>
+      </div>
+    </div>
+
+    <div class="leftbar-divider"></div>
+
+    <div class="leftbar-section">
+      <div class="leftbar-title">最近语料库</div>
+      <div class="leftbar-item">
+        <span>📝 授信政策指引 v3</span>
+      </div>
+      <div class="leftbar-item">
+        <span>📈 企业财报 Q2</span>
+      </div>
+      <div class="leftbar-item">
+        <span>📝 流动资金贷款办法</span>
+      </div>
+      <div class="leftbar-item">
+        <span>📊 供应链金融汇编</span>
+      </div>
+      <div class="leftbar-item">
+        <span>📈 合并财报附注</span>
+      </div>
+    </div>
+
+    <div class="leftbar-divider"></div>
+
+    <div class="leftbar-section">
+      <div class="leftbar-title">系统</div>
+      <div class="leftbar-item">
+        <span>⚙️ 配置与版本</span>
+      </div>
+      <div class="leftbar-item">
+        <span>🛡️ 治理审核 Skill</span>
+      </div>
+      <div class="leftbar-item">
+        <span>📋 审计日志</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- MAIN -->
+  <main class="main">
+    <!-- EDITORIAL HEADER -->
+    <div class="editorial-header">
+      <div class="eyebrow">
+        <span class="pill">LIVE</span>
+        评测总览 · 2026年7月22日
+      </div>
+      <h1 class="editorial-title">授信政策与财报的<br><em>智能评测</em>集生成平台</h1>
+      <p class="editorial-sub">将专业文档转化为可验证、可回溯、可复现的问答评测集，自动运行评测、定位失败原因并给出优化建议。</p>
+      <div class="editorial-meta">
+        <span>8 个活跃语料库</span>
+        <span class="dot">·</span>
+        <span>1,247 个 EIU</span>
+        <span class="dot">·</span>
+        <span>1,257 个评测样本</span>
+        <span class="dot">·</span>
+        <span>Skill v1.2.0</span>
+      </div>
+    </div>
+
+    <!-- STATS -->
+    <div class="stats-row">
+      <div class="stat-block">
+        <div class="stat-num">8<span class="small"> 个</span></div>
+        <div class="stat-label">活跃语料库</div>
+        <div class="stat-note good">↑ 较上周 +2</div>
+      </div>
+      <div class="stat-block">
+        <div class="stat-num">12<span class="small"> 套</span></div>
+        <div class="stat-label">已发布评测集</div>
+        <div class="stat-note good">↑ 本月 +3</div>
+      </div>
+      <div class="stat-block">
+        <div class="stat-num">91.3<span class="small">%</span></div>
+        <div class="stat-label">加权 EIU 覆盖率</div>
+        <div class="stat-note good">目标 > 85%</div>
+      </div>
+      <div class="stat-block">
+        <div class="stat-num">23<span class="small"> 条</span></div>
+        <div class="stat-label">待处理失败用例</div>
+        <div class="stat-note warn">P0 缺陷 3 条</div>
+      </div>
+    </div>
+
+    <!-- COVERAGE SECTION -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-title"><span class="num">01</span>覆盖率详情</div>
+        <span class="section-link">查看报告 →</span>
+      </div>
+      <div class="coverage-list">
+        <div class="cov-row">
+          <div class="cov-info">
+            <div class="name">监管禁止事项与关键阈值 <span class="tag p0">P0</span></div>
+            <div class="desc">强制覆盖项，未达 100% 不得发布</div>
+          </div>
+          <div class="cov-pct full">100.0%</div>
+          <div class="cov-track"><div class="cov-fill full" style="width:100%"></div></div>
+        </div>
+        <div class="cov-row">
+          <div class="cov-info">
+            <div class="name">核心定义与主流程指标 <span class="tag p1">P1</span></div>
+            <div class="desc">术语定义、计算公式、主流程步骤</div>
+          </div>
+          <div class="cov-pct good">94.2%</div>
+          <div class="cov-track"><div class="cov-fill good" style="width:94.2%"></div></div>
+        </div>
+        <div class="cov-row">
+          <div class="cov-info">
+            <div class="name">一般说明与补充事实 <span class="tag p2">P2</span></div>
+            <div class="desc">补充性说明、背景信息</div>
+          </div>
+          <div class="cov-pct warn">82.7%</div>
+          <div class="cov-track"><div class="cov-fill warn" style="width:82.7%"></div></div>
+        </div>
+        <div class="cov-row">
+          <div class="cov-info">
+            <div class="name">证据回溯率 <span class="tag p0">S0</span></div>
+            <div class="desc">所有标准答案必须可回溯至原文</div>
+          </div>
+          <div class="cov-pct full">100.0%</div>
+          <div class="cov-track"><div class="cov-fill full" style="width:100%"></div></div>
+        </div>
+        <div class="cov-row">
+          <div class="cov-info">
+            <div class="name">实质文段对账率</div>
+            <div class="desc">每个实质文段均有 EIU 或排除记录</div>
+          </div>
+          <div class="cov-pct full">100.0%</div>
+          <div class="cov-track"><div class="cov-fill full" style="width:100%"></div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TWO COLUMN -->
+    <div class="two-col">
+      <!-- TASKS -->
+      <div class="section" style="margin-bottom:0;">
+        <div class="section-header">
+          <div class="section-title"><span class="num">02</span>近期任务</div>
+          <span class="section-link">全部 →</span>
+        </div>
+        <div class="task-list">
+          <div class="task-row">
+            <div class="task-marker amber"></div>
+            <div class="task-body">
+              <div class="task-title">文档解析与 EIU 抽取</div>
+              <div class="task-desc">企业财报 Q2 · <span class="mono">CORPUS-007</span> · 已处理 42/58 页</div>
+            </div>
+            <div class="task-right">
+              <div class="task-time">2分钟前</div>
+              <div class="task-badge run">进行中 72%</div>
+            </div>
+          </div>
+          <div class="task-row">
+            <div class="task-marker amber"></div>
+            <div class="task-body">
+              <div class="task-title">自动评测运行 #RUN-0142</div>
+              <div class="task-desc">授信政策 v3 · 320题 · <span class="mono">282/320</span> 完成</div>
+            </div>
+            <div class="task-right">
+              <div class="task-time">15分钟前</div>
+              <div class="task-badge run">运行中 88%</div>
+            </div>
+          </div>
+          <div class="task-row">
+            <div class="task-marker green"></div>
+            <div class="task-body">
+              <div class="task-title">上传《2026年授信政策指引》</div>
+              <div class="task-desc"><span class="mono">5.2MB · PDF · HASH a3f8...c2e1</span></div>
+            </div>
+            <div class="task-right">
+              <div class="task-time">30分钟前</div>
+              <div class="task-badge done">已完成</div>
+            </div>
+          </div>
+          <div class="task-row">
+            <div class="task-marker rose"></div>
+            <div class="task-body">
+              <div class="task-title">解析失败: OCR 低置信度</div>
+              <div class="task-desc">附录表格.pdf · <span class="mono">PAGE 12-15 · CONF &lt; 0.6</span></div>
+            </div>
+            <div class="task-right">
+              <div class="task-time">1小时前</div>
+              <div class="task-badge fail">需处理</div>
+            </div>
+          </div>
+          <div class="task-row">
+            <div class="task-marker green"></div>
+            <div class="task-body">
+              <div class="task-title">治理审核 Skill 回归测试</div>
+              <div class="task-desc"><span class="mono">SKILL v1.2.0 · S0 规则 10/10 通过</span></div>
+            </div>
+            <div class="task-right">
+              <div class="task-time">3小时前</div>
+              <div class="task-badge done">已完成</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- DIAGNOSTICS SUMMARY -->
+      <div class="section" style="margin-bottom:0;">
+        <div class="section-header">
+          <div class="section-title"><span class="num">03</span>失败归因分布</div>
+          <span class="section-link">诊断详情 →</span>
+        </div>
+        <div class="task-list">
+          <div class="task-row">
+            <div class="task-marker rose"></div>
+            <div class="task-body">
+              <div class="task-title">D3 · 检索召回失败</div>
+              <div class="task-desc">Gold Evidence 不在 Top-K，需优化切块或召回策略</div>
+            </div>
+            <div class="task-right">
+              <div class="task-time mono">9 条</div>
+              <div class="task-badge fail">高频</div>
+            </div>
+          </div>
+          <div class="task-row">
+            <div class="task-marker amber"></div>
+            <div class="task-body">
+              <div class="task-title">D5 · 答案生成失败</div>
+              <div class="task-desc">必要证据已在上下文但答案错误</div>
+            </div>
+            <div class="task-right">
+              <div class="task-time mono">6 条</div>
+              <div class="task-badge run">中频</div>
+            </div>
+          </div>
+          <div class="task-row">
+            <div class="task-marker amber"></div>
+            <div class="task-body">
+              <div class="task-title">D6 · 评测样本缺陷</div>
+              <div class="task-desc">问题歧义或 Gold 错误，应修订评测集</div>
+            </div>
+            <div class="task-right">
+              <div class="task-time mono">4 条</div>
+              <div class="task-badge run">修题</div>
+            </div>
+          </div>
+          <div class="task-row">
+            <div class="task-marker gray"></div>
+            <div class="task-body">
+              <div class="task-title">D4 · 排序/上下文失败</div>
+              <div class="task-desc">Gold 被召回但排名过低或被截断</div>
+            </div>
+            <div class="task-right">
+              <div class="task-time mono">3 条</div>
+              <div class="task-badge wait">低频</div>
+            </div>
+          </div>
+          <div class="task-row">
+            <div class="task-marker gray"></div>
+            <div class="task-body">
+              <div class="task-title">D1 · 文档解析失败</div>
+              <div class="task-desc">金标准证据未正确抽取或表格结构损坏</div>
+            </div>
+            <div class="task-right">
+              <div class="task-time mono">1 条</div>
+              <div class="task-badge wait">低频</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- CORPUS TABLE -->
+    <div class="section">
+      <div class="section-header">
+        <div class="section-title"><span class="num">04</span>语料库与评测集</div>
+        <span class="section-link">管理全部 →</span>
+      </div>
+      <table class="corpus-table">
+        <thead>
+          <tr>
+            <th>名称</th>
+            <th>领域</th>
+            <th>文档</th>
+            <th>覆盖率</th>
+            <th>样本</th>
+            <th>状态</th>
+            <th>更新</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="name-cell">授信政策指引 v3<div class="sub">5 份 PDF/DOCX</div></td>
+            <td>授信政策</td>
+            <td class="mono">5</td>
+            <td>
+              <div class="inline-cov">
+                <div class="bar"><div class="fill" style="width:93.5%; background:var(--accent)"></div></div>
+                <span class="mono" style="color:var(--accent)">93.5%</span>
+              </div>
+            </td>
+            <td class="mono">320</td>
+            <td><span class="task-badge done">已发布</span></td>
+            <td class="mono" style="color:var(--ink-faint)">07-22</td>
+          </tr>
+          <tr>
+            <td class="name-cell">某企业财报 Q2<div class="sub">3 份 XLSX/PDF</div></td>
+            <td>企业财报</td>
+            <td class="mono">3</td>
+            <td>
+              <div class="inline-cov">
+                <div class="bar"><div class="fill" style="width:81.2%; background:#F59E0B"></div></div>
+                <span class="mono" style="color:#C2410C">81.2%</span>
+              </div>
+            </td>
+            <td class="mono">186</td>
+            <td><span class="task-badge run">生成中</span></td>
+            <td class="mono" style="color:var(--ink-faint)">07-22</td>
+          </tr>
+          <tr>
+            <td class="name-cell">流动资金贷款办法<div class="sub">2 份 PDF</div></td>
+            <td>授信政策</td>
+            <td class="mono">2</td>
+            <td>
+              <div class="inline-cov">
+                <div class="bar"><div class="fill" style="width:100%; background:var(--ink)"></div></div>
+                <span class="mono" style="color:var(--ink)">100%</span>
+              </div>
+            </td>
+            <td class="mono">94</td>
+            <td><span class="task-badge done">已发布</span></td>
+            <td class="mono" style="color:var(--ink-faint)">07-21</td>
+          </tr>
+          <tr>
+            <td class="name-cell">供应链金融汇编<div class="sub">7 份 PDF/DOCX</div></td>
+            <td>授信政策</td>
+            <td class="mono">7</td>
+            <td>
+              <div class="inline-cov">
+                <div class="bar"><div class="fill" style="width:76.8%; background:var(--rose)"></div></div>
+                <span class="mono" style="color:var(--rose)">76.8%</span>
+              </div>
+            </td>
+            <td class="mono">245</td>
+            <td><span class="task-badge wait">待补题</span></td>
+            <td class="mono" style="color:var(--ink-faint)">07-20</td>
+          </tr>
+          <tr>
+            <td class="name-cell">合并财报附注<div class="sub">4 份 XLSX/PDF</div></td>
+            <td>企业财报</td>
+            <td class="mono">4</td>
+            <td>
+              <div class="inline-cov">
+                <div class="bar"><div class="fill" style="width:95.1%; background:var(--accent)"></div></div>
+                <span class="mono" style="color:var(--accent)">95.1%</span>
+              </div>
+            </td>
+            <td class="mono">412</td>
+            <td><span class="task-badge done">已发布</span></td>
+            <td class="mono" style="color:var(--ink-faint)">07-19</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </main>
+</div>
+
+</body>
+</html>

@@ -1,0 +1,1110 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EvalForge - 深色精密仪表盘风格</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Manrope:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg-base: #0B0E14;
+  --bg-elevated: #12151E;
+  --bg-card: #161A24;
+  --bg-hover: #1C2130;
+  --border: #232938;
+  --border-light: #2D3447;
+  --text-primary: #E8ECF4;
+  --text-secondary: #9BA3B5;
+  --text-muted: #5C6580;
+  --accent-cyan: #00D9FF;
+  --accent-cyan-dim: rgba(0, 217, 255, 0.1);
+  --accent-amber: #FFB627;
+  --accent-amber-dim: rgba(255, 182, 39, 0.1);
+  --accent-green: #00E676;
+  --accent-green-dim: rgba(0, 230, 118, 0.1);
+  --accent-red: #FF5252;
+  --accent-red-dim: rgba(255, 82, 82, 0.1);
+  --accent-purple: #B388FF;
+  --grid-line: rgba(255, 255, 255, 0.03);
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  font-family: 'Manrope', sans-serif;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-size: 14px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  background-image:
+    linear-gradient(var(--grid-line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+  background-size: 48px 48px;
+}
+
+/* === SIDEBAR === */
+.sidebar {
+  position: fixed;
+  left: 0; top: 0;
+  width: 64px;
+  height: 100vh;
+  background: var(--bg-elevated);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 16px 0;
+  z-index: 100;
+  transition: width 0.2s ease;
+}
+
+.sidebar:hover { width: 220px; }
+
+.sidebar-logo {
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--accent-cyan), #0091EA);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Space Mono', monospace;
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--bg-base);
+  flex-shrink: 0;
+  margin-bottom: 24px;
+}
+
+.sidebar:hover .sidebar-logo {
+  width: 36px;
+}
+
+.sidebar-nav {
+  flex: 1;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 8px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px;
+  border-radius: 8px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+  overflow: hidden;
+  position: relative;
+}
+
+.nav-item:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.nav-item.active {
+  color: var(--accent-cyan);
+  background: var(--accent-cyan-dim);
+}
+
+.nav-item.active::before {
+  content: '';
+  position: absolute;
+  left: -8px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 20px;
+  background: var(--accent-cyan);
+  border-radius: 0 2px 2px 0;
+}
+
+.nav-item svg { width: 20px; height: 20px; flex-shrink: 0; stroke: currentColor; fill: none; stroke-width: 1.8; }
+
+.nav-label {
+  opacity: 0;
+  transition: opacity 0.2s;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.sidebar:hover .nav-label { opacity: 1; }
+
+.nav-badge {
+  margin-left: auto;
+  background: var(--accent-amber);
+  color: var(--bg-base);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-family: 'Space Mono', monospace;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+.sidebar:hover .nav-badge { opacity: 1; }
+
+.sidebar-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--accent-purple);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--bg-base);
+  flex-shrink: 0;
+}
+
+/* === MAIN === */
+.main {
+  margin-left: 64px;
+  min-height: 100vh;
+}
+
+.topbar {
+  background: rgba(18, 21, 30, 0.85);
+  backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border);
+  padding: 0 28px;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  position: sticky;
+  top: 0;
+  z-index: 50;
+}
+
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+}
+
+.system-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 12px;
+  background: var(--accent-green-dim);
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--accent-green);
+  font-family: 'Space Mono', monospace;
+  font-weight: 500;
+}
+
+.system-status .live-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent-green);
+  animation: livePulse 1.5s infinite;
+  box-shadow: 0 0 6px var(--accent-green);
+}
+
+@keyframes livePulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+.clock {
+  font-family: 'Space Mono', monospace;
+  font-size: 12px;
+  color: var(--text-muted);
+  letter-spacing: 0.5px;
+}
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.search-bar {
+  position: relative;
+  width: 260px;
+}
+
+.search-bar input {
+  width: 100%;
+  padding: 8px 12px 8px 36px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 13px;
+  font-family: inherit;
+  transition: all 0.15s;
+}
+
+.search-bar input::placeholder { color: var(--text-muted); }
+
+.search-bar input:focus {
+  outline: none;
+  border-color: var(--accent-cyan);
+  box-shadow: 0 0 0 3px var(--accent-cyan-dim);
+}
+
+.search-bar svg {
+  position: absolute;
+  left: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-muted);
+}
+
+.btn {
+  padding: 8px 16px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  transition: all 0.15s;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.btn-accent {
+  background: var(--accent-cyan);
+  color: var(--bg-base);
+}
+
+.btn-accent:hover {
+  box-shadow: 0 0 20px rgba(0, 217, 255, 0.3);
+}
+
+/* === CONTENT === */
+.content { padding: 28px; }
+
+.page-header {
+  margin-bottom: 28px;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+}
+
+.page-title {
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.5px;
+  color: var(--text-primary);
+}
+
+.page-title .highlight {
+  background: linear-gradient(135deg, var(--accent-cyan), var(--accent-green));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.page-meta {
+  font-family: 'Space Mono', monospace;
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 6px;
+}
+
+.page-meta .sep { color: var(--border-light); margin: 0 8px; }
+
+/* === METRIC CARDS === */
+.metric-row {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.metric-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  position: relative;
+  overflow: hidden;
+  transition: all 0.2s;
+}
+
+.metric-card:hover {
+  border-color: var(--border-light);
+  transform: translateY(-2px);
+}
+
+.metric-card .glow {
+  position: absolute;
+  top: -40px;
+  right: -40px;
+  width: 100px;
+  height: 100px;
+  border-radius: 50%;
+  filter: blur(40px);
+  opacity: 0.15;
+}
+
+.metric-card.cyan .glow { background: var(--accent-cyan); }
+.metric-card.amber .glow { background: var(--accent-amber); }
+.metric-card.green .glow { background: var(--accent-green); }
+.metric-card.red .glow { background: var(--accent-red); }
+
+.metric-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.metric-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.metric-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.metric-icon svg { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 2; }
+
+.metric-card.cyan .metric-icon { background: var(--accent-cyan-dim); color: var(--accent-cyan); }
+.metric-card.amber .metric-icon { background: var(--accent-amber-dim); color: var(--accent-amber); }
+.metric-card.green .metric-icon { background: var(--accent-green-dim); color: var(--accent-green); }
+.metric-card.red .metric-icon { background: var(--accent-red-dim); color: var(--accent-red); }
+
+.metric-value {
+  font-family: 'Space Mono', monospace;
+  font-size: 30px;
+  font-weight: 700;
+  color: var(--text-primary);
+  line-height: 1.1;
+}
+
+.metric-value .unit {
+  font-size: 14px;
+  color: var(--text-muted);
+  margin-left: 4px;
+}
+
+.metric-delta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  font-size: 11px;
+  font-family: 'Space Mono', monospace;
+}
+
+.metric-delta.up { color: var(--accent-green); }
+.metric-delta.down { color: var(--accent-red); }
+.metric-delta.neutral { color: var(--text-muted); }
+
+/* === SPARKLINE === */
+.sparkline {
+  margin-top: 10px;
+  height: 28px;
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+}
+
+.spark-bar {
+  flex: 1;
+  border-radius: 1px;
+  min-height: 2px;
+  transition: opacity 0.2s;
+}
+
+.spark-bar:hover { opacity: 0.7; }
+
+.metric-card.cyan .spark-bar { background: var(--accent-cyan); }
+.metric-card.amber .spark-bar { background: var(--accent-amber); }
+.metric-card.green .spark-bar { background: var(--accent-green); }
+.metric-card.red .spark-bar { background: var(--accent-red); }
+
+/* === GRID === */
+.main-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.card-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.card-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-title .indicator {
+  width: 6px;
+  height: 6px;
+  border-radius: 2px;
+  background: var(--accent-cyan);
+  box-shadow: 0 0 8px var(--accent-cyan);
+}
+
+.card-link {
+  font-size: 12px;
+  color: var(--accent-cyan);
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.card-body { padding: 20px; }
+
+/* === RADIAL CHART === */
+.radial-container {
+  display: flex;
+  align-items: center;
+  gap: 24px;
+}
+
+.radial-chart {
+  position: relative;
+  width: 120px;
+  height: 120px;
+  flex-shrink: 0;
+}
+
+.radial-chart svg {
+  transform: rotate(-90deg);
+}
+
+.radial-chart .track {
+  fill: none;
+  stroke: var(--border);
+  stroke-width: 8;
+}
+
+.radial-chart .progress {
+  fill: none;
+  stroke: var(--accent-green);
+  stroke-width: 8;
+  stroke-linecap: round;
+  transition: stroke-dashoffset 0.8s ease;
+  filter: drop-shadow(0 0 6px rgba(0, 230, 118, 0.3));
+}
+
+.radial-center {
+  position: absolute;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  text-align: center;
+}
+
+.radial-center .value {
+  font-family: 'Space Mono', monospace;
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.radial-center .label {
+  font-size: 10px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.radial-legend { flex: 1; }
+
+.legend-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.legend-item:last-child { border-bottom: none; }
+
+.legend-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.legend-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.legend-value {
+  font-family: 'Space Mono', monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.legend-tag {
+  font-family: 'Space Mono', monospace;
+  font-size: 9px;
+  padding: 2px 5px;
+  border-radius: 3px;
+  font-weight: 700;
+}
+
+.legend-tag.p0 { background: var(--accent-red-dim); color: var(--accent-red); }
+.legend-tag.p1 { background: var(--accent-amber-dim); color: var(--accent-amber); }
+.legend-tag.p2 { background: var(--accent-cyan-dim); color: var(--accent-cyan); }
+
+/* === ACTIVITY FEED === */
+.activity-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.activity-item:last-child { border-bottom: none; }
+
+.activity-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-top: 6px;
+  flex-shrink: 0;
+}
+
+.activity-dot.cyan { background: var(--accent-cyan); box-shadow: 0 0 6px var(--accent-cyan); }
+.activity-dot.green { background: var(--accent-green); box-shadow: 0 0 6px var(--accent-green); }
+.activity-dot.amber { background: var(--accent-amber); box-shadow: 0 0 6px var(--accent-amber); }
+.activity-dot.red { background: var(--accent-red); box-shadow: 0 0 6px var(--accent-red); }
+
+.activity-content { flex: 1; }
+
+.activity-title {
+  font-size: 13px;
+  color: var(--text-primary);
+  font-weight: 500;
+  margin-bottom: 2px;
+}
+
+.activity-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-family: 'Space Mono', monospace;
+}
+
+.activity-status {
+  font-family: 'Space Mono', monospace;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.activity-status.done { background: var(--accent-green-dim); color: var(--accent-green); }
+.activity-status.run { background: var(--accent-cyan-dim); color: var(--accent-cyan); }
+.activity-status.fail { background: var(--accent-red-dim); color: var(--accent-red); }
+.activity-status.wait { background: var(--accent-amber-dim); color: var(--accent-amber); }
+
+/* === TABLE === */
+.table-card { margin-bottom: 16px; }
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.data-table th {
+  text-align: left;
+  padding: 12px 20px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  border-bottom: 1px solid var(--border);
+  font-family: 'Space Mono', monospace;
+}
+
+.data-table td {
+  padding: 14px 20px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border);
+}
+
+.data-table tbody tr {
+  transition: background 0.1s;
+}
+
+.data-table tbody tr:hover {
+  background: var(--bg-hover);
+}
+
+.data-table .name-cell {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.mono { font-family: 'Space Mono', monospace; }
+
+.cov-bar {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cov-bar .bar {
+  width: 60px;
+  height: 4px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.cov-bar .fill {
+  height: 100%;
+  border-radius: 2px;
+}
+
+.fill.green { background: var(--accent-green); }
+.fill.amber { background: var(--accent-amber); }
+.fill.red { background: var(--accent-red); }
+
+/* === ANIMATIONS === */
+@keyframes slideIn {
+  from { opacity: 0; transform: translateX(-8px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+.metric-card { animation: slideIn 0.3s ease forwards; }
+.metric-card:nth-child(1) { animation-delay: 0.05s; }
+.metric-card:nth-child(2) { animation-delay: 0.1s; }
+.metric-card:nth-child(3) { animation-delay: 0.15s; }
+.metric-card:nth-child(4) { animation-delay: 0.2s; }
+
+.card { animation: slideIn 0.4s ease forwards; animation-delay: 0.25s; opacity: 0; }
+
+/* SCAN LINE EFFECT */
+.scan-line {
+  position: fixed;
+  top: 0; left: 0;
+  width: 100%;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--accent-cyan), transparent);
+  opacity: 0.1;
+  animation: scan 8s linear infinite;
+  pointer-events: none;
+  z-index: 200;
+}
+
+@keyframes scan {
+  0% { top: 0; }
+  100% { top: 100vh; }
+}
+</style>
+</head>
+<body>
+
+<div class="scan-line"></div>
+
+<!-- SIDEBAR -->
+<aside class="sidebar">
+  <div class="sidebar-logo">E</div>
+  <nav class="sidebar-nav">
+    <a class="nav-item active">
+      <svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      <span class="nav-label">仪表盘</span>
+    </a>
+    <a class="nav-item">
+      <svg viewBox="0 0 24 24"><path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2H5a2 2 0 00-2 0z"/><path d="M3 7l2-3h6l2 3"/></svg>
+      <span class="nav-label">语料库</span>
+    </a>
+    <a class="nav-item">
+      <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg>
+      <span class="nav-label">评测集</span>
+      <span class="nav-badge">12</span>
+    </a>
+    <a class="nav-item">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+      <span class="nav-label">评测运行</span>
+    </a>
+    <a class="nav-item">
+      <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+      <span class="nav-label">失败诊断</span>
+    </a>
+    <a class="nav-item">
+      <svg viewBox="0 0 24 24"><path d="M9 12l2 2 4-4"/><path d="M21 12c0 5-3.5 7.5-8.5 9.5C7.5 19.5 4 17 4 12V6l8-3 8 3v6z"/></svg>
+      <span class="nav-label">治理审核</span>
+    </a>
+    <a class="nav-item">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 1v6m0 6v6m11-7h-6m-6 0H1"/></svg>
+      <span class="nav-label">配置</span>
+    </a>
+  </nav>
+  <div class="sidebar-avatar">张</div>
+</aside>
+
+<!-- MAIN -->
+<div class="main">
+  <header class="topbar">
+    <div class="topbar-left">
+      <div class="system-status">
+        <span class="live-dot"></span>
+        SYSTEM ONLINE
+      </div>
+      <div class="clock">2026.07.22 · 10:17:30 CST</div>
+    </div>
+    <div class="topbar-right">
+      <div class="search-bar">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+        <input type="text" placeholder="搜索 / 快捷命令...">
+      </div>
+      <button class="btn btn-accent">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+        新建语料库
+      </button>
+    </div>
+  </header>
+
+  <div class="content">
+    <!-- HEADER -->
+    <div class="page-header">
+      <div>
+        <h1 class="page-title">评测<span class="highlight">总览</span></h1>
+        <div class="page-meta">
+          EVALFORGE / DASHBOARD <span class="sep">·</span> 8 ACTIVE CORPORA <span class="sep">·</span> 12 PUBLISHED SETS
+        </div>
+      </div>
+    </div>
+
+    <!-- METRIC CARDS -->
+    <div class="metric-row">
+      <div class="metric-card cyan">
+        <div class="glow"></div>
+        <div class="metric-header">
+          <span class="metric-label">活跃语料库</span>
+          <div class="metric-icon"><svg viewBox="0 0 24 24"><path d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2H5a2 2 0 00-2 0z"/><path d="M3 7l2-3h6l2 3"/></svg></div>
+        </div>
+        <div class="metric-value">8<span class="unit">个</span></div>
+        <div class="metric-delta up">▲ +2 / 本周</div>
+        <div class="sparkline">
+          <div class="spark-bar" style="height:30%"></div>
+          <div class="spark-bar" style="height:50%"></div>
+          <div class="spark-bar" style="height:40%"></div>
+          <div class="spark-bar" style="height:70%"></div>
+          <div class="spark-bar" style="height:60%"></div>
+          <div class="spark-bar" style="height:85%"></div>
+          <div class="spark-bar" style="height:75%"></div>
+          <div class="spark-bar" style="height:100%"></div>
+        </div>
+      </div>
+      <div class="metric-card amber">
+        <div class="glow"></div>
+        <div class="metric-header">
+          <span class="metric-label">已发布评测集</span>
+          <div class="metric-icon"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><path d="M14 2v6h6"/></svg></div>
+        </div>
+        <div class="metric-value">12<span class="unit">套</span></div>
+        <div class="metric-delta up">▲ +3 / 本月</div>
+        <div class="sparkline">
+          <div class="spark-bar" style="height:20%"></div>
+          <div class="spark-bar" style="height:35%"></div>
+          <div class="spark-bar" style="height:45%"></div>
+          <div class="spark-bar" style="height:40%"></div>
+          <div class="spark-bar" style="height:60%"></div>
+          <div class="spark-bar" style="height:70%"></div>
+          <div class="spark-bar" style="height:85%"></div>
+          <div class="spark-bar" style="height:90%"></div>
+        </div>
+      </div>
+      <div class="metric-card green">
+        <div class="glow"></div>
+        <div class="metric-header">
+          <span class="metric-label">EIU 覆盖率</span>
+          <div class="metric-icon"><svg viewBox="0 0 24 24"><path d="M23 6l-9.5 9.5-5-5L1 18"/><path d="M17 6h6v6"/></svg></div>
+        </div>
+        <div class="metric-value">91.3<span class="unit">%</span></div>
+        <div class="metric-delta up">▲ 目标 > 85%</div>
+        <div class="sparkline">
+          <div class="spark-bar" style="height:60%"></div>
+          <div class="spark-bar" style="height:65%"></div>
+          <div class="spark-bar" style="height:70%"></div>
+          <div class="spark-bar" style="height:75%"></div>
+          <div class="spark-bar" style="height:80%"></div>
+          <div class="spark-bar" style="height:85%"></div>
+          <div class="spark-bar" style="height:88%"></div>
+          <div class="spark-bar" style="height:91%"></div>
+        </div>
+      </div>
+      <div class="metric-card red">
+        <div class="glow"></div>
+        <div class="metric-header">
+          <span class="metric-label">待处理失败</span>
+          <div class="metric-icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M15 9l-6 6M9 9l6 6"/></svg></div>
+        </div>
+        <div class="metric-value">23<span class="unit">条</span></div>
+        <div class="metric-delta down">▼ P0 缺陷 3 条</div>
+        <div class="sparkline">
+          <div class="spark-bar" style="height:90%"></div>
+          <div class="spark-bar" style="height:80%"></div>
+          <div class="spark-bar" style="height:70%"></div>
+          <div class="spark-bar" style="height:75%"></div>
+          <div class="spark-bar" style="height:60%"></div>
+          <div class="spark-bar" style="height:55%"></div>
+          <div class="spark-bar" style="height:50%"></div>
+          <div class="spark-bar" style="height:45%"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- TWO COLUMN -->
+    <div class="main-grid">
+      <!-- COVERAGE RADIAL -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title"><span class="indicator"></span>覆盖率分布</div>
+          <a class="card-link">详情 →</a>
+        </div>
+        <div class="card-body">
+          <div class="radial-container">
+            <div class="radial-chart">
+              <svg width="120" height="120">
+                <circle class="track" cx="60" cy="60" r="50"/>
+                <circle class="progress" cx="60" cy="60" r="50"
+                  stroke-dasharray="314.16"
+                  stroke-dashoffset="27.2"/>
+              </svg>
+              <div class="radial-center">
+                <div class="value">91.3%</div>
+                <div class="label">加权覆盖</div>
+              </div>
+            </div>
+            <div class="radial-legend">
+              <div class="legend-item">
+                <div class="legend-label">
+                  <span class="legend-dot" style="background:var(--accent-red)"></span>
+                  监管禁止事项 <span class="legend-tag p0">P0</span>
+                </div>
+                <div class="legend-value">100%</div>
+              </div>
+              <div class="legend-item">
+                <div class="legend-label">
+                  <span class="legend-dot" style="background:var(--accent-amber)"></span>
+                  核心定义流程 <span class="legend-tag p1">P1</span>
+                </div>
+                <div class="legend-value">94.2%</div>
+              </div>
+              <div class="legend-item">
+                <div class="legend-label">
+                  <span class="legend-dot" style="background:var(--accent-cyan)"></span>
+                  一般补充事实 <span class="legend-tag p2">P2</span>
+                </div>
+                <div class="legend-value">82.7%</div>
+              </div>
+              <div class="legend-item">
+                <div class="legend-label">
+                  <span class="legend-dot" style="background:var(--accent-green)"></span>
+                  证据回溯率
+                </div>
+                <div class="legend-value">100%</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ACTIVITY FEED -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-title"><span class="indicator"></span>实时任务流</div>
+          <a class="card-link">全部 →</a>
+        </div>
+        <div class="card-body">
+          <div class="activity-item">
+            <div class="activity-dot cyan"></div>
+            <div class="activity-content">
+              <div class="activity-title">文档解析与EIU抽取 · 企业财报Q2</div>
+              <div class="activity-meta">CORPUS-007 · 已处理 42/58 页 · 72%</div>
+            </div>
+            <span class="activity-status run">RUNNING</span>
+          </div>
+          <div class="activity-item">
+            <div class="activity-dot green"></div>
+            <div class="activity-content">
+              <div class="activity-title">自动评测运行 #RUN-0142</div>
+              <div class="activity-meta">授信政策v3 · 320题 · 88% 完成</div>
+            </div>
+            <span class="activity-status run">RUNNING</span>
+          </div>
+          <div class="activity-item">
+            <div class="activity-dot green"></div>
+            <div class="activity-content">
+              <div class="activity-title">上传《2026年授信政策指引》</div>
+              <div class="activity-meta">CORPUS-008 · 5.2MB · HASH: a3f8...c2e1</div>
+            </div>
+            <span class="activity-status done">DONE</span>
+          </div>
+          <div class="activity-item">
+            <div class="activity-dot red"></div>
+            <div class="activity-content">
+              <div class="activity-title">解析失败: OCR低置信度</div>
+              <div class="activity-meta">附录表格.pdf · PAGE 12-15 · CONF < 0.6</div>
+            </div>
+            <span class="activity-status fail">FAILED</span>
+          </div>
+          <div class="activity-item">
+            <div class="activity-dot amber"></div>
+            <div class="activity-content">
+              <div class="activity-title">治理审核 Skill 回归测试</div>
+              <div class="activity-meta">SKILL v1.2.0 · S0 规则 10/10 通过</div>
+            </div>
+            <span class="activity-status done">DONE</span>
+          </div>
+          <div class="activity-item">
+            <div class="activity-dot amber"></div>
+            <div class="activity-content">
+              <div class="activity-title">供应链金融制度 · 待补题</div>
+              <div class="activity-meta">CORPUS-005 · P0 覆盖缺口 12 项</div>
+            </div>
+            <span class="activity-status wait">PENDING</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- DATA TABLE -->
+    <div class="card table-card">
+      <div class="card-header">
+        <div class="card-title"><span class="indicator"></span>语料库与评测集</div>
+        <a class="card-link">管理全部 →</a>
+      </div>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>语料库 / 评测集</th>
+            <th>领域</th>
+            <th>文档</th>
+            <th>EIU 覆盖率</th>
+            <th>样本数</th>
+            <th>状态</th>
+            <th>更新时间</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td class="name-cell">授信政策指引 v3</td>
+            <td>授信政策</td>
+            <td class="mono">5</td>
+            <td>
+              <div class="cov-bar">
+                <div class="bar"><div class="fill green" style="width:93.5%"></div></div>
+                <span class="mono" style="color:var(--accent-green)">93.5%</span>
+              </div>
+            </td>
+            <td class="mono">320</td>
+            <td><span class="activity-status done">PUBLISHED</span></td>
+            <td class="mono" style="color:var(--text-muted)">07-22 09:14</td>
+          </tr>
+          <tr>
+            <td class="name-cell">某企业财报 Q2</td>
+            <td>企业财报</td>
+            <td class="mono">3</td>
+            <td>
+              <div class="cov-bar">
+                <div class="bar"><div class="fill amber" style="width:81.2%"></div></div>
+                <span class="mono" style="color:var(--accent-amber)">81.2%</span>
+              </div>
+            </td>
+            <td class="mono">186</td>
+            <td><span class="activity-status run">GENERATING</span></td>
+            <td class="mono" style="color:var(--text-muted)">07-22 10:02</td>
+          </tr>
+          <tr>
+            <td class="name-cell">流动资金贷款管理办法</td>
+            <td>授信政策</td>
+            <td class="mono">2</td>
+            <td>
+              <div class="cov-bar">
+                <div class="bar"><div class="fill green" style="width:100%"></div></div>
+                <span class="mono" style="color:var(--accent-green)">100%</span>
+              </div>
+            </td>
+            <td class="mono">94</td>
+            <td><span class="activity-status done">PUBLISHED</span></td>
+            <td class="mono" style="color:var(--text-muted)">07-21 16:30</td>
+          </tr>
+          <tr>
+            <td class="name-cell">供应链金融制度汇编</td>
+            <td>授信政策</td>
+            <td class="mono">7</td>
+            <td>
+              <div class="cov-bar">
+                <div class="bar"><div class="fill red" style="width:76.8%"></div></div>
+                <span class="mono" style="color:var(--accent-red)">76.8%</span>
+              </div>
+            </td>
+            <td class="mono">245</td>
+            <td><span class="activity-status wait">PENDING</span></td>
+            <td class="mono" style="color:var(--text-muted)">07-20 14:22</td>
+          </tr>
+          <tr>
+            <td class="name-cell">某集团合并财报附注</td>
+            <td>企业财报</td>
+            <td class="mono">4</td>
+            <td>
+              <div class="cov-bar">
+                <div class="bar"><div class="fill green" style="width:95.1%"></div></div>
+                <span class="mono" style="color:var(--accent-green)">95.1%</span>
+              </div>
+            </td>
+            <td class="mono">412</td>
+            <td><span class="activity-status done">PUBLISHED</span></td>
+            <td class="mono" style="color:var(--text-muted)">07-19 11:45</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+</body>
+</html>
