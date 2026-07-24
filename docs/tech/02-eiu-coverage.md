@@ -1,0 +1,298 @@
+# 02 — EIU 抽取与覆盖规划
+
+> 覆盖 BRD：8.3 语义理解与知识编译 / 8.5 覆盖规划
+> Demo 状态：必做（LLM 单通道抽取 + 覆盖计算）
+
+---
+
+## 1. BRD 需求摘要
+
+### 8.3 语义理解与知识编译
+
+| 需求编号 | 需求 |
+|---|---|
+| FR-SEM-001 | 每个底层文段生成上下文说明（所属文档/章节/主体/期间/主题），与原文共同向量化 |
+| FR-SEM-002 | 按段落/小节/章节/文档生成层级摘要，标记模型版本，不能替代底层原文 |
+| FR-SEM-003 | EIU 抽取：将段落拆为可评测信息单元，逐条结构化记录，EIU 类型含定义/适用范围/规则/阈值/例外/日期/指标/公式/流程/变更 |
+| FR-SEM-004 | EIU 拆分与计数规则（8 条）：独立真值/限定语不可脱离/例外单列/定义公式分列/表格业务行/无实质不计数/重复合并/不可回答排除 |
+| FR-SEM-005 | EIU 双通道校验：两路独立抽取器 + 确定性规则 + 审核 Skill 裁决 → 锁定覆盖率分母 |
+| FR-SEM-006 | 术语和财务指标消歧：规范名称/别名/定义/公式/分子分母/主体/口径/期间/币种 |
+| FR-SEM-007 | 语义关系抽取：same_concept/easy_to_confuse/definition_of/formula_of/exception_of/supersedes/contradicts 等 13 类关系 |
+
+### 8.5 覆盖规划
+
+| 需求编号 | 需求 |
+|---|---|
+| FR-COVER-001 | 生成覆盖清单：按文档/章节/EIU类型/优先级/单段跨段/难度等维度统计 |
+| FR-COVER-002 | 加权 EIU 覆盖率公式：Σ(w_i×c_i)/Σ(w_i)，P0=5/P1=3/P2=1 |
+| FR-COVER-003 | 防止覆盖率失真：不能计假覆盖、不能排除难以生成题目的 EIU |
+
+---
+
+## 2. EIU 抽取技术方案
+
+### 2.1 EIU 定义回顾
+
+EIU (Evaluable Information Unit) = 一条能够被原文**独立证明或否定**、并能够形成**明确问题与答案**的最小业务陈述。
+
+**10 种 EIU 类型：**
+
+| 类型 | 英文 | 识别特征 | 示例 | 后续题目类型 |
+|---|---|---|---|---|
+| 定义 | definition | "X是指……""X包括……" | "净利润率是指净利润与营业收入的比率" | 定义题 |
+| 规则 | rule | "……应当……""……不得……" | "小微企业申请贷款时资产负债率不得超过70%" | 条件与适用范围题 |
+| 阈值 | threshold | 数值、百分比、上下限 | "资产负债率上限为70%" | 阈值和数值题 |
+| 日期 | date | 生效/失效/过渡日期 | "本规定自2026年8月1日起施行" | 时效题 |
+| 公式 | formula | 计算方式、变量关系 | "净利润率 = 净利润 / 营业收入 × 100%" | 公式与计算题 |
+| 流程 | process | 步骤序列 | "贷款审批流程：受理→调查→审查→审批→放款" | 流程顺序题 |
+| 例外 | exception | "除非……""……除外""……可以放宽" | "政策性担保全额担保的，可放宽至75%" | 例外与边界题 |
+| 禁止 | prohibition | "禁止……""不得……""严禁……" | "不得向关联方发放无担保信用贷款" | 是否可回答题 |
+| 指标 | metric | 带主体/期间/币种/单位的指标值 | "2025年净利润为1,000万元" | 事实提取题 |
+| 变更 | change | 版本对比、新旧更替 | "2026版将资产负债率上限从75%调整为70%" | 比较与区分题 |
+
+### 2.2 EIU 拆分规则（FR-SEM-004）
+
+```
+原文：小微企业申请流动资金贷款时，资产负债率原则上不得超过70%；
+      由政策性担保机构提供全额担保的，可放宽至75%。
+      本规定自2026年8月1日起施行。
+
+拆分结果：
+  EIU-1 [rule/threshold P0] 小微企业申请流动资金贷款时，资产负债率原则上不得超过70%
+  EIU-2 [exception/threshold P0] 由政策性担保机构提供全额担保时，资产负债率上限可放宽至75%
+  EIU-3 [date P1] 该规定自2026年8月1日起施行
+```
+
+**8 条拆分规则：**
+
+| # | 规则 | 含义 |
+|---|---|---|
+| 1 | 独立真值 | 两项可分别判断真伪 → 必须拆为两个 EIU |
+| 2 | 限定语不可脱离 | 主体/条件/范围/期间/币种/单位必须与结论在同一 EIU 中 |
+| 3 | 例外单列 | 一般规则与例外规则分别计数 |
+| 4 | 定义公式分列 | 定义/公式/变量口径/示例数值分别计数 |
+| 5 | 表格业务行 | 以"指标+主体+期间+单位+数值"完整记录为一个 EIU |
+| 6 | 无实质不计数 | 标题/目录/过渡句/页眉页脚/重复免责声明 → 不计数 |
+| 7 | 重复合并 | 同一事实多处出现 → 分母只保留一个规范 EIU，多证据引用 |
+| 8 | 不可回答排除 | 证据残缺/OCR无法确认 → 不进入分母，记录排除原因 |
+
+### 2.3 Demo EIU 抽取实现（LLM 单通道）
+
+**流程：**
+
+```
+对每个 Block：
+  1. 预处理：跳过纯标题/目录/页眉页脚（规则过滤）
+  2. 组装上下文：
+     - 文档名 + 章节路径 + 页码
+     - 当前 Block 文本
+     - 前一个 Block 文本（提供上下文衔接）
+     - 后一个 Block 文本
+  3. 调用 LLM，传入 EIU 抽取 Prompt
+  4. 解析 LLM 返回的 JSON 数组
+  5. 将每条 EIU 写入 eiu 表，绑定源 block_id
+```
+
+**Prompt 设计核心要素：**
+
+```
+系统角色：授信政策和财务报告分析专家
+
+任务：
+1. 判断该段落是否包含实质内容
+2. 将实质内容按 8 条拆分规则拆为 EIU
+3. 每个 EIU 标注：完整陈述/类型/优先级/限定信息/是否可出题
+
+优先级定义：
+- P0：监管禁止事项、关键阈值、例外条款、安全边界
+- P1：核心定义、主流程、核心指标和公式
+- P2：一般说明和补充事实
+
+输出格式：JSON 数组
+```
+
+**EIU 数据模型（eiu 表）：**
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| eiu_id | INT PK | |
+| corpus_id | INT FK | |
+| block_id | INT FK | 源 Block |
+| statement | TEXT | 完整陈述（一句话，可独立判定真伪） |
+| eiu_type | VARCHAR | definition/rule/threshold/date/formula/process/exception/prohibition/metric/change |
+| content_priority | VARCHAR | P0/P1/P2 |
+| weight | INT | 5/3/1 |
+| constraints_json | JSON | {主体,条件,范围,期间,币种,单位} |
+| evidence_blocks | JSON | [block_id, ...] |
+| is_questionable | BOOL | 是否可出题 |
+| exclusion_reason | VARCHAR | 不可出题原因 |
+| extraction_model | VARCHAR | LLM 模型名称+版本 |
+| extraction_confidence | FLOAT | 0-1 |
+| review_status | VARCHAR | candidate / quality_verified / blocked |
+| created_at | DATETIME | |
+
+### 2.4 Demo 不做但技术方案预留
+
+**EIU 双通道校验（FR-SEM-005，后续版本）：**
+
+```
+通道1（抽取器A）→ EIU 候选列表 A
+通道2（抽取器B）→ EIU 候选列表 B
+         ↓
+    差异比对：
+    - 一致项 → 直接通过
+    - A有B无 → 审核 Skill 裁决
+    - B有A无 → 审核 Skill 裁决
+         ↓
+    确定性规则检查（数值/日期/单位/否定词完整性）
+         ↓
+    EIU 清单锁定（覆盖率分母冻结）
+```
+
+**术语消歧（FR-SEM-006，后续版本）：**
+
+为每个被识别为指标/公式的 EIU 补充 `term` 记录：
+
+| 字段 | 说明 |
+|---|---|
+| canonical_name | 规范名称（如"净利润率"） |
+| aliases | 别名列表 |
+| definition | 业务定义 |
+| formula | 计算公式 |
+| numerator/denominator | 分子/分母 |
+| entity | 主体（合并/单体） |
+| period | 报告期间 |
+| currency | 币种 |
+| unit | 单位 |
+| easily_confused_with | 容易混淆的术语列表 |
+
+**语义关系抽取（FR-SEM-007，后续版本）：**
+
+13 类关系边存入 `semantic_relation` 表：
+
+```
+same_concept / easy_to_confuse / definition_of / formula_of /
+example_of / condition_of / exception_of / supersedes /
+contradicts / references / same_entity_different_period /
+comparison_candidate / reasoning_bridge
+```
+
+---
+
+## 3. 覆盖规划技术方案
+
+### 3.1 覆盖清单（FR-COVER-001）
+
+**统计维度：**
+- 按文档分组
+- 按章节（section_path）分组
+- 按 EIU 类型分组
+- 按优先级（P0/P1/P2）分组
+- 按单段/跨段/跨文档分组
+- 按难度（L1/L2/L3）分组
+
+**输出示例：**
+
+```json
+{
+  "corpus_id": 1,
+  "total_eiu": 127,
+  "questionable_eiu": 118,
+  "excluded_eiu": 9,
+  "by_priority": { "P0": 32, "P1": 61, "P2": 34 },
+  "by_type": { "rule": 28, "threshold": 22, "definition": 19, ... },
+  "by_document": [
+    { "document_name": "授信政策.pdf", "eiu_count": 85 },
+    { "document_name": "附件表格.xlsx", "eiu_count": 42 }
+  ],
+  "gaps": [
+    { "eiu_id": 42, "statement": "...", "reason": "暂无对应题目" }
+  ]
+}
+```
+
+### 3.2 加权覆盖率计算（FR-COVER-002）
+
+```
+设 K = 当前语料库版本中已通过审核、可出题的 EIU 集合
+w_i: P0=5, P1=3, P2=1
+c_i: 1（已有通过质量校验的规范问题），0（未覆盖）
+
+WeightedCoverage = Σ(w_i × c_i) / Σ(w_i)
+```
+
+**代码实现（确定性计算，不依赖 LLM）：**
+
+```python
+def calculate_weighted_coverage(eius: list[EIU], cases: list[EvalCase]) -> CoverageReport:
+    covered_eiu_ids = {c.eiu_id for c in cases if c.review_status == "quality_verified"}
+    total_weight = 0
+    covered_weight = 0
+    p0_total, p0_covered = 0, 0
+
+    for eiu in eius:
+        if not eiu.is_questionable:
+            continue  # 排除项不计入分母
+        w = eiu.weight
+        total_weight += w
+        if eiu.content_priority == "P0":
+            p0_total += 1
+        if eiu.eiu_id in covered_eiu_ids:
+            covered_weight += w
+            if eiu.content_priority == "P0":
+                p0_covered += 1
+
+    return CoverageReport(
+        total_eiu_count=len(eius),
+        questionable_count=sum(1 for e in eius if e.is_questionable),
+        excluded_count=sum(1 for e in eius if not e.is_questionable),
+        weighted_coverage=covered_weight / total_weight if total_weight > 0 else 0,
+        p0_coverage=p0_covered / p0_total if p0_total > 0 else 1.0,
+        ...
+    )
+```
+
+### 3.3 防止覆盖率失真（FR-COVER-003）
+
+以下情况**不计为有效覆盖**，在代码中通过规则 + LLM 辅助检查：
+
+| 失真类型 | 检测方式 |
+|---|---|
+| 只有问题、没有可验证答案 | 规则：检查 case.gold_answer 非空 |
+| 答案来自模型常识非原文 | LLM：在质量校验"忠实性"检查中检测 |
+| 证据只支持答案的一部分 | LLM：在质量校验"证据充分性"检查中检测 |
+| 问题包含答案暗示 | LLM：在质量校验"唯一性"检查中检测 |
+| 多个改写重复计算 | 规则：按 intent_id 去重（Demo 不做改写，此条沿用） |
+| 覆盖率分母被人为排空 | 规则：检查排除记录中的 exclusion_reason，拒绝"因题目难生成"类排除 |
+
+**业务门禁（硬性规则，代码强制执行）：**
+- 总体加权 EIU 覆盖率 < 85% → 阻断发布
+- P0 EIU 覆盖率 < 100% → 阻断发布
+- 实质 Block 对账率 < 100% → 阻断发布（每个 Block 必须有 EIU 或排除记录）
+
+---
+
+## 4. API 接口
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/corpus/{corpus_id}/eiu/extract` | 触发 EIU 抽取（异步） |
+| GET | `/api/corpus/{corpus_id}/eiu` | EIU 清单（支持 ?type=&priority=&section=&questionable= 过滤） |
+| GET | `/api/eiu/{eiu_id}` | 单个 EIU 详情（含原文上下文） |
+| PUT | `/api/eiu/{eiu_id}` | 手动编辑 EIU |
+| DELETE | `/api/eiu/{eiu_id}` | 删除 EIU（标记为 excluded） |
+| GET | `/api/corpus/{corpus_id}/eiu/coverage` | 覆盖率报告 |
+| GET | `/api/corpus/{corpus_id}/eiu/gaps` | 未覆盖 EIU 清单 |
+
+---
+
+## 5. Demo 实现清单
+
+- [ ] LLM 客户端封装（OpenAI 兼容 API）
+- [ ] EIU 抽取 Prompt 模板（`prompts/eiu_extraction.txt`）
+- [ ] EIU 抽取器：逐 Block 调用 LLM，解析 JSON 输出
+- [ ] `eiu` 表 + CRUD API
+- [ ] 覆盖清单 API：按文档/章节/类型/优先级分组统计
+- [ ] 加权覆盖率计算（确定性代码）
+- [ ] 实质 Block 对账检查
+- [ ] EIU 手动编辑/删除 API
