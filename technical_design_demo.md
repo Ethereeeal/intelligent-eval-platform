@@ -1,713 +1,784 @@
-# 智能评测集平台本地 Demo 技术方案
+# EvalForge 智能评测集平台 Demo 技术方案
 
-> 适用范围：基于《智能评测集平台业务需求书》与当前落地讨论，优先支持本地单机 Demo、GitHub 协作开发与后续迭代。
+> 适用范围：基于《智能评测集平台业务需求书 V1.2》，优先支持本地单机 Demo、三人协作开发与后续迭代。
 >
-> 目标：在几周内做出可演示、可验证、可协作的最小闭环，而不是一次性实现完整平台。
+> **核心定位：本平台是一个评测集自动化生成系统，不是一个 RAG 问答系统。**
 
-## 1. 项目目标
+---
 
-本阶段要完成的不是完整生产平台，而是一个能跑通业务主链路的本地 Demo：
+## 1. 平台本质
 
-1. 用户上传专业文档。
-2. 系统将文档保存到对象存储，并抽取结构化内容。
-3. 文档切块后生成向量，构建检索索引。
-4. 用户输入问题后，系统检索相关证据块并返回结果。
-5. 展示原文证据、来源位置和基础运行记录。
-6. 接收业务需求书，提取测试功能点（EIU），不生成标准答案。
-7. 将结果、任务状态和元数据持久化，便于后续协作开发。
-8. 预留智能问答交互入口（Demo 阶段仅做界面占位，不做完整对话交互）。
+### 1.1 一句话定义
 
-本阶段重点验证四件事：
+输入一组文档 → 自动拆解为可评测信息单元（EIU） → 为每个 EIU 生成带标准答案和证据绑定的评测题 → 通过覆盖率和质量门禁验证评测集质量 → 导出标准化评测数据集。
 
-- 文档能否稳定入库和回溯；
-- 检索链路能否跑通；
-- 证据是否能定位到原文；
-- 业务需求书能否被解析并提取出测试功能点（EIU）；
-- 前后端是否能形成可演示闭环；
-- 智能问答交互界面是否具备基础框架（占位验证）。
+### 1.2 不是什么
 
-## 2. 需求收口建议
+| 不是 | 是 |
+|---|---|
+| 不是 RAG 知识库问答系统 | 是评测集生成工厂 |
+| 不是"按段落批量出题" | 是"EIU 驱动的精准出题" |
+| 不是检索召回演示 | 是评测数据集的自动化生产线 |
+| 不是简单的上传→搜索→展示 | 是上传→EIU 抽取→出题→质量门禁→导出 |
 
-业务需求书中包含完整的平台能力，但本次 Demo 需要主动收口。建议本阶段只保留以下范围：
+检索（向量、关键词、关系索引）在本平台中是一个**辅助工具**，用于帮 EIU 抽取器和题目生成器高效定位原文证据和发现跨段关系，**不是平台最终产出物**。
 
-### 2.1 必做范围
+---
 
-- 文档上传与存储
-- 文档解析与切块
-- 向量化与 FAISS 检索
-- 问题输入与证据召回
-- 结果展示与运行记录
-- 基础任务状态管理
-- 业务需求书上传与 EIU 提取（测试功能点模式，不含标准答案）
-- GitHub 协作开发流程
-
-### 2.2 暂缓范围
-
-以下能力先不做或只做占位：
-
-- 完整 EIU 自动治理闭环
-- 多轮回流工作台
-- 增量更新与旧版本淘汰
-- 复杂目录树浏览与多种导出格式
-- 多模态 OCR 复杂图表识别***
-- 完整审批流、多用户权限体系
-- 完整智能问答交互（对话式文档上传、In-Chat Preview、对话式编辑、多轮问答）
-- 生产级分布式扩展与高可用
-
-### 2.3 Demo 成功标准
-
-Demo 至少满足：
-
-- 可上传文档并保存到 MinIO
-- 可写入 MySQL 元数据
-- 可完成文档向量化并建立 FAISS 索引
-- 可基于问题召回证据块
-- 可从业务需求书中提取测试功能点 EIU 清单
-- 可在前端查看文档、查询结果和证据来源
-- 可重复运行并保留历史记录
-- 前端预留智能问答对话入口（界面占位）
-
-## 3. 总体技术方案
-
-### 3.1 技术栈
-
-- 后端：Python
-- 数据库：MySQL
-- 向量检索：FAISS
-- 对象存储：MinIO
-- Embedding：BGE 系列模型
-- 前端：管理台风格页面，强调清晰展示与高效操作；同时预留智能问答对话界面（Demo 阶段仅出设计稿和占位页面）
-- 协作方式：GitHub + 分支开发 + Pull Request
-
-### 3.2 架构分层
-
-系统建议按四层拆分：
-
-1. 接入层：前端管理台页面、智能问答对话界面（占位）、HTTP API
-2. 业务层：文档管理、评测集生成、任务流、检索编排、结果聚合
-3. 数据层：MySQL、MinIO、FAISS
-4. 模型层：BGE embedding、EIU 提取模型、可选的轻量生成/问答模型
-
-### 3.3 核心设计原则
-
-- 原始文档和派生数据分离保存。
-- 原文证据必须可回溯到文件和段落位置。
-- 检索主键统一管理，避免向量索引与业务数据脱节。
-- 任务异步化，避免前端长时间阻塞。
-- Demo 阶段优先稳定性和可解释性，不追求复杂智能。
-
-## 4. 本地 Demo 架构
+## 2. 端到端业务主链路
 
 ```mermaid
-flowchart LR
-    U[用户 / 前端管理台] --> A[后端 API]
-    U --> CHAT[智能问答界面<br/>Demo 占位]
-    CHAT --> A
-    A --> M[MySQL 元数据]
-    A --> S[MinIO 原文与产物]
-    A --> P[解析与切块]
-    P --> E[BGE Embedding]
-    P --> EIU[EIU 提取模块]
-    E --> F[FAISS 索引]
-    U --> Q[问题查询]
-    Q --> R[检索编排]
-    R --> F
-    R --> M
-    R --> S
-    R --> O[结果展示]
-    REQ[业务需求书] --> A
-    A --> EIU
-    EIU --> M
+flowchart TD
+    A["1. 创建语料库<br/>上传专业文档"] --> B["2. 文档解析<br/>目录/段落/表格/定位"]
+    B --> C["3. EIU 抽取<br/>逐段拆解为独立可验证陈述"]
+    C --> D["4. 覆盖规划<br/>EIU 清单 + 缺口分析"]
+    D --> E["5. 题目生成<br/>为每个 EIU 生成规范问题"]
+    E --> F["6. 答案生成<br/>标准答案 + 证据绑定"]
+    F --> G["7. 质量校验<br/>可回答性/忠实性/唯一性/证据充分性"]
+    G --> H{"覆盖率 > 85%<br/>P0 = 100%<br/>质量校验全部通过？"}
+    H -- "否" --> I["补题 / 修题"] --> E
+    H -- "是" --> J["8. 版本冻结<br/>拆分开发/验证/测试集"]
+    J --> K["9. 导出评测集<br/>JSONL / JSON / Excel"]
 ```
 
-### 4.1 数据流
+**Demo 阶段目标：走通 1 → 2 → 3 → 5 → 6 → 7 → 8 → 9 的全链路，产出可用的评测数据集。**
 
-1. 文件上传后，原始文档存入 MinIO。
-2. 后端在 MySQL 中创建文档记录和任务记录。
-3. 解析模块读取原始文件，生成章节、段落、表格行等结构化块。
-4. 每个块生成 embedding，并写入 FAISS。
-5. 查询时，系统先做问题 embedding，再用 FAISS 召回候选块。
-6. 后端将候选块、原文片段和来源信息整理后返回前端。
-7. 前端展示答案、证据和运行状态。
-8. （新增）上传业务需求书后，EIU 提取模块解析需求章节并生成测试功能点清单，写入 MySQL。
-9. （新增，Demo 延后）用户通过智能问答界面发送消息，后端解析意图后路由到对应模块执行操作。
+---
 
-## 5. 模块设计
+## 3. Demo 范围与成功标准
 
-### 5.1 文档接入模块
+### 3.1 必做范围
 
-职责：
-
-- 接收 PDF、DOCX、TXT、Markdown、CSV、XLSX 等文件
-- 将文件写入 MinIO
-- 记录文件哈希、大小、类型、上传人、版本号、上传时间
-- 生成文档任务并触发后续解析
-
-关键点：
-
-- 同名不同内容文件不能覆盖。（如为同用户上传则弹窗确认是否覆盖，如非同用户则不可覆盖）
-- 使用内容哈希做去重判断。
-- 任务状态要可追踪。
-
-### 5.2 文档解析模块
-
-职责：
-
-- 提取章节、段落、表格、列表、页码或工作表信息
-- 生成基础切块
-- 保留每个块的原文位置和来源文档信息
-- 为后续 embedding 提供干净输入
-
-Demo 期建议：
-
-- 先以段落和表格行为主
-- 复杂版面、扫描件 OCR 先降级处理***
-- 解析失败要有明确错误原因
-
-### 5.3 向量化与索引模块
-
-职责：
-
-- 调用 BGE 模型生成 embedding
-- 将块向量写入 FAISS
-- 保存块 ID 与向量 ID 的映射关系到 MySQL
-- 支持新增文档后的增量建索引
-
-建议：
-
-- 先使用单机 FAISS
-- 索引文件持久化到本地磁盘或 MinIO
-- MySQL 保存索引版本、模型版本和构建时间
-
-### 5.4 检索与问答模块
-
-职责：
-
-- 接收用户问题
-- 生成问题向量
-- 调用 FAISS 召回 Top-K 候选块
-- 按分数和元数据做基础重排
-- 返回证据片段、来源位置和检索结果
-
-Demo 阶段可以先不强依赖复杂生成模型，优先做“检索 + 证据展示”；如果后续需要，可以在检索结果上接一个轻量问答总结层。
-
-### 5.5 运行与任务模块
-
-职责：
-
-- 跟踪上传、解析、索引、查询等任务状态
-- 记录开始时间、结束时间、耗时、错误信息
-- 支持前端轮询或刷新任务结果
-
-### 5.6 前端展示模块
-
-页面建议最少包含：
-
-- 文档上传页
-- 文档列表页（语料库页）+文档详情
-- 评测集页（可选择语料库中的文档进行评测集生成，评测集包含问题与标准结果）
-- 任务与日志页（用于评测集自测与迭代）
-
-前端风格建议走“管理台 + 高信息密度”路线，页面不需要炫技，但要清晰、稳定、可读。
-
-### 5.7 智能问答模块（Demo 延后）
-
-职责：
-
-- 接收用户对话消息，解析意图（上传、预览、编辑、问答、配置查询等）
-- 从自然语言中提取文档名、样本 ID、过滤条件等参数
-- 将意图和参数路由到对应业务模块
-- 在对话流中返回操作结果、预览卡片和确认提示
-- 维护对话上下文，支持多轮串联操作
-- 提供对话历史查询和导出
-
-Demo 阶段实现范围：
-
-- 前端：在管理台页面中新增一个"智能问答"侧边栏入口，点击后进入对话界面（基础布局框架 + 静态示例消息，不做完整交互）
-- 后端：新增 `/api/chat` 路由占位，预留消息结构但不实现意图解析
-- 对话消息的 MySQL 表结构先行建好（`chat_session`、`chat_message`）
-
-关键设计约束：
-
-- 智能问答不替代管理台页面，而是作为统一对话式入口的补充路径
-- 所有对话操作最终通过现有业务 API 执行，保证操作一致性
-- 预览面板（In-Chat Preview）复用前端已有的文档/评测集组件
-- 危险操作（删除、发布）必须二次确认，不得静默执行
-
-### 5.8 业务需求书→测试功能点模块
-
-职责：
-
-- 接收业务需求书（PDF、DOCX、Markdown、TXT、XLSX）
-- 解析需求书的目录结构、章节层次和需求编号
-- 按需求书专用的 EIU 提取规则生成测试功能点（参见《业务需求书》FR-REQ2EIU-004）
-- 不生成标准答案和评测样本——仅产出 EIU 清单
-- 支持按章节、模块、优先级分组统计和对账
-- 导出测试功能点清单（JSON、Excel、Markdown）
-
-与文档问答评测集模块（5.2–5.5）的关键区别：
-
-| 维度 | 文档→问答评测集 | 业务需求书→测试功能点 |
+| 序号 | 模块 | Demo 做什么 |
 |---|---|---|
-| 输入 | 授信政策、财报等专业文档 | 业务需求规格说明书 |
-| EIU 类型侧重 | 事实、规则、数值、定义、例外 | 功能规则、业务规则、数据规则、接口规则 |
-| 是否生成答案 | 是（标准答案、答案要点、证据） | 否（仅 EIU 清单） |
-| 产出物 | 完整评测样本（EvalCase） | 测试功能点清单 |
-| 可否执行评测 | 可直接用于待测系统评测 | 需人工补答案后转为评测集 |
+| 1 | 语料库与文档接入 | 上传 PDF/DOCX/TXT/MD，存入本地存储，记录版本和哈希 |
+| 2 | 文档解析 | 提取目录、段落、表格行，保留页码/章节定位 |
+| 3 | EIU 抽取 | LLM 驱动抽取（Demo 单通道），按 FR-SEM-004 规则拆分 |
+| 4 | 覆盖清单 | 生成 EIU 清单，标记 P0/P1/P2 权重，识别未覆盖缺口 |
+| 5 | 单段问题生成 | LLM 为每个 EIU 生成 1 道规范问题 |
+| 6 | 标准答案 + 证据绑定 | LLM 生成标准答案 + 答案要点 + 原文证据定位 |
+| 7 | 基础质量校验 | 可回答性、忠实性、唯一性、证据充分性 4 项检查 |
+| 8 | 覆盖率计算 | 按 FR-COVER-002 公式计算加权 EIU 覆盖率 |
+| 9 | 版本冻结与导出 | 生成评测集版本号，导出 JSON/JSONL/Excel |
 
-Demo 阶段建议：
+### 3.2 暂缓范围
 
-- 优先支持 PDF、DOCX、Markdown 格式的业务需求书
-- EIU 提取规则先以功能点识别（"系统应/应支持……"）和业务规则识别（"如果……则……"）为主
-- 输出格式优先 JSON 和 Excel
-- 与文档问答评测集共用解析模块（5.2），差异仅在后处理规则
+| 暂缓项 | 说明 |
+|---|---|
+| 跨段/跨文档题目生成 | Demo 只做单段题 |
+| 改写与反例生成 | Demo 只做规范问题 |
+| 评测治理审核 Skill | Demo 只做基础 4 项质量检查，不做 S0 强制规则 |
+| EIU 双通道校验 | Demo 单通道 LLM 抽取 |
+| 调用待测系统评测 | 这是平台的下游使用场景，不在 Demo 范围 |
+| 失败归因与优化 | Demo 不做 |
+| 增量更新与回流 | Demo 不做 |
+| 智能问答交互 | Demo 仅占位 |
 
+### 3.3 Demo 成功标准
+
+- [ ] 上传 2 份以上真实/脱敏文档，完成入库和解析
+- [ ] LLM 抽取 EIU 清单，EIU 数量合理、类型分布覆盖定义/规则/数值/日期等
+- [ ] 为每个可出题 EIU 生成 1 道规范问题 + 标准答案 + 原文证据定位
+- [ ] 每道题的答案要点可追溯到原文的具体段落/页码
+- [ ] 计算并展示加权 EIU 覆盖率，P0 覆盖率独立展示
+- [ ] 质量校验自动运行，未通过项有明确原因
+- [ ] 导出完整评测数据集（JSON/JSONL），下游可直接消费
+
+---
+
+## 4. 总体技术架构
+
+### 4.1 技术栈
+
+| 层 | 选型 | 说明 |
+|---|---|---|
+| 后端框架 | Python + FastAPI | 异步 HTTP API，Swagger 自动文档 |
+| 数据库 | SQLite（Demo） | 存储语料库、文档、Block、EIU、题目、答案、运行记录 |
+| 对象存储 | 本地文件系统（Demo） | 存储原始文档和导出产物 |
+| 向量索引 | FAISS（辅助） | 为 EIU 抽取和跨段发现提供语义检索（Demo 阶段非核心） |
+| Embedding | BGE-small-zh-v1.5（本地） | 段落向量化（辅助检索） |
+| LLM | 可配置（OpenAI 兼容 API） | EIU 抽取 + 题目生成 + 答案生成 + 质量校验 |
+| 前端 | 管理台风格静态页面（Demo） | 上传页、EIU 清单页、题目预览页、覆盖报告页 |
+
+### 4.2 架构分层
+
+```
+┌──────────────────────────────────────────────┐
+│                 接入层                        │
+│  管理台页面（上传 / EIU / 题目 / 覆盖报告）    │
+│  HTTP API（FastAPI）                          │
+├──────────────────────────────────────────────┤
+│                 业务层                        │
+│  ┌──────────┐ ┌──────────┐ ┌──────────────┐ │
+│  │ 文档管理  │ │ EIU 抽取  │ │ 题目答案生成  │ │
+│  │ 解析/切块 │ │ 覆盖规划  │ │ 证据绑定     │ │
+│  └──────────┘ └──────────┘ └──────────────┘ │
+│  ┌──────────┐ ┌──────────┐ ┌──────────────┐ │
+│  │ 质量校验  │ │ 版本管理  │ │ 导出         │ │
+│  └──────────┘ └──────────┘ └──────────────┘ │
+├──────────────────────────────────────────────┤
+│                 数据层                        │
+│  SQLite（元数据） + 本地文件（原始文档）         │
+│  + FAISS（向量索引，辅助检索）                  │
+├──────────────────────────────────────────────┤
+│                 模型层                        │
+│  BGE Embedding（本地） + LLM API（可配置）      │
+└──────────────────────────────────────────────┘
+```
+
+### 4.3 核心数据流
+
+```
+原始文档（PDF/DOCX/TXT）
+    │
+    ▼
+[1. 文档解析]
+    │  结构化 Block（段落/表格行 + 章节路径 + 页码）
+    │  存储：原始文件 → 本地磁盘，Block 记录 → SQLite
+    │  向量化（辅助）：BGE → FAISS
+    ├──→ Block 列表
+    │
+    ▼
+[2. EIU 抽取]  ← LLM 驱动
+    │  逐 Block 抽取可评测信息单元
+    │  每个 EIU：陈述 / 类型 / 优先级 / 证据范围 / 权重
+    │  对账：每个实质 Block 必须有 EIU 或排除记录
+    ├──→ EIU 清单
+    │
+    ▼
+[3. 覆盖规划]
+    │  按章节 / 类型 / 优先级分组统计
+    │  生成覆盖清单，标记缺口
+    │
+    ▼
+[4. 题目生成]  ← LLM 驱动
+    │  为每个可出题 EIU 生成 1 道规范问题
+    │  题型匹配 EIU 类型
+    ├──→ 题目列表
+    │
+    ▼
+[5. 答案生成]  ← LLM 驱动
+    │  标准答案 + 必须命中要点 + 可接受答案
+    │  每个要点绑定原文证据定位
+    ├──→ 完整 Case（题目 + 答案 + 证据）
+    │
+    ▼
+[6. 质量校验]  ← LLM 驱动
+    │  可回答性 / 忠实性 / 唯一性 / 证据充分性
+    ├──→ 校验结果
+    │
+    ▼
+[7. 覆盖计算]  ← 代码计算
+    │  加权 EIU 覆盖率 = Σ(w_i × c_i) / Σ(w_i)
+    │
+    ▼
+[8. 导出]
+    │  版本冻结 + JSON / JSONL / Excel
+    └──→ 评测数据集
+```
+
+---
+
+## 5. 模块详细设计
+
+### 5.1 文档接入与解析模块
+
+**职责：** 接收上传文档 → 解析结构 → 生成 Block → 保存定位信息。
+
+**输入：** PDF、DOCX、TXT、Markdown
+
+**处理流程：**
+1. 接收文件，计算 SHA256 哈希，检查重复
+2. 原始文件存入本地存储（`storage/raw/{hash}_{filename}`）
+3. 根据文件类型选择解析器：
+   - TXT/MD：直接按段落切分
+   - PDF：`PyMuPDF` 提取文本 + 页码
+   - DOCX：`python-docx` 提取段落 + 表格
+4. 每个段落/表格行生成一个 Block，记录：`section_path`、`page_no`、`block_type`、`block_text`
+5. Block 写入 SQLite，同时可选生成 BGE 向量写入 FAISS
+
+**Demo 简化：** 先做 TXT/MD 的段落切分 + PDF 的 `PyMuPDF` 基础提取。复杂表格、扫描件 OCR 降级处理。
+
+### 5.2 EIU 抽取模块（平台核心）
+
+**职责：** 从 Block 中抽取 EIU。这是整个平台最核心、最关键的一步。
+
+**输入：** 一个语料库的 Block 列表（带章节上下文和页码）
+
+**输出：** EIU 结构化记录列表
+
+**抽取策略（Demo 版）：**
+
+```
+对每个 Block：
+  1. 组装上下文：章节路径 + 相邻 Block 文本 + 文档元信息
+  2. 调用 LLM，Prompt 要求：
+     a. 判断该 Block 是否包含实质内容
+     b. 按 FR-SEM-004 的 8 条规则拆分为 1-N 个 EIU
+     c. 每个 EIU 标注：完整陈述 / 类型 / 优先级 / 限定信息
+  3. 输出结构化 JSON 数组
+```
+
+**EIU 类型定义：**
+
+| EIU 类型 | 典型识别特征 | 题目类型 |
+|---|---|---|
+| definition | 术语定义、概念说明 | 定义题 |
+| rule | 带完整条件的规则结论 | 条件与适用范围题 |
+| threshold | 门槛、阈值、数值限额 | 阈值和数值题 |
+| date | 生效、失效或过渡日期 | 时效题 |
+| formula | 计算公式或变量口径 | 公式与计算题 |
+| process | 流程步骤或材料要求 | 流程顺序题 |
+| exception | 例外、豁免、放宽条款 | 例外与边界题 |
+| prohibition | 禁止事项、不得…… | 是否可回答题 |
+
+**优先级定义：**
+- **P0（权重 5）**：监管禁止事项、关键阈值、例外条款、安全边界、强制合规
+- **P1（权重 3）**：核心定义、主流程、核心指标和公式
+- **P2（权重 1）**：一般说明和补充事实
+
+**Prompt 设计要点：**
+- Few-shot 示例（至少包含授信政策和财报场景各 2 条）
+- 明确要求输出 JSON 数组
+- 强调 FR-SEM-004 规则：限制定语不可脱离、例外单列、定义与公式分列
+- 要求为每个 EIU 绑定原文 Block ID
+
+### 5.3 覆盖规划模块
+
+**职责：** 基于 EIU 清单，统计覆盖率，识别缺口。
+
+**处理流程：**
+1. 汇总所有 EIU，按章节、EIU 类型、优先级分组
+2. 统计各维度的 EIU 数量和权重
+3. 记录排除项及其排除原因
+4. 检查实质 Block 对账率
+5. 生成覆盖清单
+
+**覆盖计算公式（FR-COVER-002）：**
+
+```
+WeightedCoverage = Σ(w_i × c_i) / Σ(w_i)
+
+其中：
+  w_i: P0=5, P1=3, P2=1
+  c_i: 1（该 EIU 已有通过质量校验的规范问题），0（未覆盖）
+```
+
+### 5.4 题目生成模块
+
+**职责：** 为每个可出题 EIU 生成规范问题。
+
+**输入：** 一个 EIU（含陈述、类型、优先级、原文证据范围）
+
+**输出：** 1 道规范问题 + 题型标记 + 难度标记
+
+**Prompt 设计要点：**
+- 给定 EIU 的完整陈述和原文上下文
+- 要求生成一道符合题型的问题
+- 问题必须能仅凭给定材料回答（不自带前提、不泄露答案）
+- Demo 每 EIU 只生成 1 道规范问题
+
+### 5.5 答案生成与证据绑定模块
+
+**职责：** 为每道题生成标准答案，并绑定原文证据。
+
+**输入：** 题目 + 关联的 EIU + 原文 Block 文本 + Block 定位信息
+
+**输出：**
+
+```json
+{
+  "case_id": "case_000001",
+  "intent_id": "intent_profit_margin_001",
+  "question": "该公司本年度的净利润率是多少？",
+  "question_type": "calculation",
+  "difficulty": "L1",
+  "gold_answer": "10%",
+  "must_have_points": [
+    "净利润为100万元",
+    "营业收入为1000万元",
+    "净利润率 = 净利润 / 营业收入"
+  ],
+  "acceptable_answers": ["10.0%", "百分之十"],
+  "evidence": [
+    {
+      "document_id": 1,
+      "document_name": "某企业财报.pdf",
+      "section_path": "合并利润表",
+      "page_no": 35,
+      "block_id": 120,
+      "original_text": "净利润 1,000,000 元"
+    }
+  ],
+  "eiu_ids": ["eiu_018"],
+  "content_priority": "P1",
+  "review_status": "quality_verified"
+}
+```
+
+**关键约束：**
+- 每个答案要点必须绑定至少一条原文证据
+- 证据必须包含原文定位（章节路径、页码、原文片段）
+- 答案不得超出原文支持范围
+- 原文确实没有答案时，标记为"不可回答题"
+
+### 5.6 质量校验模块
+
+**职责：** 自动检查每道题的生成质量。
+
+**Demo 做 4 项检查：**
+
+| 检查项 | 规则 | 实现方式 |
+|---|---|---|
+| 可回答性 | 材料中是否包含完整答案所需的所有信息 | LLM 判定 |
+| 忠实性 | 答案的每个要点是否被原文证据支持 | LLM 逐要点对原文 |
+| 唯一性 | 是否存在多个同样合理的答案未被收录 | LLM 判定 |
+| 证据充分性 | 证据是否完整覆盖答案的所有要点 | LLM 辅助判定 |
+
+**校验结果：** 每道题标注 `quality_verified` / `needs_revision` + 失败原因。
+
+### 5.7 导出模块
+
+**职责：** 将评测数据集导出为标准格式。
+
+**导出格式：** JSONL（主流评测框架）、JSON（含版本元信息）、Excel/CSV（人工审阅）
+
+---
 
 ## 6. 数据设计
 
-### 6.1 MySQL 核心表建议
+### 6.1 核心实体关系
+
+```
+corpus（语料库）
+  └── document（原始文档）
+       └── block（结构化段落/表格行）
+            └── eiu（可评测信息单元）
+                 └── case（评测样本 = 题目 + 答案 + 证据）
+
+coverage_report（覆盖报告）
+quality_check_result（质量校验结果）
+dataset_version（评测集版本）
+```
+
+### 6.2 表字段定义
 
 #### corpus
-- corpus_id
-- name
-- description
-- domain
-- created_by
-- created_at
-- version
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| corpus_id | INT PK | |
+| name | VARCHAR | |
+| description | TEXT | |
+| domain | VARCHAR | 业务领域 |
+| created_at | DATETIME | |
+| version | VARCHAR | |
 
 #### document
-- document_id
-- corpus_id
-- file_name
-- file_type
-- file_size
-- content_hash
-- minio_path
-- upload_user
-- upload_time
-- document_version
-- parse_status
-- parse_error
-
-#### document_block
-- block_id
-- document_id
-- parent_block_id
-- section_path
-- page_no
-- block_type
-- block_text
-- start_offset
-- end_offset
-- metadata_json
-- embedding_id
-
-#### task_job
-- job_id
-- job_type
-- target_id
-- status
-- progress
-- error_message
-- started_at
-- finished_at
-
-#### retrieval_query
-- query_id
-- question
-- corpus_id
-- top_k
-- status
-- created_at
-
-#### retrieval_result
-- result_id
-- query_id
-- block_id
-- score
-- rank
-- source_excerpt
-- created_at
-
-#### run_log
-- log_id
-- job_id
-- level
-- message
-- created_at
-
-#### requirement_doc（新增——业务需求书专用）
-- requirement_doc_id
-- corpus_id
-- file_name
-- file_type
-- requirement_version
-- business_domain
-- author_department
-- effective_date
-- review_date
-- uploaded_at
-- parse_status
-
-#### test_function_point（新增——测试功能点/EIU 子类型）
-- tfp_id
-- requirement_doc_id
-- section_path
-- requirement_id（原始需求编号，如 FR-LOGIN-001）
-- statement（功能点完整陈述）
-- eiu_type（functional_rule / business_rule / data_rule / interface_rule / nfr）
-- content_priority（P0/P1/P2）
-- weight
-- evidence_range（JSON，原文定位）
-- is_questionable
-- exclusion_reason
-- extraction_model
-- extraction_confidence
-- review_status
-- governance_skill_version
-- created_at
-
-#### chat_session（新增——智能问答会话，Demo 延后）
-- session_id
-- corpus_id
-- created_by
-- title
-- status
-- created_at
-- updated_at
-
-#### chat_message（新增——对话消息，Demo 延后）
-- message_id
-- session_id
-- role（user / system）
-- message_type（text / document_card / preview_card / task_progress / confirm_card）
-- content（JSON，消息体）
-- intent（解析后的意图类型）
-- intent_params（JSON，提取的参数）
-- created_at
-
-### 6.2 MinIO 对象建议
-
-- raw/：原始文件
-- parsed/：解析结果 JSON
-- chunks/：切块结果
-- exports/：导出文件
-- logs/：附件日志或调试产物
-
-### 6.3 FAISS 索引建议
-
-- 一个语料库一个索引，或先做单全局索引再按 corpus_id 过滤
-- 索引版本与模型版本绑定
-- 每次重新建索引都生成新的索引版本号
-- 向量主键必须和 MySQL 中的 block_id 可追溯对应
-
-## 7. 关键流程
-
-### 7.1 上传流程
-
-1. 用户选择文件并上传。
-2. 后端接收文件，计算哈希。
-3. 文件写入 MinIO。
-4. MySQL 生成 document 记录。
-5. 创建解析任务并返回任务 ID。
-
-### 7.2 解析与索引流程
-
-1. 后端读取原始文件。
-2. 解析模块生成结构化块。
-3. 块写入 MySQL。
-4. 调用 BGE 生成 embedding。
-5. 写入 FAISS 并保存映射。
-6. 更新任务状态为成功或失败。
-
-### 7.3 查询流程
-
-1. 用户输入问题。
-2. 问题向量化。
-3. 从 FAISS 召回 Top-K 块。
-4. 从 MySQL 和 MinIO 取回原文与来源信息。
-5. 前端展示结果列表和证据定位。
-
-## 8. 接口设计建议
-
-### 8.1 文档接口
-
-- POST /api/documents/upload
-- GET /api/documents
-- GET /api/documents/{document_id}
-- GET /api/documents/{document_id}/blocks
-
-### 8.2 任务接口
-
-- GET /api/jobs/{job_id}
-- GET /api/jobs
-- POST /api/jobs/{job_id}/retry
-
-### 8.3 检索接口
-
-- POST /api/retrieval/query
-- GET /api/retrieval/query/{query_id}
-- GET /api/retrieval/query/{query_id}/results
-
-### 8.4 业务需求书→测试功能点接口（新增）
-
-- POST /api/requirements/upload —— 上传业务需求书
-- GET /api/requirements —— 需求书列表
-- GET /api/requirements/{requirement_doc_id} —— 需求书详情
-- POST /api/requirements/{requirement_doc_id}/extract —— 触发 EIU 提取
-- GET /api/requirements/{requirement_doc_id}/test-function-points —— 查看测试功能点清单
-- GET /api/requirements/{requirement_doc_id}/export —— 导出测试功能点（支持 JSON/Excel/Markdown）
-
-### 8.5 智能问答接口（Demo 延后，仅占位）
-
-- POST /api/chat/sessions —— 创建对话会话
-- GET /api/chat/sessions —— 对话会话列表
-- GET /api/chat/sessions/{session_id} —— 会话详情与消息列表
-- POST /api/chat/sessions/{session_id}/messages —— 发送消息
-- DELETE /api/chat/sessions/{session_id} —— 删除会话
-
-Demo 阶段仅注册路由并返回静态占位响应，不实现意图解析和业务路由。
-
-### 8.6 导出接口
-
-- POST /api/exports/dataset
-- GET /api/exports/{export_id}
-
-## 9. GitHub 协作方案
-
-### 9.1 仓库组织
-
-建议建立一个单仓库，后端、前端、配置和文档统一管理，便于小团队协作。
-
-推荐目录：
-
-- backend/
-- frontend/
-- docs/
-- scripts/
-- deploy/
-
-### 9.2 分支策略
-
-- main：稳定可演示版本
-- dev：集成分支
-- feature/backend-core：后端主干
-- feature/retrieval：解析与检索
-- feature/frontend-ui：前端页面
-
-### 9.3 协作方式
-
-- 先开 Issue，再开发。
-- 每个功能一条 PR。
-- PR 必须附运行截图或验证说明。
-- AI coding 只负责局部实现，关键接口和数据结构必须人工复核。
-- 仓库统一上传到 GitHub，所有代码、文档和配置都以仓库为唯一协作入口。
-- 三人分别维护各自负责模块，避免多人同时修改同一文件，必要时先在 Issue 中确认接口再动手。
-- 每天至少同步一次分支状态，避免本地和远端长期分叉。
-
-## 10. 三人分工建议
-
-### 10.1 A：后端与数据层
-
-负责：
-
-- MySQL 表结构设计（含新增 `requirement_doc`、`test_function_point`、`chat_session`、`chat_message` 表）
-- MinIO 集成
-- 文件上传与任务管理（含业务需求书上传）
-- API 基础框架（含需求书→测试功能点接口和 Chat 占位路由）
-- EIU 提取模块（含需求书专用提取规则实现）
-- 日志与运行记录
-- 仓库主分支集成和后端公共接口维护
-
-### 10.2 B：解析、向量化与检索
-
-负责：
-
-- 文档解析（含业务需求书的目录/章节/需求编号识别）
-- 切块策略
-- BGE embedding 集成
-- FAISS 索引与召回
-- 检索结果组装
-- 解析策略、切块策略和检索效果维护
-- 需求书 EIU 提取的双通道校验和覆盖率统计
-
-### 10.3 C：前端与联调
-
-负责：
-
-- 页面原型与交互设计
-- 上传页、列表页、结果页、测试功能点查看页
-- 智能问答对话界面（Demo 阶段：静态布局 + 示例消息，不做完整交互）
-- In-Chat Preview 预览组件设计稿
-- 接口联调
-- Demo 演示脚本
-- 前端仓库内容、页面展示和演示材料维护
-
-如果需要更快出效果，C 也可以兼做项目推进和验收统筹。
-
-### 10.4 维护边界
-
-- A 负责后端与数据链路的稳定性。
-- B 负责解析、索引和召回效果。
-- C 负责前端体验、联调和演示呈现。
-- 需要跨模块修改时，先在 Issue 里确认责任人，再合并到对应分支。
-
-## 11. 3 天交付计划
-
-### 第 1 天：仓库与主链路搭建
-
-- 建立 GitHub 仓库并完成目录初始化
-- 接通 MinIO、MySQL、FAISS 的本地运行环境
-- 完成文档上传、文件入库和任务表记录
-- 确定前后端接口格式与分支规范
-
-### 第 2 天：解析、向量化、检索 + EIU 提取
-
-- 完成文档解析与基础切块
-- 接入 BGE embedding
-- 构建 FAISS 索引和检索接口
-- 打通问题查询到证据召回的后端链路
-- 实现业务需求书上传和 EIU 提取基础流程
-
-### 第 3 天：前端展示、联调发布 + 问答占位
-
-- 完成上传页、列表页、检索页、结果页、测试功能点查看页
-- 实现智能问答对话界面静态布局（占位）和侧边栏入口
-- 联调前后端并修复阻塞问题
-- 准备演示数据（含一份示例业务需求书）和 README
-- 将可运行版本推送到 GitHub 主分支或发布分支
-
-### 交付标准
-
-- 仓库可拉起
-- 本地可运行
-- 文档可上传、可检索、可展示证据
-- 业务需求书可上传、可提取测试功能点（EIU 清单）
-- 智能问答界面可访问（静态占位，入口可见）
-- 三人按模块持续维护，后续只在各自负责范围内迭代
-
-## 12. 风险与对策
-
-### 12.1 文档解析不稳定
-
-对策：先支持常见格式，复杂扫描件先降级处理并显式报错。
-
-### 12.2 检索效果不稳定
-
-对策：先用标准切块 + BGE + FAISS 的最小方案，后续再加重排和更细粒度规则。
-
-### 12.3 需求范围失控
-
-对策：严格区分 Demo、MVP 和正式平台，不在本阶段加入回流、权限、多模型对比等复杂能力。
-
-### 12.4 协作冲突
-
-对策：统一数据结构、统一接口约定、统一 PR 规范。
-
-## 13. 交付物
-
-本阶段最终应交付：
-
-- 技术设计文档
-- 可运行本地 Demo
-- 数据库表结构（含新增 `requirement_doc`、`test_function_point`、`chat_session`、`chat_message` 表）
-- 接口文档（含需求书→测试功能点 API 和 Chat 占位 API）
-- 业务需求书示例及提取的测试功能点演示数据
-- 智能问答对话界面设计稿/静态占位页面
-- GitHub 仓库与分支规范
-- 演示脚本
-- 基础部署说明
-
-## 14. 结论
-
-对于三人小团队，最稳妥的路线是先做本地单机 Demo，把文档上传、解析、向量化、检索和前端展示跑通，再逐步扩展到 EIU、审核和自动评测闭环。当前技术选型是合理的，关键不在于堆功能，而在于先把数据链路、证据链路和协作链路做稳定。
-
-## 15. 仓库目录结构与初始化文件
-
-下面是建议的 GitHub 仓库骨架，适合三人并行维护，也便于后续从本地 Demo 平滑扩展。
-
-```text
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| document_id | INT PK | |
+| corpus_id | INT FK | |
+| file_name | VARCHAR | |
+| file_type | VARCHAR | |
+| file_size | BIGINT | |
+| content_hash | VARCHAR(128) | SHA256 去重 |
+| storage_path | VARCHAR | |
+| parse_status | VARCHAR | |
+| uploaded_at | DATETIME | |
+
+#### block
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| block_id | INT PK | |
+| document_id | INT FK | |
+| parent_block_id | INT | 父 Block（标题层级） |
+| section_path | VARCHAR | |
+| page_no | INT | |
+| block_type | VARCHAR | paragraph / table_row / title / list_item |
+| block_text | TEXT | 原文 |
+| embedding_vector | BLOB/JSON | BGE 向量（辅助检索，可选） |
+
+#### eiu
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| eiu_id | INT PK | |
+| corpus_id | INT FK | |
+| block_id | INT FK | 源 Block |
+| statement | TEXT | 完整陈述 |
+| eiu_type | VARCHAR | definition / rule / threshold / date / formula / process / exception / prohibition |
+| content_priority | VARCHAR | P0 / P1 / P2 |
+| weight | INT | 5 / 3 / 1 |
+| constraints_json | JSON | {主体, 条件, 范围, 期间, 币种, 单位} |
+| evidence_blocks | JSON | [block_id, ...] |
+| is_questionable | BOOL | |
+| exclusion_reason | VARCHAR | |
+| extraction_model | VARCHAR | |
+| extraction_confidence | FLOAT | |
+| review_status | VARCHAR | candidate / quality_verified / blocked |
+| created_at | DATETIME | |
+
+#### eval_case
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| case_id | INT PK | |
+| intent_id | VARCHAR | 意图 ID |
+| eiu_id | INT FK | |
+| question | TEXT | |
+| question_type | VARCHAR | |
+| difficulty | VARCHAR | L1 / L2 / L3 |
+| scope_type | VARCHAR | single_segment |
+| gold_answer | TEXT | |
+| must_have_points | JSON | |
+| acceptable_answers | JSON | |
+| evidence | JSON | [{document_id, section_path, page_no, block_id, original_text}] |
+| content_priority | VARCHAR | P0 / P1 / P2 |
+| review_status | VARCHAR | candidate / quality_verified / blocked / needs_revision |
+| created_at | DATETIME | |
+
+#### quality_check_result
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| check_id | INT PK | |
+| case_id | INT FK | |
+| check_type | VARCHAR | answerability / faithfulness / uniqueness / evidence_sufficiency |
+| passed | BOOL | |
+| reason | TEXT | |
+| checked_at | DATETIME | |
+
+#### coverage_report
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| report_id | INT PK | |
+| corpus_id | INT FK | |
+| total_eiu_count | INT | |
+| covered_eiu_count | INT | |
+| excluded_eiu_count | INT | |
+| weighted_coverage_pct | FLOAT | |
+| p0_coverage_pct | FLOAT | |
+| p1_coverage_pct | FLOAT | |
+| p2_coverage_pct | FLOAT | |
+| block_reconciliation_pct | FLOAT | |
+| report_json | JSON | |
+| created_at | DATETIME | |
+
+#### dataset_version
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| version_id | INT PK | |
+| corpus_id | INT FK | |
+| version_number | VARCHAR | |
+| status | VARCHAR | draft / frozen / published |
+| case_count | INT | |
+| coverage_report_id | INT FK | |
+| split_config | JSON | |
+| created_at | DATETIME | |
+| frozen_at | DATETIME | |
+
+#### requirement_doc（业务需求书→测试功能点）
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| requirement_doc_id | INT PK | |
+| corpus_id | INT FK | |
+| file_name | VARCHAR | |
+| file_type | VARCHAR | |
+| requirement_version | VARCHAR | |
+| business_domain | VARCHAR | |
+| parse_status | VARCHAR | |
+| uploaded_at | DATETIME | |
+
+#### test_function_point
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| tfp_id | INT PK | |
+| requirement_doc_id | INT FK | |
+| section_path | VARCHAR | |
+| requirement_id | VARCHAR | 原始需求编号 |
+| statement | TEXT | 功能点陈述 |
+| eiu_type | VARCHAR | functional_rule / business_rule / data_rule / interface_rule / nfr |
+| content_priority | VARCHAR | P0 / P1 / P2 |
+| weight | INT | |
+| evidence_range | JSON | |
+| is_questionable | BOOL | |
+| exclusion_reason | VARCHAR | |
+| extraction_confidence | FLOAT | |
+| review_status | VARCHAR | |
+| created_at | DATETIME | |
+
+---
+
+## 7. API 设计
+
+### 7.1 语料库
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/corpus` | 创建语料库 |
+| GET | `/api/corpus` | 语料库列表 |
+| GET | `/api/corpus/{corpus_id}` | 语料库详情 |
+
+### 7.2 文档
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/documents/upload` | 上传文档 |
+| GET | `/api/documents` | 文档列表 |
+| GET | `/api/documents/{document_id}` | 文档详情 |
+| GET | `/api/documents/{document_id}/blocks` | Block 列表 |
+
+### 7.3 EIU
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/corpus/{corpus_id}/eiu/extract` | 触发 EIU 抽取 |
+| GET | `/api/corpus/{corpus_id}/eiu` | EIU 清单（支持过滤） |
+| GET | `/api/corpus/{corpus_id}/eiu/coverage` | 覆盖率报告 |
+| GET | `/api/corpus/{corpus_id}/eiu/gaps` | 未覆盖 EIU 清单 |
+
+### 7.4 题目与答案
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/corpus/{corpus_id}/cases/generate` | 生成题目和答案 |
+| GET | `/api/corpus/{corpus_id}/cases` | 评测样本列表 |
+| GET | `/api/cases/{case_id}` | 样本详情（含证据定位） |
+| PUT | `/api/cases/{case_id}` | 手动编辑样本 |
+
+### 7.5 质量校验
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/corpus/{corpus_id}/quality-check` | 触发全量质量校验 |
+| GET | `/api/corpus/{corpus_id}/quality-check/results` | 校验结果汇总 |
+
+### 7.6 导出
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/corpus/{corpus_id}/freeze` | 冻结当前版本 |
+| GET | `/api/corpus/{corpus_id}/versions` | 版本列表 |
+| GET | `/api/versions/{version_id}/export?format=jsonl` | 导出评测集 |
+
+### 7.7 业务需求书→测试功能点
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/requirements/upload` | 上传需求书 |
+| POST | `/api/requirements/{id}/extract` | 提取测试功能点 |
+| GET | `/api/requirements/{id}/test-function-points` | 查看测试功能点 |
+| GET | `/api/requirements/{id}/export` | 导出 |
+
+### 7.8 Chat 占位（Demo 延后）
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/api/chat/sessions` | 创建会话 |
+| POST | `/api/chat/sessions/{id}/messages` | 发送消息 |
+
+---
+
+## 8. Demo 核心技术实现
+
+### 8.1 LLM 调用封装
+
+```python
+class LLMClient:
+    """可配置的 LLM 客户端，支持 OpenAI 兼容 API + 本地 Ollama。"""
+
+    def __init__(self, api_base: str, api_key: str, model: str):
+        self.api_base = api_base
+        self.model = model
+
+    def chat(self, system_prompt: str, user_prompt: str,
+             response_format: str = "json_object") -> str:
+        """调用 LLM，返回文本响应。"""
+
+    def extract_eiu_from_block(self, block_text: str, context: dict) -> list[dict]:
+        """从单个 Block 抽取 EIU。"""
+
+    def generate_question(self, eiu: dict) -> dict:
+        """为单个 EIU 生成问题。"""
+
+    def generate_answer(self, question: str, evidence_blocks: list) -> dict:
+        """基于证据生成标准答案。"""
+
+    def quality_check(self, case: dict) -> list[dict]:
+        """执行 4 项质量检查。"""
+```
+
+### 8.2 Prompt 模板（版本化管理，存放于 `prompts/` 目录）
+
+**EIU 抽取 Prompt 核心要点：**
+- 系统角色：授信政策和财务报告分析专家
+- 任务：将给定段落拆分为可评测信息单元（EIU）
+- 规则：独立真值 / 限定语不可脱离 / 例外单列 / 定义公式分列 / 无实质内容不计数
+- 输出：JSON 数组，每个 EIU 含 statement / eiu_type / priority / constraints / is_questionable / exclusion_reason
+
+**题目生成 Prompt 核心要点：**
+- 系统角色：评测集编制专家
+- 任务：根据 EIU 生成符合题型的高质量评测题
+- 约束：仅凭材料可答 / 不泄露答案 / 正式书面表达
+
+**答案生成 Prompt 核心要点：**
+- 系统角色：评测标准答案编制专家
+- 任务：基于原文证据生成标准答案
+- 约束：仅基于原文 / 列出所有要点 / 逐要点绑定证据 / 原文无答案则拒答
+
+**质量校验 Prompt 核心要点：**
+- 系统角色：评测集质量审核专家
+- 任务：逐项检查可回答性 / 忠实性 / 唯一性 / 证据充分性
+- 输出：每项 passed + reason
+
+### 8.3 主工作流
+
+```python
+class EvalForgePipeline:
+    """评测集生成主工作流。"""
+
+    def run(self, corpus_id: int):
+        blocks = self.parse_documents(corpus_id)      # 1. 文档解析
+        eius = self.extract_eius(blocks)               # 2. EIU 抽取
+        coverage = self.build_coverage(eius)           # 3. 覆盖清单
+        cases = self.generate_cases(eius)              # 4. 题目生成
+        cases = self.generate_answers(cases)           # 5. 答案 + 证据
+        cases = self.quality_check(cases)              # 6. 质量校验
+        coverage = self.calculate_coverage(eius, cases)# 7. 覆盖率
+        version = self.freeze_and_export(cases)        # 8. 导出
+        return version
+```
+
+### 8.4 项目目录结构
+
+```
 evalforge-demo/
 ├── backend/
 │   ├── app/
-│   │   ├── api/
-│   │   │   ├── chat.py          # Chat 路由（Demo 占位）
-│   │   │   └── requirements.py  # 需求书→测试功能点路由
+│   │   ├── api/               # FastAPI 路由
+│   │   │   ├── corpus.py
+│   │   │   ├── documents.py
+│   │   │   ├── eiu.py
+│   │   │   ├── cases.py
+│   │   │   ├── quality.py
+│   │   │   ├── export.py
+│   │   │   ├── requirements.py
+│   │   │   └── chat.py
 │   │   ├── core/
-│   │   ├── models/
-│   │   │   ├── chat.py          # Chat 数据模型
-│   │   │   └── requirement.py   # 需求书与测试功能点模型
+│   │   │   ├── config.py
+│   │   │   └── llm_client.py  # LLM 客户端
+│   │   ├── models/            # SQLAlchemy 模型
+│   │   ├── schemas/           # Pydantic Schema
 │   │   ├── services/
-│   │   │   ├── chat_service.py  # Chat 服务（Demo 占位）
-│   │   │   └── eiu_extractor.py # 需求书 EIU 提取器
-│   │   ├── workers/
+│   │   │   ├── parser.py      # 文档解析
+│   │   │   ├── eiu_extractor.py    # EIU 抽取（LLM 驱动）
+│   │   │   ├── case_generator.py   # 题目生成（LLM 驱动）
+│   │   │   ├── quality_checker.py  # 质量校验（LLM 驱动）
+│   │   │   ├── coverage.py    # 覆盖率计算
+│   │   │   ├── pipeline.py    # 主工作流
+│   │   │   ├── storage.py     # 文件存储
+│   │   │   └── indexer.py     # FAISS 辅助索引
 │   │   └── utils/
+│   │       └── embedding.py   # BGE Embedding
+│   ├── prompts/               # Prompt 模板（版本化）
+│   │   ├── eiu_extraction.txt
+│   │   ├── question_generation.txt
+│   │   ├── answer_generation.txt
+│   │   └── quality_check.txt
 │   ├── tests/
 │   ├── pyproject.toml
 │   └── README.md
 ├── frontend/
-│   ├── src/
-│   │   ├── pages/
-│   │   │   ├── chat/            # 智能问答页面（Demo 占位）
-│   │   │   └── test-function-points/  # 测试功能点查看页
-│   │   ├── components/
-│   │   ├── services/
-│   │   └── styles/
-│   ├── public/
-│   ├── package.json
-│   └── README.md
+│   └── src/
+│       └── pages/
+│           ├── dashboard/
+│           ├── corpus/
+│           ├── eiu/
+│           ├── cases/
+│           └── export/
 ├── docs/
 │   ├── architecture.md
 │   ├── api.md
 │   ├── data-model.md
 │   └── demo-guide.md
 ├── scripts/
-│   ├── init_mysql.sql
-│   ├── init_minio.sh
-│   ├── build_faiss_index.py
-│   └── seed_demo_data.py
+│   ├── init_db.sql
+│   ├── seed_demo_data.py
+│   └── run_pipeline.py
 ├── deploy/
 │   ├── docker-compose.yml
 │   └── env.example
-├── .github/
-│   └── workflows/
-│       └── ci.yml
-├── .gitignore
-├── .editorconfig
-├── LICENSE
-├── README.md
-└── technical_design_demo.md
+└── README.md
 ```
 
-### 15.1 初始化文件清单
+---
 
-- `README.md`：仓库总说明，写清项目目标、启动方式、协作规则和演示路径。
-- `technical_design_demo.md`：技术方案正文，作为长期参考文档。
-- `backend/pyproject.toml`：后端 Python 依赖与构建配置。
-- `frontend/package.json`：前端依赖、脚本与构建配置。
-- `deploy/docker-compose.yml`：本地一键启动 MySQL、MinIO、后端和前端的编排文件。
-- `deploy/env.example`：环境变量示例。
-- `scripts/init_mysql.sql`：初始化表结构。
-- `scripts/seed_demo_data.py`：注入演示数据。
-- `scripts/build_faiss_index.py`：本地构建 FAISS 索引。
-- `docs/architecture.md`：系统架构图与模块职责。
-- `docs/api.md`：接口定义。
-- `docs/data-model.md`：核心数据表和对象关系。
-- `docs/demo-guide.md`：本地启动和演示步骤。
-- `.github/workflows/ci.yml`：最基本的持续集成检查。
-- `.gitignore`：忽略虚拟环境、构建产物和本地配置。
+## 9. Demo 标注
 
-### 15.2 推荐创建顺序
+### 9.1 LLM 生成结果的存储与人工修正
 
-1. 先建 GitHub 仓库和 `README.md`。
-2. 再补 `backend/`、`frontend/`、`docs/`、`scripts/`、`deploy/` 目录。
-3. 先提交 `docker-compose.yml`、`env.example`、`init_mysql.sql`、`README.md`。
-4. 后端、前端、脚本按各自模块逐步补齐。
+| 步骤 | 实现方式 | 存储 | 人工干预入口 |
+|---|---|---|---|
+| 文档解析 | 代码 | SQLite | 无需干预 |
+| EIU 抽取 | LLM | SQLite | 可查看/编辑/删除 EIU |
+| 题目生成 | LLM | SQLite | 可修改题目文本/题型 |
+| 答案生成 | LLM | SQLite | 可修改答案/要点/证据 |
+| 质量校验 | LLM | SQLite | 可确认/驳回校验结果 |
+| 覆盖率计算 | 代码 | SQLite | 自动计算 |
 
-### 15.3 三人维护建议
+### 9.2 LLM 风险控制
 
-- A 主要维护 `backend/`、`deploy/` 和数据库脚本。
-- B 主要维护 `scripts/`、解析索引逻辑和数据初始化。
-- C 主要维护 `frontend/` 和 `docs/` 中的演示说明。
-- 任何跨目录改动，都先在 Issue 里明确责任人，再合并到对应分支。
+- **Prompt 版本化**：`prompts/` 目录下的模板文件随代码一起 Git 管理
+- **结果持久化**：LLM 每一步生成结果都写入 SQLite，支持回滚和重新生成
+- **确定性计算**：覆盖率、Block 对账等使用纯代码，不依赖 LLM
+- **模型配置化**：LLM 的 api_base / model 通过环境变量配置
+
+### 9.3 Demo 不做的
+
+- ❌ 上传文档 → 自动就出完美评测集（仍需人工校验和修正）
+- ❌ 自动调用待测系统跑分
+- ❌ 跨段/跨文档题目
+- ❌ EIU 双通道校验
+- ❌ 治理审核 Skill（S0 强制规则）
+- ❌ 多轮迭代优化和回流
+
+---
+
+## 10. 三人分工
+
+| 人员 | 负责模块 | 具体内容 |
+|---|---|---|
+| **A：后端与数据** | 数据层 + API + EIU | SQLite 表设计、文件存储、EIU 抽取器、覆盖规划、API 框架 |
+| **B：题目与答案** | 题目/答案生成 + 质量 | 文档解析、LLM Prompt 设计、题目生成器、答案生成器、证据绑定、4 项质量校验 |
+| **C：前端与联调** | 前端 + 导出 + 联调 | EIU 清单页、题目预览页、覆盖报告页、导出管理页、Chat 占位、联调 |
+
+---
+
+## 11. 3 天交付计划
+
+### Day 1：环境搭好 + 文档解析 + EIU 抽取跑通
+- 建仓 + 配置文件 + 依赖安装
+- SQLite 表创建 + 文档上传 + 解析（PDF/TXT/MD）
+- LLM 客户端 + EIU 抽取 Prompt 联调
+- EIU 抽取 + 存储 + 查询 API
+
+### Day 2：题目 + 答案 + 质量校验跑通
+- 题目生成 Prompt + 答案生成 Prompt 联调
+- 题目生成器 + 答案生成器 + 证据绑定实现
+- 4 项质量校验实现
+- 全部 API 联调
+
+### Day 3：前端 + 导出 + 演示
+- 覆盖率计算 + 版本冻结 + JSONL 导出
+- 前端关键页面（EIU 清单、题目预览、覆盖报告）
+- 准备 2 份演示文档 + 跑完整 Demo 流程
+- README + 演示脚本
+
+---
+
+## 12. 交付物
+
+- 技术设计文档（本文档）
+- 可运行本地 Demo（完整后端代码）
+- SQLite 数据库（自动初始化）
+- Prompt 模板（`prompts/` 目录，版本化）
+- Swagger API 文档
+- 演示脚本 + 示例数据（2 份文档 + 生成的评测集）
+- 前端关键页面（EIU 清单 / 题目预览 / 覆盖报告）
