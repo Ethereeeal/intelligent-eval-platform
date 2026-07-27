@@ -2,7 +2,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.routes import router as documents_router
-from app.api.requirements import router as requirements_router
 from app.api.chat import router as chat_router
 
 app = FastAPI(title="EvalForge Backend", version="0.2.0")
@@ -17,7 +16,6 @@ app.add_middleware(
 )
 
 app.include_router(documents_router)
-app.include_router(requirements_router)
 app.include_router(chat_router)
 
 

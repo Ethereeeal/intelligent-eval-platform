@@ -26,6 +26,7 @@
 | FR-COVER-001 | 生成覆盖清单：按文档/章节/EIU类型/优先级/单段跨段/难度等维度统计 |
 | FR-COVER-002 | 加权 EIU 覆盖率公式：Σ(w_i×c_i)/Σ(w_i)，P0=5/P1=3/P2=1 |
 | FR-COVER-003 | 防止覆盖率失真：不能计假覆盖、不能排除难以生成题目的 EIU |
+| FR-COVER-004 | 多角度覆盖：一个 EIU 可从不同角度生成多道相关题作为增强；覆盖率按 EIU 是否≥1 题计（c_i=1），多角度题不重复计分母 |
 
 ---
 
@@ -131,9 +132,17 @@ EIU (Evaluable Information Unit) = 一条能够被原文**独立证明或否定*
 | review_status | VARCHAR | candidate / quality_verified / blocked |
 | created_at | DATETIME | |
 
+**文档更新自动重抽（FR-CORPUS-004，覆盖式全量重算，进度由 doc_update_job 承载）：**
+- 重传触发后，先删除该文档旧版本的全部 block/向量/EIU/题目（整体作废），再全量重新分段 + BGE 向量化 + 抽 EIU。Demo 不做增量：BGE 语义分段会使 Block 边界随上下文偏移，难以可靠定位"哪些 Block 变了"，全量重算更简单稳妥。
+- 抽取进度通过 job 的 `progress` 反馈：progress = 已抽 Block 数 / 总 Block 数。
+- 写库后由 05 §3.3 覆盖重建逻辑整体替换该文档的 EIU 与题面，不做 `superseded/conflicted/deprecated` 旧版本残留。
+- 抽取全程异步，前端以 job 进度为准，不阻塞其他操作。
+
 ### 2.4 Demo 不做但技术方案预留
 
-**EIU 双通道校验（FR-SEM-005，后续版本）：**
+**EIU 双通道校验（FR-SEM-005，Demo 不做 · 后续待讨论，不一定做）：**
+
+> 处置状态：Demo 阶段不做（单通道抽取已满足 Demo 需求）。是否进入后续版本**待讨论、未确定**——BRD 虽已立项（FR-SEM-005），但属覆盖率分母的可选增强，非 Demo 必需，需结合性价比与跨段/跨文档等能力一并评估后再定。
 
 ```
 通道1（抽取器A）→ EIU 候选列表 A
@@ -166,7 +175,9 @@ EIU (Evaluable Information Unit) = 一条能够被原文**独立证明或否定*
 | unit | 单位 |
 | easily_confused_with | 容易混淆的术语列表 |
 
-**语义关系抽取（FR-SEM-007，后续版本）：**
+**语义关系抽取（FR-SEM-007，Demo 不做 · 后续也不做）：**
+
+> 语义关系边（`same_concept`/`easy_to_confuse`/`supersedes`/`contradicts`…）本质属于知识图谱能力。已明确**不做知识图谱**，且跨段/跨文档题、增量更新也均不做，本项无独立消费方，故**后续也不做**（非待讨论项）。13 类关系边不再存入 `semantic_relation` 表。
 
 13 类关系边存入 `semantic_relation` 表：
 
@@ -188,7 +199,7 @@ comparison_candidate / reasoning_bridge
 - 按章节（section_path）分组
 - 按 EIU 类型分组
 - 按优先级（P0/P1/P2）分组
-- 按单段/跨段/跨文档分组
+- 按单段/跨段分组
 - 按难度（L1/L2/L3）分组
 
 **输出示例：**
@@ -263,6 +274,7 @@ def calculate_weighted_coverage(eius: list[EIU], cases: list[EvalCase]) -> Cover
 | 证据只支持答案的一部分 | LLM：在质量校验"证据充分性"检查中检测 |
 | 问题包含答案暗示 | LLM：在质量校验"唯一性"检查中检测 |
 | 多个改写重复计算 | 规则：按 intent_id 去重（Demo 不做改写，此条沿用） |
+| 多角度题重复计算 | 规则：按 eiu_id 计覆盖，同一 EIU 的多角度题只计一次（c_i=1），不重复计入分母 |
 | 覆盖率分母被人为排空 | 规则：检查排除记录中的 exclusion_reason，拒绝"因题目难生成"类排除 |
 
 **业务门禁（硬性规则，代码强制执行）：**
@@ -276,7 +288,8 @@ def calculate_weighted_coverage(eius: list[EIU], cases: list[EvalCase]) -> Cover
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/api/corpus/{corpus_id}/eiu/extract` | 触发 EIU 抽取（异步） |
+| POST | `/api/corpus/{corpus_id}/eiu/extract` | 触发 EIU 抽取（异步，进度见 doc_update_job） |
+| GET | `/api/jobs/{job_id}` | 查询抽取/更新任务进度与状态（贯穿解析→抽取→增量） |
 | GET | `/api/corpus/{corpus_id}/eiu` | EIU 清单（支持 ?type=&priority=&section=&questionable= 过滤） |
 | GET | `/api/eiu/{eiu_id}` | 单个 EIU 详情（含原文上下文） |
 | PUT | `/api/eiu/{eiu_id}` | 手动编辑 EIU |
@@ -296,3 +309,4 @@ def calculate_weighted_coverage(eius: list[EIU], cases: list[EvalCase]) -> Cover
 - [ ] 加权覆盖率计算（确定性代码）
 - [ ] 实质 Block 对账检查
 - [ ] EIU 手动编辑/删除 API
+- [ ] 文档更新自动重抽 EIU（覆盖式全量重算，复用 doc_update_job 进度）

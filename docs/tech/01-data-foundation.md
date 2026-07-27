@@ -13,6 +13,7 @@
 |---|---|
 | FR-CORPUS-001 | 创建隔离的语料库，支持多文件归属，跨文档比对限于同一语料库 |
 | FR-CORPUS-002 | 文件接入支持 PDF/DOCX/TXT/MD/CSV/XLSX；保存文件名/哈希/版本/权威等级 |
+| FR-CORPUS-004 | 文档更新（content_hash 变化）自动触发重新解析与 EIU 重抽，并显示更新进度，完成后提示"已更新完成" |
 | FR-CORPUS-003 | 文档安全预处理：病毒检测、敏感信息识别、提示注入识别、外发模型标记 |
 
 ### 8.2 结构化解析与可回溯定位
@@ -31,7 +32,7 @@
 | FR-STORAGE-001 | 五层后台存储：原始文件/关系型数据/向量索引/语义理解/配置与版本 |
 | FR-INDEX-001 | 多路索引：关键词稀疏/稠密向量/元数据/结构关系/表格 |
 | FR-INDEX-002 | FAISS 适用边界：原型或单机高效近邻检索，不承担业务数据库职责 |
-| FR-INDEX-003 | 增量索引：新增文档仅重处理变化文段 |
+| FR-INDEX-003 | 覆盖式重处理：重传文档整体重新分段+向量化（Demo 不做增量，见 §2.7） |
 | FR-INDEX-004 | Embedding/Reranker 预配置：模型名称/版本/维度/批大小/归一化方式/健康检查 |
 
 ---
@@ -79,11 +80,11 @@ POST /api/documents/upload
 | file_name | VARCHAR(255) | |
 | file_type | VARCHAR(64) | PDF/DOCX/TXT/MD/CSV/XLSX |
 | file_size | BIGINT | |
-| content_hash | VARCHAR(128) | SHA256，UNIQUE，去重+版本判定 |
+| content_hash | VARCHAR(128) | SHA256，UNIQUE，去重（相同内容不重复解析） |
 | storage_path | VARCHAR(512) | 本地文件路径 |
 | upload_user | VARCHAR(128) | |
 | upload_time | DATETIME | |
-| document_version | VARCHAR(64) | |
+| document_version | VARCHAR(64) | Demo 覆盖式：文档不版本化，恒为单一版本（预留字段，可去除） |
 | authority_level | VARCHAR(32) | 权威等级 |
 | parse_status | VARCHAR(64) | pending / parsing / done / failed |
 | parse_error | TEXT | 解析失败原因 |
@@ -122,6 +123,11 @@ POST /api/documents/upload
 1. 通过字体大小、加粗、编号模式（"第X章""X.X""（X）"）推断标题
 2. 构建父子关系：标题 Block 的 block_id 作为后续内容 Block 的 parent_block_id
 3. 拼接 section_path：沿父节点链向上的标题文本拼接
+
+**语义分段（基于 BGE 模型）：**
+- 连续文本切分为语义完整的 Block 边界，由 BGE 语义分段模型判定，而非仅依赖版面结构或标点断句。
+- 与版面解析互补：版面结构提供章节骨架（标题层级），BGE 语义分段在段落内部对齐语义边界，避免把一处完整语义拆散、或把若干不同语义强行合并为一个 Block。
+- 同一 BGE 模型同时承担 §2.4 的向量化嵌入（FR-INDEX-004 预配置其名称/版本/维度）。
 
 **解析质量门禁（FR-PARSE-004，Demo 简化）：**
 - 检测空页：page_no 有但无对应 block → 标记
@@ -164,7 +170,7 @@ Block 文本 → BGE-small-zh-v1.5 → 768维向量 → FAISS Index
 | 存储层 | Demo 实现 | 生产迁移 |
 |---|---|---|
 | 原始文件 | 本地 `storage/raw/` | MinIO |
-| 关系型数据 | SQLite `storage/evalforge.db` | PostgreSQL |
+| 关系型数据 | SQLite `storage/qa_gen.db` | PostgreSQL |
 | 向量索引 | FAISS 本地文件 `storage/faiss.index` | 向量数据库 |
 | 语义理解 | SQLite（EIU 表及其他语义表） | PostgreSQL + 图数据库 |
 | 配置与版本 | 环境变量 + 代码内 Prompt 模板 | 配置中心 |
@@ -175,6 +181,37 @@ Demo 阶段不实现完整的 FR-CORPUS-003，仅做：
 - 文件类型白名单校验（拒绝 .exe/.dll/.so 等可执行文件）
 - 文件大小限制（≤ 50MB）
 - 加密/损坏文件检测（PyMuPDF 打开失败时明确标记）
+
+### 2.7 文档更新自动重抽 EIU 与进度（FR-CORPUS-004）
+
+当同一语料库内某文档的 **content_hash 发生变化**（用户重新上传该文档，覆盖旧版本），平台应自动完成"重解析 → 重抽 EIU → 覆盖重建"闭环，并向前端暴露进度：
+
+**触发方式：**
+- 复用上传入口：重新上传同名/同业务标识文档，`content_hash` 与既有记录不同 → 视为该文档的**覆盖更新**（不创建版本，旧文档整体作废）。
+- 或显式 `POST /api/documents/{document_id}/reupload` 上传新版本。
+
+**进度与状态（job 机制）：**
+每次更新生成一个 `doc_update_job`，贯穿"解析 → EIU 抽取 → 覆盖重建"全链路：
+- `status`：pending → running → done / failed
+- `phase`：parsing（整体重解析）→ eiu_extract（全量重抽 EIU）→ rebuild（删除旧文档全部 block/向量/EIU/题目，写入新生成结果）
+- `progress`：0–100，按已处理 Block 数 / 总 Block 数推进；完成置 100
+- `message`：进行中显示当前阶段说明；**完成时显示"已更新完成"**；失败显示失败原因
+- 前端通过 `GET /api/jobs/{job_id}` 轮询进度与状态，渲染进度条与"已更新完成"提示。
+
+**doc_update_job 表：**
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| job_id | INT PK | |
+| corpus_id | INT FK | |
+| document_id | INT FK | 被更新的文档 |
+| job_type | VARCHAR | upload / update / extract |
+| status | VARCHAR | pending / running / done / failed |
+| phase | VARCHAR | parsing / eiu_extract / rebuild |
+| progress | INT | 0–100 |
+| message | VARCHAR | 阶段说明 / "已更新完成" / 失败原因 |
+| created_at | DATETIME | |
+| finished_at | DATETIME | |
 
 ---
 
@@ -189,6 +226,8 @@ Demo 阶段不实现完整的 FR-CORPUS-003，仅做：
 | GET | `/api/documents` | 文档列表（支持 ?corpus_id= 过滤） |
 | GET | `/api/documents/{document_id}` | 文档详情 |
 | GET | `/api/documents/{document_id}/blocks` | Block 列表（含章节树） |
+| POST | `/api/documents/{document_id}/reupload` | 上传同文档新版本（content_hash 变化则触发更新） |
+| GET | `/api/jobs/{job_id}` | 查询更新/抽取任务进度与状态 |
 
 ---
 
@@ -201,3 +240,5 @@ Demo 阶段不实现完整的 FR-CORPUS-003，仅做：
 - [ ] 解析状态管理 + 错误记录
 - [ ] BGE 向量化 + FAISS 索引（辅助）
 - [ ] 文件类型白名单 + 大小限制
+- [ ] 文档更新触发（content_hash 变化 → 覆盖式全量重算，无版本）
+- [ ] `doc_update_job` 进度状态机 + 进度查询 API（前端显示进度，完成提示"已更新完成"）

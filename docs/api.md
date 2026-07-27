@@ -29,17 +29,6 @@
 | GET  | `/api/retrieval/query/{query_id}` | 查询状态 |
 | GET  | `/api/retrieval/query/{query_id}/results` | 查询结果 |
 
-### 业务需求书→测试功能点接口（新增）
-
-| 方法 | 路径 | 说明 |
-|---|---|---|
-| POST | `/api/requirements/upload` | 上传业务需求书 |
-| GET  | `/api/requirements` | 需求书列表 |
-| GET  | `/api/requirements/{requirement_doc_id}` | 需求书详情 |
-| POST | `/api/requirements/{requirement_doc_id}/extract` | 触发 EIU 提取 |
-| GET  | `/api/requirements/{requirement_doc_id}/test-function-points` | 查看测试功能点 |
-| GET  | `/api/requirements/{requirement_doc_id}/export` | 导出测试功能点 |
-
 ### 智能问答接口（Demo 延后，仅占位）
 
 | 方法 | 路径 | 说明 |
@@ -58,57 +47,6 @@
 | GET  | `/api/exports/{export_id}` | 导出状态 |
 
 ## 新增接口详情
-
-### POST /api/requirements/upload
-
-上传业务需求书并触发 EIU 提取准备。
-
-**请求** (multipart/form-data):
-- `corpus_id`: int
-- `file`: UploadFile
-
-**响应**:
-```json
-{
-  "requirement_doc_id": 1,
-  "file_name": "授信政策需求规格说明书_v2.pdf",
-  "status": "uploaded",
-  "message": "需求书已上传，可触发 EIU 提取。"
-}
-```
-
-### GET /api/requirements/{id}/test-function-points
-
-获取测试功能点清单，支持按优先级过滤。
-
-**查询参数**:
-- `priority`: "P0" | "P1" | "P2" (可选)
-
-**响应**:
-```json
-{
-  "requirement_doc_id": 1,
-  "total_count": 4,
-  "items": [
-    {
-      "tfp_id": 1,
-      "section_path": "3. 功能需求 > 3.1 用户管理 > 3.1.1 登录",
-      "requirement_id": "FR-LOGIN-001",
-      "statement": "系统应支持用户通过用户名+密码方式登录...",
-      "eiu_type": "functional_rule",
-      "content_priority": "P0",
-      "weight": 5,
-      "extraction_confidence": 0.92,
-      "review_status": "candidate"
-    }
-  ],
-  "summary": {
-    "total": 4,
-    "by_priority": {"P0": 2, "P1": 2},
-    "by_type": {"functional_rule": 1, "business_rule": 1, "data_rule": 1, "nfr": 1}
-  }
-}
-```
 
 ### POST /api/chat/sessions/{id}/messages
 
