@@ -15,9 +15,7 @@
 | FR-SEM-002 | 按段落/小节/章节/文档生成层级摘要，标记模型版本，不能替代底层原文 |
 | FR-SEM-003 | EIU 抽取：将段落拆为可评测信息单元，逐条结构化记录，EIU 类型含定义/适用范围/规则/阈值/例外/日期/指标/公式/流程/变更 |
 | FR-SEM-004 | EIU 拆分与计数规则（8 条）：独立真值/限定语不可脱离/例外单列/定义公式分列/表格业务行/无实质不计数/重复合并/不可回答排除 |
-| FR-SEM-005 | EIU 双通道校验：两路独立抽取器 + 确定性规则 + 审核 Skill 裁决 → 锁定覆盖率分母 |
-| FR-SEM-006 | 术语和财务指标消歧：规范名称/别名/定义/公式/分子分母/主体/口径/期间/币种 |
-| FR-SEM-007 | 语义关系抽取：same_concept/easy_to_confuse/definition_of/formula_of/exception_of/supersedes/contradicts 等 13 类关系 |
+| FR-SEM-005 | 术语和财务指标消歧：规范名称/别名/定义/公式/分子分母/主体/口径/期间/币种 |
 
 ### 8.5 覆盖规划
 
@@ -140,24 +138,6 @@ EIU (Evaluable Information Unit) = 一条能够被原文**独立证明或否定*
 
 ### 2.4 Demo 不做但技术方案预留
 
-**EIU 双通道校验（FR-SEM-005，Demo 不做 · 后续待讨论，不一定做）：**
-
-> 处置状态：Demo 阶段不做（单通道抽取已满足 Demo 需求）。是否进入后续版本**待讨论、未确定**——BRD 虽已立项（FR-SEM-005），但属覆盖率分母的可选增强，非 Demo 必需，需结合性价比与跨段/跨文档等能力一并评估后再定。
-
-```
-通道1（抽取器A）→ EIU 候选列表 A
-通道2（抽取器B）→ EIU 候选列表 B
-         ↓
-    差异比对：
-    - 一致项 → 直接通过
-    - A有B无 → 审核 Skill 裁决
-    - B有A无 → 审核 Skill 裁决
-         ↓
-    确定性规则检查（数值/日期/单位/否定词完整性）
-         ↓
-    EIU 清单锁定（覆盖率分母冻结）
-```
-
 **术语消歧（FR-SEM-006，后续版本）：**
 
 为每个被识别为指标/公式的 EIU 补充 `term` 记录：
@@ -174,19 +154,6 @@ EIU (Evaluable Information Unit) = 一条能够被原文**独立证明或否定*
 | currency | 币种 |
 | unit | 单位 |
 | easily_confused_with | 容易混淆的术语列表 |
-
-**语义关系抽取（FR-SEM-007，Demo 不做 · 后续也不做）：**
-
-> 语义关系边（`same_concept`/`easy_to_confuse`/`supersedes`/`contradicts`…）本质属于知识图谱能力。已明确**不做知识图谱**，且跨段/跨文档题、增量更新也均不做，本项无独立消费方，故**后续也不做**（非待讨论项）。13 类关系边不再存入 `semantic_relation` 表。
-
-13 类关系边存入 `semantic_relation` 表：
-
-```
-same_concept / easy_to_confuse / definition_of / formula_of /
-example_of / condition_of / exception_of / supersedes /
-contradicts / references / same_entity_different_period /
-comparison_candidate / reasoning_bridge
-```
 
 ---
 
