@@ -1,7 +1,7 @@
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
-from app.schemas.document import DocumentUploadResponse, QueryRequest, QueryResponse
-from app.services.pipeline import PipelineService
+from modules.m01_data_foundation.schemas import DocumentUploadResponse, QueryRequest, QueryResponse
+from modules.m01_data_foundation.services.pipeline import PipelineService
 
 router = APIRouter(prefix="/api")
 pipeline_service = PipelineService()

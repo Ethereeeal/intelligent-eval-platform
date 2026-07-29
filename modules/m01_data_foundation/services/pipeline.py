@@ -6,14 +6,14 @@ import hashlib
 import json
 from typing import Any
 
-from app.core.config import settings
-from app.schemas.document import DocumentUploadResponse, QueryRequest, QueryResponse, SearchHit
-from app.services.database import DatabaseService
-from app.services.indexer import FaissIndexService, IndexedItem
-from app.services.parser import DocumentParser
-from app.services.retrieval import RetrievalService
-from app.services.storage import StorageService
-from app.utils.embedding import EmbeddingService
+from modules.shared.core.config import settings
+from modules.m01_data_foundation.schemas import DocumentUploadResponse, QueryRequest, QueryResponse, SearchHit
+from modules.shared.services.database import DatabaseService
+from modules.m01_data_foundation.services.indexer import FaissIndexService, IndexedItem
+from modules.m01_data_foundation.services.parser import DocumentParser
+from modules.m01_data_foundation.services.retrieval import RetrievalService
+from modules.m01_data_foundation.services.storage import StorageService
+from modules.m01_data_foundation.services.embedding import EmbeddingService
 
 
 @dataclass

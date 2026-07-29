@@ -1,8 +1,8 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import router as documents_router
-from app.api.chat import router as chat_router
+from modules.m01_data_foundation.api import router as documents_router
+from modules.m07_smart_qa.api import router as chat_router
 
 app = FastAPI(title="EvalForge Backend", version="0.2.0")
 

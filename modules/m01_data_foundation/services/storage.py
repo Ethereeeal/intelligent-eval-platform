@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from app.core.config import settings
+from modules.shared.core.config import settings
 
 
 @dataclass

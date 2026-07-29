@@ -1,76 +1,71 @@
-# EvalForge Demo
+# 问答生成平台 — Demo
 
-本仓库用于实现“智能评测集平台”的本地 Demo 版本，目标是在 3 天内跑通最小闭环，并支持 GitHub 协作开发。
+从文档中自动抽取知识点（EIU），生成可评测的问答对（或导出知识点本身）。
 
-## 项目目标
+```
+上传文档 → 解析Block → 抽取EIU → 覆盖规划 → 生成问答对/导出知识点 → 质量门禁 → 导出
+```
 
-- 上传专业文档到对象存储
-- 完成文档解析、切块和元数据入库
-- 使用 BGE 模型生成 embedding
-- 使用 FAISS 构建向量检索索引
-- 支持问题检索、证据返回和结果展示
-- 保留基础任务记录，便于后续迭代
+## 项目结构
+
+```
+├── modules/                          # 全部源码 + 技术文档（7 模块 + shared）
+│   ├── m01_data_foundation/          # 01-数据基础：语料库、文档解析、向量化
+│   ├── m02_eiu_coverage/             # 02-EIU 抽取与覆盖规划
+│   ├── m03_generation/               # 03-评测集生成：题目+答案+证据
+│   ├── m04_quality_governance/       # 04-质量门禁
+│   ├── m05_dataset_lifecycle/        # 05-数据集生命周期：版本、导出、编辑
+│   ├── m06_feedback_loop/            # 06-评测后数据回流（后续版本）
+│   ├── m07_smart_qa/                 # 07-智能问答交互（后续版本）
+│   └── shared/                       # 跨模块共享：config、database、main.py
+├── deploy/                           # 运维基础设施
+├── docs/                             # 跨模块架构文档
+├── storage/                          # 运行时数据
+└── .github/                          # CI/CD
+```
+
+每个模块目录自包含：技术文档（README.md）+ 代码（api/models/schemas/services）+ 前端页面。
 
 ## 技术栈
 
-- 后端：Python
-- 数据库：MySQL
-- 对象存储：MinIO
-- 向量检索：FAISS
-- Embedding：BGE 系列模型
-- 前端：管理台风格页面
-- 协作方式：GitHub + 分支开发 + Pull Request
+| 层 | Demo | 生产 |
+|---|---|---|
+| 后端 | Python + FastAPI | — |
+| 数据库 | SQLite | PostgreSQL |
+| 存储 | 本地文件系统 | MinIO |
+| 向量索引 | FAISS（辅助） | 向量数据库 |
+| Embedding | BGE-small-zh-v1.5 | — |
+| LLM | 可配置（OpenAI 兼容 API） | — |
+| 前端 | 管理台风格静态页面 | — |
 
-## 仓库结构
+## Demo 阶段边界
 
-- `backend/`：后端服务、API、业务逻辑
-- `frontend/`：前端页面和交互
-- `docs/`：架构、接口和说明文档
-- `scripts/`：初始化脚本、数据准备和索引构建
-- `deploy/`：本地部署与环境配置
+**必做：**
+- 文档上传解析 + EIU 抽取（LLM 单通道）+ 覆盖清单
+- 单段题目生成 + 标准答案 + 证据绑定
+- 5 项基础质量校验（含问题相关性）+ 覆盖率计算
+- 版本冻结 + JSON/JSONL 导出
+- 两种输出模式：文档知识点 / 问答对（支持泛化扩写）
+
+**不做：**
+- 跨文档/跨段题目、反例/对抗题
+- EIU 双通道校验、语义关系抽取、治理审核 Skill
+- 自动评测、失败归因（不在本平台范围）
+- 智能问答交互（07）、评测后数据回流（06）
+
+## 本地启动
+
+```bash
+# 安装依赖
+pip install -e .
+
+# 启动服务
+python -m uvicorn modules.shared.main:app --reload --host 0.0.0.0 --port 8000
+```
 
 ## 协作方式
 
 - 仓库统一使用 GitHub 管理
-- 所有需求先拆成 Issue，再开发
 - 每个功能对应一个 PR
-- 三人分别维护各自负责模块，跨模块修改前先确认接口
+- 各模块独立目录，跨模块修改前先确认接口
 - 每天至少同步一次分支状态，避免长期分叉
-
-## 当前状态
-
-这是初始版本仓库，后续会逐步补充：
-
-1. 后端项目骨架
-2. 前端页面骨架
-3. MySQL 初始化脚本
-4. MinIO 和 FAISS 本地配置
-5. Demo 数据和联调说明
-
-## 启动计划
-
-1. 初始化仓库目录结构
-2. 补充本地运行配置
-3. 打通文档上传与检索链路
-4. 完成前端展示和演示脚本
-
-## 本地启动
-
-后端先进入 `backend/` 目录，再启动服务：
-
-```bash
-cd backend
-python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
-```
-
-如果要先用 Docker 拉起 MySQL 和 MinIO：
-
-```bash
-docker compose -f deploy/docker-compose.yml up -d
-```
-
-Demo 当前采用本地持久化作为默认兜底，后续会逐步切换成 MySQL、MinIO 和 FAISS 的正式接入。
-
-## 备注
-
-本阶段只做本地 Demo，不做完整生产化能力。重点是把数据链路、证据链路和协作链路先稳定下来。

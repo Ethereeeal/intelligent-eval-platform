@@ -6,7 +6,7 @@ from datetime import datetime
 from sqlalchemy import JSON, DateTime, Integer, String, Text, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
-from app.core.config import settings
+from modules.shared.core.config import settings
 
 
 class Base(DeclarativeBase):
