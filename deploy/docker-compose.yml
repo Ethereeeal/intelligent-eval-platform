@@ -12,6 +12,11 @@ services:
       - "3306:3306"
     volumes:
       - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   minio:
     image: minio/minio:latest
@@ -25,6 +30,30 @@ services:
       - "9001:9001"
     volumes:
       - minio_data:/data
+
+  backend:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: evalforge-backend
+    environment:
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_USER: evalforge
+      MYSQL_PASSWORD: evalforge
+      MYSQL_DATABASE: evalforge
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: minio
+      MINIO_SECRET_KEY: minio12345
+      EMBEDDING_MODEL_NAME: "BAAI/bge-small-zh-v1.5"
+      HF_ENDPOINT: "https://hf-mirror.com"
+    ports:
+      - "8000:8000"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      minio:
+        condition: service_started
 
 volumes:
   mysql_data:
