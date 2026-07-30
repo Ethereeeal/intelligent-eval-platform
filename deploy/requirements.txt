@@ -17,7 +17,9 @@ numpy>=1.26.0
 
 # BGE embedding + rerank
 sentence-transformers>=3.0.0
-torch>=2.2.0                     # sentence-transformers 依赖，自动装 CPU 版
+# torch 通过 Dockerfile 的 CPU 专用源（https://download.pytorch.org/whl/cpu）安装，
+# 此处保留声明以保证版本约束；当前环境无 CUDA，不装 GPU 版 torch。
+torch>=2.2.0
 
 # LLM（OpenAI 兼容 API，用于 EIU 抽取 / 题目生成）
 openai>=1.30.0

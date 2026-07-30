@@ -1,6 +1,10 @@
-.git
+# 不纳入镜像构建上下文，避免把大体积模型权重 / 依赖缓存 / VCS 元数据打进镜像
+models/
+.git/
+.gitignore
 __pycache__/
 *.pyc
-storage/
-*.md
-.env
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.codebuddy/

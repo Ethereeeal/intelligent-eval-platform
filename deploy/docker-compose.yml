@@ -1,4 +1,3 @@
-version: '3.9'
 services:
   mysql:
     image: mysql:8.0
@@ -47,8 +46,12 @@ services:
       MINIO_SECRET_KEY: minio12345
       EMBEDDING_MODEL_NAME: "BAAI/bge-small-zh-v1.5"
       HF_ENDPOINT: "https://hf-mirror.com"
+      LOCAL_MODELS_DIR: "/app/models"   # 宿主机 ./models 挂载进容器的本地模型目录
     ports:
       - "8000:8000"
+    volumes:
+      - backend_storage:/app/storage   # 持久化原始文档 / 解析结果 / FAISS 索引
+      - ../models:/app/models          # 挂载本地 BGE 模型（bge-small-zh-v1.5 / bge-reranker-v2-m3），避免运行时联网
     depends_on:
       mysql:
         condition: service_healthy
@@ -58,3 +61,4 @@ services:
 volumes:
   mysql_data:
   minio_data:
+  backend_storage:
