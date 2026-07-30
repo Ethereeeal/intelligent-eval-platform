@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
@@ -15,22 +15,43 @@ except ImportError:  # pragma: no cover - optional dependency fallback
 class IndexedItem:
     block_id: int
     vector: list[float]
-    metadata: dict[str, Any]
+    metadata: dict[str, Any] = field(default_factory=dict)
+    document_id: int = 0
+    section_path: str = ""
+    source_text: str = ""
 
 
 class FaissIndexService:
-    def __init__(self, dimension: int = 64) -> None:
+    def __init__(self, dimension: int = 512) -> None:
         self.dimension = dimension
         self._index = faiss.IndexFlatIP(dimension) if faiss is not None else None
         self._items: list[IndexedItem] = []
+        # block_id -> 在 _items 中的位置，供"按块查近邻"使用
+        self._by_block: dict[int, int] = {}
 
     def add(self, items: list[IndexedItem]) -> None:
         if not items:
             return
+        base = len(self._items)
         vectors = np.asarray([item.vector for item in items], dtype="float32")
         if self._index is not None:
             self._index.add(vectors)
         self._items.extend(items)
+        for offset, item in enumerate(items):
+            self._by_block[item.block_id] = base + offset
+
+    def neighbors_of(self, block_id: int, top_k: int = 5) -> list[dict[str, Any]]:
+        """跨块出题配对用：返回某个块的 Top-K 语义近邻（排除自身）。
+
+        直接复用同一份全量 FAISS 索引，对每个块做"自检索"。
+        """
+        pos = self._by_block.get(block_id)
+        if pos is None:
+            return []
+        vector = self._items[pos].vector
+        # 多召回 1 个以容纳自身，再剔除
+        results = self.search(vector, top_k=top_k + 1)
+        return [item for item in results if item["block_id"] != block_id][:top_k]
 
     def search(self, vector: list[float], top_k: int = 3) -> list[dict[str, Any]]:
         if not self._items:

@@ -165,6 +165,18 @@ Block 文本 → BGE-small-zh-v1.5 → 768维向量 → FAISS Index
 
 **Demo 阶段：** 向量化可先做简化版（仅用于 Block 去重提醒），不阻塞主链路。
 
+### 2.8 BGE 模型加载（本地挂载，需手动下载）
+
+> **重要**：BGE 模型 **不在构建期下载、也不在运行期联网下载**，而是由宿主机根目录 `models/` 挂载进容器后 **本地加载**（运行期零联网依赖）。下载方式与目录结构见仓库根目录 `models/README.md`。
+
+- 向量化 / 语义分段模型：`BAAI/bge-small-zh-v1.5`
+  - 加载代码：`modules/m01_data_foundation/services/embedding.py`
+  - 优先路径：`$LOCAL_MODELS_DIR/bge-small-zh-v1.5`（默认 `/app/models/bge-small-zh-v1.5`，即宿主机 `intelligent-eval-platform/models/bge-small-zh-v1.5`）
+  - 本地目录不存在时回退到 HuggingFace Hub 在线下载
+- 重排模型：`BAAI/bge-reranker-v2-m3`（CrossEncoder）
+  - 加载代码：`modules/shared/services/rerank.py`
+  - 优先路径：`$LOCAL_MODELS_DIR/bge-reranker-v2-m3`
+
 ### 2.5 存储体系（Demo 简化）
 
 | 存储层 | Demo 实现 | 生产迁移 |
@@ -172,7 +184,7 @@ Block 文本 → BGE-small-zh-v1.5 → 768维向量 → FAISS Index
 | 原始文件 | 本地 `storage/raw/` | MinIO |
 | 关系型数据 | SQLite `storage/qa_gen.db` | PostgreSQL |
 | 向量索引 | FAISS 本地文件 `storage/faiss.index` | 向量数据库 |
-| 语义理解 | SQLite（EIU 表及其他语义表） | PostgreSQL + 图数据库 |
+| 语义理解 | SQLite（EIU 表及其他语义表） | PostgreSQL  |
 | 配置与版本 | 环境变量 + 代码内 Prompt 模板 | 配置中心 |
 
 ### 2.6 文档安全预处理（Demo 简化）

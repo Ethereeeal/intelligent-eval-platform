@@ -45,3 +45,10 @@ backend/.pytest_cache/
 backend/.mypy_cache/
 frontend/.next/
 frontend/dist/
+
+# BGE 模型权重（手动下载、挂载进容器、运行期零联网，不入库；仅保留 models/README.md）
+models/bge-small-zh-v1.5/
+models/bge-reranker-v2-m3/
+
+# 临时验证 / 分块结果脚本产物（含硬编码绝对路径，不入库）
+第一个文件_分块结果.md

@@ -15,6 +15,13 @@ class Settings(BaseModel):
     minio_secret_key: str = os.getenv("MINIO_SECRET_KEY", "minio12345")
     faiss_index_path: str = os.getenv("FAISS_INDEX_PATH", "storage/faiss.index")
     embedding_model_name: str = os.getenv("EMBEDDING_MODEL_NAME", "BAAI/bge-small-zh-v1.5")
+    # 文档接入限制（README FR-DOC-005 / §2.6）
+    max_file_size: int = int(os.getenv("MAX_FILE_SIZE", str(50 * 1024 * 1024)))  # 50MB
+    allowed_extensions: list[str] = [
+        ext.strip().lower()
+        for ext in os.getenv("ALLOWED_EXTENSIONS", ".txt,.md,.pdf,.docx").split(",")
+        if ext.strip()
+    ]
     # 默认按 MYSQL_* 拼出连接串；若显式设置 DATABASE_URL 则优先
     database_url: str = os.getenv("DATABASE_URL") or (
         f"mysql+pymysql://{mysql_user}:{mysql_password}@"

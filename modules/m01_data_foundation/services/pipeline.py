@@ -1,201 +1,234 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime
 import hashlib
 import json
-from typing import Any
+from pathlib import Path
+
+import numpy as np
 
 from modules.shared.core.config import settings
-from modules.m01_data_foundation.schemas import DocumentUploadResponse, QueryRequest, QueryResponse, SearchHit
 from modules.shared.services.database import DatabaseService
 from modules.m01_data_foundation.services.indexer import FaissIndexService, IndexedItem
-from modules.m01_data_foundation.services.parser import DocumentParser
-from modules.m01_data_foundation.services.retrieval import RetrievalService
-from modules.m01_data_foundation.services.storage import StorageService
 from modules.m01_data_foundation.services.embedding import EmbeddingService
-
-
-@dataclass
-class DocumentRecord:
-    document_id: int
-    corpus_id: int
-    file_name: str
-    file_type: str
-    file_hash: str
-    status: str
-    created_at: str
-
-
-@dataclass
-class BlockRecord:
-    block_id: int
-    document_id: int
-    section_path: str
-    block_text: str
-    block_type: str
+from modules.m01_data_foundation.services.parser import DocumentParser
+from modules.m01_data_foundation.services.storage import StorageService
 
 
 class PipelineService:
-    def __init__(self) -> None:
-        self._ensure_storage()
-        self._state = self._load_state()
-        self.storage = StorageService()
-        self.database = DatabaseService()
-        self.parser = DocumentParser()
-        self.embedding = EmbeddingService()
-        self.indexer = FaissIndexService()
-        self.retrieval = RetrievalService()
-        self.database.create_all()
+    """m01 数据基础：语料库、文档接入、解析、存储与索引。
 
-    def upload_document(self, file_name: str, file_type: str, corpus_id: int, content: bytes) -> DocumentUploadResponse:
-        if not file_name.strip():
-            raise ValueError("file_name 不能为空")
-        if not content:
-            raise ValueError("文件内容不能为空")
+    不含 RAG 检索（属消费方）也不含 EIU 出题（属 m02），
+    仅负责把原始文档变成「结构化文段 + 向量 + FAISS 索引」这一数据底座。
+    """
+
+    def __init__(self) -> None:
+        self.database = DatabaseService()
+        self.embedding = EmbeddingService()
+        self.indexer = FaissIndexService(dimension=512)
+        self.parser = DocumentParser()
+        self.storage = StorageService()
+        self._state_path = settings.state_file
+        self._ensure_storage()
+        self.load_index()
+
+    # ------------------------------------------------------------------
+    # 语料库
+    # ------------------------------------------------------------------
+    def create_corpus(self, *, name: str, description: str | None = None, domain: str | None = None, created_by: str | None = None) -> int:
+        return self.database.save_corpus(name=name, description=description, domain=domain, created_by=created_by)
+
+    def list_corpora(self) -> list[dict]:
+        return self.database.list_corpora()
+
+    def get_corpus(self, corpus_id: int) -> dict | None:
+        return self.database.get_corpus(corpus_id)
+
+    # ------------------------------------------------------------------
+    # 文档接入
+    # ------------------------------------------------------------------
+    def upload_document(
+        self,
+        *,
+        minio_path: str | None = None,
+        file_name: str,
+        file_type: str,
+        content: bytes,
+        corpus_id: int,
+        upload_user: str | None = None,
+        document_version: str | None = None,
+    ) -> dict:
+        # file_type 可能是完整文件名或扩展名，统一从 file_name 取扩展名
+        suffix = Path(file_name).suffix.lower() or Path(file_type or "").suffix.lower()
+        self._validate_file(suffix, content)
+
+        # 原始文件落盘（MinIO 的本地替代，Demo 用）
+        stored = self.storage.save_raw_document(file_name, content)
+        minio_path = stored.object_path
 
         file_hash = hashlib.sha256(content).hexdigest()
-
-        # Duplicate check
-        existing_id = self.database.find_by_hash(file_hash)
-        if existing_id is not None:
-            return DocumentUploadResponse(
-                document_id=existing_id,
-                task_id=existing_id,
-                status="duplicate",
-                file_name=file_name,
-                block_count=len(self._filtered_blocks()),
-            )
-
-        safe_name = f"{file_hash}_{file_name}"
-        storage_result = self.storage.save_raw_document(file_name=safe_name, content=content)
-        raw_path = settings.raw_dir / safe_name
+        existing = self.database.find_by_hash(file_hash)
+        if existing is not None:
+            return {"document_id": existing, "duplicate": True, "blocks": 0}
 
         document_id = self.database.save_document(
             corpus_id=corpus_id,
             file_name=file_name,
-            file_type=file_type,
+            file_type=suffix,
+            file_size=len(content),
             file_hash=file_hash,
-            minio_path=storage_result.object_path,
+            minio_path=minio_path,
+            upload_user=upload_user,
+            document_version=document_version,
+            parse_status="pending",
         )
+        try:
+            blocks = self.parser.parse_document(Path(minio_path), suffix)
+            indexed = self.embed_blocks(blocks)
+            block_ids = self.database.save_blocks(document_id=document_id, blocks=indexed)
+            self.indexer.add(self._to_indexed(indexed, block_ids, document_id))
+            self.database.update_document(document_id, parse_status="completed")
+            self._save_index()
+            return {"document_id": document_id, "duplicate": False, "blocks": len(block_ids)}
+        except Exception as exc:  # 解析失败：记录状态与错误，不丢文档
+            self.database.update_document(document_id, parse_status="failed", parse_error=str(exc))
+            raise
 
-        parsed_blocks = self.parser.parse_file(raw_path)
-        block_payloads = [
-            {
-                "section_path": parsed_block.section_path,
-                "block_type": parsed_block.block_type,
-                "block_text": parsed_block.block_text,
-            }
-            for parsed_block in parsed_blocks
-        ]
-        block_texts = [item["block_text"] for item in block_payloads]
-        vectors = self.embedding.embed_texts(block_texts)
-        indexed_items: list[IndexedItem] = []
-        for payload, vector in zip(block_payloads, vectors):
-            payload["embedding_vector"] = vector
-            indexed_items.append(
+    def reupload_document(
+        self,
+        *,
+        document_id: int,
+        content: bytes,
+        file_name: str | None = None,
+        upload_user: str | None = None,
+    ) -> dict:
+        existing = self.database.get_document(document_id)
+        if existing is None:
+            raise ValueError("document not found")
+        corpus_id = existing["corpus_id"]
+        suffix = (Path(file_name).suffix if file_name else existing["file_type"]).lower()
+        self._validate_file(suffix, content)
+
+        new_hash = hashlib.sha256(content).hexdigest()
+        job_id = self.database.save_job(corpus_id=corpus_id, document_id=document_id, job_type="doc_update")
+        self.database.update_job(job_id, status="running", phase="parsing", progress=10)
+
+        if new_hash == existing["file_hash"]:
+            self.database.update_job(job_id, status="completed", phase="unchanged", progress=100, message="内容未变化，无需重算", finished=True)
+            return {"job_id": job_id, "document_id": document_id, "changed": False}
+
+        # 覆盖式全量重算（无版本）：旧文档整体作废，新文档走完整接入流程
+        self.database.update_document(document_id, status="superseded")
+        stored = self.storage.save_raw_document(file_name or existing["file_name"], content)
+        result = self.upload_document(
+            minio_path=stored.object_path,
+            file_name=file_name or existing["file_name"],
+            file_type=suffix,
+            content=content,
+            corpus_id=corpus_id,
+            upload_user=upload_user,
+        )
+        self.database.update_job(
+            job_id,
+            status="completed",
+            phase="done",
+            progress=100,
+            message=f"已重算，新文档 ID={result['document_id']}",
+            finished=True,
+        )
+        return {"job_id": job_id, "document_id": result["document_id"], "changed": True}
+
+    # ------------------------------------------------------------------
+    # 文档 / 块 / 任务 查询
+    # ------------------------------------------------------------------
+    def get_document(self, document_id: int) -> dict | None:
+        return self.database.get_document(document_id)
+
+    def list_documents(self, corpus_id: int | None = None) -> list[dict]:
+        return self.database.list_documents(corpus_id)
+
+    def get_document_blocks(self, document_id: int) -> list[dict]:
+        return self.database.get_document_blocks(document_id)
+
+    def get_job(self, job_id: int) -> dict | None:
+        return self.database.get_job(job_id)
+
+    # ------------------------------------------------------------------
+    # 内部工具
+    # ------------------------------------------------------------------
+    def _validate_file(self, suffix: str, content: bytes) -> None:
+        if suffix not in settings.allowed_extensions:
+            raise ValueError(f"不支持的文件类型 {suffix}，允许: {settings.allowed_extensions}")
+        if content is not None and len(content) > settings.max_file_size:
+            raise ValueError(f"文件大小 {len(content)} 超过上限 {settings.max_file_size} 字节")
+
+    def embed_blocks(self, blocks: list) -> list[dict]:
+        vectors = self.embedding.embed_texts([block.block_text for block in blocks])
+        result: list[dict] = []
+        for block, vector in zip(blocks, vectors):
+            result.append(
+                {
+                    "section_path": block.section_path,
+                    "block_type": block.block_type,
+                    "block_text": block.block_text,
+                    "parent_index": block.parent_index,
+                    "page_no": block.page_no,
+                    "start_offset": block.start_offset,
+                    "end_offset": block.end_offset,
+                    "metadata_json": block.metadata_json,
+                    "embedding_vector": vector,
+                }
+            )
+        return result
+
+    def _to_indexed(self, indexed: list[dict], block_ids: list[int], document_id: int) -> list[IndexedItem]:
+        items: list[IndexedItem] = []
+        for block_id, block in zip(block_ids, indexed):
+            items.append(
                 IndexedItem(
-                    block_id=0,
-                    vector=vector,
-                    metadata={"section_path": payload["section_path"], "block_text": payload["block_text"], "document_id": document_id},
+                    block_id=block_id,
+                    document_id=document_id,
+                    section_path=block["section_path"],
+                    vector=np.asarray(block["embedding_vector"], dtype="float32").tolist(),
+                    source_text=block["block_text"],
                 )
             )
-
-        block_ids = self.database.save_blocks(document_id=document_id, blocks=block_payloads)
-        for index, block_id in enumerate(block_ids):
-            indexed_items[index].block_id = block_id
-        self.indexer.add(indexed_items)
-
-        document_record = DocumentRecord(
-            document_id=document_id,
-            corpus_id=corpus_id,
-            file_name=file_name,
-            file_type=file_type,
-            file_hash=file_hash,
-            status="uploaded",
-            created_at=datetime.utcnow().isoformat(),
-        )
-        self._state["documents"].append(document_record.__dict__)
-        for payload, block_id in zip(block_payloads, block_ids):
-            block_record = BlockRecord(
-                block_id=block_id,
-                document_id=document_id,
-                section_path=payload["section_path"],
-                block_text=payload["block_text"],
-                block_type=payload["block_type"],
-            )
-            self._state["blocks"].append(block_record.__dict__)
-
-        self._state["storage"] = {"object_path": storage_result.object_path, "etag": storage_result.etag}
-        self._save_state()
-
-        return DocumentUploadResponse(
-            document_id=document_id,
-            task_id=document_id,
-            status="uploaded",
-            file_name=file_name,
-            block_count=len(block_ids),
-        )
-
-    def query_retrieval(self, request: QueryRequest) -> QueryResponse:
-        if not request.question.strip():
-            raise ValueError("question 不能为空")
-
-        blocks = self.database.list_blocks(corpus_id=request.corpus_id)
-        query_vector = self.embedding.embed_texts([request.question])[0]
-        ranked = self.indexer.search(query_vector, top_k=request.top_k)
-        hit_map = {item["block_id"]: item for item in blocks}
-        hits = [
-            SearchHit(
-                block_id=item["block_id"],
-                score=float(item["score"]),
-                source_excerpt=hit_map.get(item["block_id"], {}).get("block_text", "")[:200],
-                document_id=hit_map.get(item["block_id"], {}).get("document_id", 0),
-                section_path=hit_map.get(item["block_id"], {}).get("section_path"),
-            )
-            for item in ranked
-        ]
-        answer = hits[0].source_excerpt if hits else "未检索到足够相关的证据。"
-        return QueryResponse(
-            question=request.question,
-            corpus_id=request.corpus_id,
-            hits=hits,
-            answer=answer,
-            debug={"total_blocks": len(blocks), "top_k": request.top_k, "index_size": len(ranked)},
-        )
-
-    def _filtered_blocks(self, corpus_id: int | None = None) -> list[dict[str, Any]]:
-        document_by_id = {item["document_id"]: item for item in self._state["documents"]}
-        blocks: list[dict[str, Any]] = []
-        for block in self._state["blocks"]:
-            document = document_by_id.get(block["document_id"])
-            if document is None:
-                continue
-            if corpus_id is not None and document["corpus_id"] != corpus_id:
-                continue
-            blocks.append(block)
-        return blocks
+        return items
 
     def _ensure_storage(self) -> None:
-        settings.storage_root.mkdir(parents=True, exist_ok=True)
-        settings.raw_dir.mkdir(parents=True, exist_ok=True)
-        settings.parsed_dir.mkdir(parents=True, exist_ok=True)
-        settings.index_dir.mkdir(parents=True, exist_ok=True)
-        if not settings.state_file.exists():
-            settings.state_file.write_text(json.dumps({"documents": [], "blocks": [], "storage": {}}, ensure_ascii=False, indent=2), encoding="utf-8")
+        for directory in (settings.raw_dir, settings.parsed_dir, settings.index_dir):
+            directory.mkdir(parents=True, exist_ok=True)
 
-    def _load_state(self) -> dict[str, Any]:
-        if not settings.state_file.exists():
-            return {"documents": [], "blocks": [], "storage": {}}
-        return json.loads(settings.state_file.read_text(encoding="utf-8"))
+    def _save_index(self) -> None:
+        state = {
+            "items": [
+                {
+                    "block_id": item.block_id,
+                    "document_id": item.document_id,
+                    "section_path": item.section_path,
+                    "vector": item.vector,
+                    "source_text": item.source_text,
+                }
+                for item in self.indexer._items
+            ]
+        }
+        self._state_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
 
-    def _save_state(self) -> None:
-        settings.state_file.write_text(json.dumps(self._state, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    def _next_document_id(self) -> int:
-        documents = self._state.get("documents", [])
-        return (max((item["document_id"] for item in documents), default=0) or 0) + 1
-
-    def _next_block_id(self) -> int:
-        blocks = self._state.get("blocks", [])
-        return (max((item["block_id"] for item in blocks), default=0) or 0) + 1
+    def load_index(self) -> None:
+        if not self._state_path.exists():
+            return
+        try:
+            state = json.loads(self._state_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return
+        items = [
+            IndexedItem(
+                block_id=entry["block_id"],
+                document_id=entry["document_id"],
+                section_path=entry["section_path"],
+                vector=np.asarray(entry["vector"], dtype="float32"),
+                source_text=entry["source_text"],
+            )
+            for entry in state.get("items", [])
+        ]
+        if items:
+            self.indexer.add(items)

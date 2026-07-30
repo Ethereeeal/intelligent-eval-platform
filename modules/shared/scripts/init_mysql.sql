@@ -18,15 +18,17 @@ CREATE TABLE IF NOT EXISTS document (
   file_name VARCHAR(255) NOT NULL,
   file_type VARCHAR(64) NOT NULL,
   file_size BIGINT,
-  content_hash VARCHAR(128) NOT NULL,
+  file_hash VARCHAR(128) NOT NULL,
   minio_path VARCHAR(512) NOT NULL,
   upload_user VARCHAR(128),
-  upload_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   document_version VARCHAR(64),
+  authority_level VARCHAR(32),
   parse_status VARCHAR(64),
   parse_error TEXT,
-  INDEX idx_document_corpus_id (corpus_id),
-  INDEX idx_document_hash (content_hash)
+  status VARCHAR(64) NOT NULL DEFAULT 'uploaded',
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY uk_document_hash (file_hash),
+  INDEX idx_document_corpus_id (corpus_id)
 );
 
 CREATE TABLE IF NOT EXISTS document_block (
@@ -40,7 +42,7 @@ CREATE TABLE IF NOT EXISTS document_block (
   start_offset BIGINT,
   end_offset BIGINT,
   metadata_json JSON,
-  embedding_id BIGINT,
+  embedding_vector JSON,
   INDEX idx_block_document_id (document_id)
 );
 
@@ -53,6 +55,22 @@ CREATE TABLE IF NOT EXISTS task_job (
   error_message TEXT,
   started_at TIMESTAMP NULL,
   finished_at TIMESTAMP NULL
+);
+
+-- 文档更新任务（README §2.7）
+CREATE TABLE IF NOT EXISTS doc_update_job (
+  job_id BIGINT PRIMARY KEY AUTO_INCREMENT,
+  corpus_id BIGINT NOT NULL,
+  document_id BIGINT NOT NULL,
+  job_type VARCHAR(64) NOT NULL,
+  status VARCHAR(32) NOT NULL DEFAULT 'pending',
+  phase VARCHAR(64),
+  progress INT DEFAULT 0,
+  message TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  finished_at TIMESTAMP NULL,
+  INDEX idx_doc_update_corpus_id (corpus_id),
+  INDEX idx_doc_update_document_id (document_id)
 );
 
 -- 智能问答会话（v0.2.0 新增，Demo 延后）

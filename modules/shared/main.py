@@ -3,7 +3,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from modules.m01_data_foundation.api import router as documents_router
+from modules.m01_data_foundation.api import (
+    corpus_router,
+    documents_router,
+    jobs_router,
+)
 from modules.m07_smart_qa.api import router as chat_router
 from modules.shared.services.database import DatabaseService
 
@@ -27,6 +31,8 @@ app.add_middleware(
 )
 
 app.include_router(documents_router)
+app.include_router(corpus_router)
+app.include_router(jobs_router)
 app.include_router(chat_router)
 
 
