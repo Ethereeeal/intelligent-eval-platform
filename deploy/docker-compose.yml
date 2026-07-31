@@ -58,6 +58,17 @@ services:
       minio:
         condition: service_started
 
+  # 纯静态前端工作台（AI Eval Studio）：nginx 托管，无构建、无后端依赖
+  studio:
+    build:
+      context: ..
+      dockerfile: ai-eval-studio/Dockerfile
+    container_name: evalforge-studio
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+
 volumes:
   mysql_data:
   minio_data:

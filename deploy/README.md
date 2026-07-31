@@ -5,9 +5,10 @@
 ## 目录结构
 
 - `Dockerfile`：backend 镜像构建（Python 3.11-slim，含 torch CPU 版 + 全部依赖）
-- `docker-compose.yml`：backend + mysql + minio 服务编排
+- `docker-compose.yml`：backend + mysql + minio + studio 服务编排
 - `requirements.txt`：Python 依赖清单
 - `README.md`：本文件
+- `../ai-eval-studio/`：纯静态前端工作台（nginx 托管，无构建、无后端依赖）
 
 ## 构建镜像
 
@@ -53,3 +54,18 @@ docker compose -f deploy/docker-compose.yml up -d
 
 > 修改代码或更新依赖后，执行 `docker compose -f deploy/docker-compose.yml build backend` 重新构建，
 > 再用 `up -d` 重新创建容器。模型文件放好后只需 `restart backend` 即可生效。
+
+## 前端工作台（AI Eval Studio）
+
+纯静态前端，由 `ai-eval-studio/` 目录下的 `Dockerfile`（nginx 托管）构建为 `studio` 服务，
+无需构建步骤、无后端依赖（使用内置 mock 数据）：
+
+```bash
+# 单独构建 / 启动
+docker compose -f deploy/docker-compose.yml build studio
+docker compose -f deploy/docker-compose.yml up -d studio
+```
+
+- 容器内监听 80，宿主通过 `http://localhost:8080` 访问。
+- 构建上下文为项目根，`.dockerignore` 已将其限定为 `ai-eval-studio/` 静态资源，
+  不会把 backend 源码或 `models/` 权重带入镜像。

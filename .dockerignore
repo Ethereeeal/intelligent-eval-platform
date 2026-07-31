@@ -8,3 +8,9 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .codebuddy/
+
+# studio 镜像构建上下文只需 ai-eval-studio 目录，排除其余子目录避免把源码/模型带入
+ai-eval-studio/.dockerignore
+modules/
+deploy/
+*.md
