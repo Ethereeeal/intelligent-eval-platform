@@ -24,6 +24,13 @@ class FaissIndexService:
         self._index = faiss.IndexFlatIP(dimension) if faiss is not None else None
         self._items: list[IndexedItem] = []
 
+    def ensure_dimension(self, dimension: int) -> None:
+        if self.dimension == dimension and self._index is not None:
+            return
+        self.dimension = dimension
+        self._index = faiss.IndexFlatIP(dimension) if faiss is not None else None
+        self._items = []
+
     def add(self, items: list[IndexedItem]) -> None:
         if not items:
             return
