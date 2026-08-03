@@ -97,3 +97,42 @@ CREATE TABLE IF NOT EXISTS chat_message (
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_chat_msg_session_id (session_id)
 );
+
+-- ===================== m05 数据集生命周期 =====================
+-- 评测集版本（冻结元数据快照）
+CREATE TABLE IF NOT EXISTS dataset_version (
+  version_id INT PRIMARY KEY AUTO_INCREMENT,
+  corpus_id INT NOT NULL,
+  version_number VARCHAR(64) NOT NULL,
+  status VARCHAR(32) DEFAULT 'draft',
+  case_count INT DEFAULT 0,
+  coverage_report_id INT,
+  split_config JSON,
+  snapshot_metadata JSON,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  frozen_at TIMESTAMP NULL,
+  INDEX idx_dataset_version_corpus_id (corpus_id)
+);
+
+-- 评测样本（单条 case；retired 标记保留审计，不参与统计与导出）
+CREATE TABLE IF NOT EXISTS eval_case (
+  case_id INT PRIMARY KEY AUTO_INCREMENT,
+  version_id INT NOT NULL,
+  case_uid VARCHAR(64) NOT NULL,
+  intent_id VARCHAR(64),
+  question TEXT NOT NULL,
+  type VARCHAR(64),
+  scope VARCHAR(64),
+  difficulty VARCHAR(32),
+  gold_answer TEXT,
+  must_have_points JSON,
+  acceptable_answers JSON,
+  evidence JSON,
+  eiu_ids JSON,
+  content_priority VARCHAR(32),
+  review_status VARCHAR(32) DEFAULT 'candidate',
+  source VARCHAR(32) DEFAULT 'native',
+  retired BOOLEAN DEFAULT FALSE,
+  UNIQUE KEY uniq_case_uid (case_uid),
+  INDEX idx_eval_case_version_id (version_id)
+);

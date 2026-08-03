@@ -113,6 +113,46 @@ class ChatMessageRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+# ----------------------------------------------------------------------
+# m05 — 数据集生命周期：版本与样本
+# ----------------------------------------------------------------------
+class DatasetVersionRow(Base):
+    __tablename__ = "dataset_version"
+
+    version_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    corpus_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    version_number: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
+    case_count: Mapped[int] = mapped_column(Integer, default=0)
+    coverage_report_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    split_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    snapshot_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    frozen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class EvalCaseRow(Base):
+    __tablename__ = "eval_case"
+
+    case_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    version_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    case_uid: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    intent_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    type: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    scope: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    difficulty: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    gold_answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    must_have_points: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    acceptable_answers: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    evidence: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    eiu_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    content_priority: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    review_status: Mapped[str] = mapped_column(String(32), nullable=False, default="candidate")
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="native")
+    retired: Mapped[bool] = mapped_column(default=False)
+
+
 engine = create_engine(settings.database_url, future=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
@@ -426,3 +466,253 @@ class DatabaseService:
                 "created_at": row.created_at.isoformat() if row.created_at else None,
                 "finished_at": row.finished_at.isoformat() if row.finished_at else None,
             }
+
+    # ------------------------------------------------------------------
+    # m05 — dataset_version / eval_case
+    # ------------------------------------------------------------------
+    def save_dataset_version(
+        self,
+        *,
+        corpus_id: int,
+        version_number: str,
+        status: str = "draft",
+        case_count: int = 0,
+        split_config: dict | None = None,
+        snapshot_metadata: dict | None = None,
+    ) -> int:
+        with SessionLocal() as session:
+            row = DatasetVersionRow(
+                corpus_id=corpus_id,
+                version_number=version_number,
+                status=status,
+                case_count=case_count,
+                split_config=split_config,
+                snapshot_metadata=snapshot_metadata,
+            )
+            session.add(row)
+            session.commit()
+            session.refresh(row)
+            return row.version_id
+
+    def list_dataset_versions(self, corpus_id: int) -> list[dict]:
+        with SessionLocal() as session:
+            rows = (
+                session.query(DatasetVersionRow)
+                .filter(DatasetVersionRow.corpus_id == corpus_id)
+                .order_by(DatasetVersionRow.version_id.desc())
+                .all()
+            )
+            return [
+                {
+                    "version_id": row.version_id,
+                    "corpus_id": row.corpus_id,
+                    "version_number": row.version_number,
+                    "status": row.status,
+                    "case_count": row.case_count,
+                    "coverage_report_id": row.coverage_report_id,
+                    "split_config": row.split_config,
+                    "snapshot_metadata": row.snapshot_metadata,
+                    "created_at": row.created_at.isoformat() if row.created_at else None,
+                    "frozen_at": row.frozen_at.isoformat() if row.frozen_at else None,
+                }
+                for row in rows
+            ]
+
+    def get_dataset_version(self, version_id: int) -> dict | None:
+        with SessionLocal() as session:
+            row = session.get(DatasetVersionRow, version_id)
+            if not row:
+                return None
+            return {
+                "version_id": row.version_id,
+                "corpus_id": row.corpus_id,
+                "version_number": row.version_number,
+                "status": row.status,
+                "case_count": row.case_count,
+                "coverage_report_id": row.coverage_report_id,
+                "split_config": row.split_config,
+                "snapshot_metadata": row.snapshot_metadata,
+                "created_at": row.created_at.isoformat() if row.created_at else None,
+                "frozen_at": row.frozen_at.isoformat() if row.frozen_at else None,
+            }
+
+    def update_dataset_version(
+        self,
+        version_id: int,
+        *,
+        status: str | None = None,
+        case_count: int | None = None,
+        snapshot_metadata: dict | None = None,
+        freeze: bool = False,
+    ) -> None:
+        with SessionLocal() as session:
+            row = session.get(DatasetVersionRow, version_id)
+            if not row:
+                return
+            if status is not None:
+                row.status = status
+            if case_count is not None:
+                row.case_count = case_count
+            if snapshot_metadata is not None:
+                row.snapshot_metadata = snapshot_metadata
+            if freeze:
+                row.frozen_at = datetime.utcnow()
+            session.commit()
+
+    def get_latest_version_number(self, corpus_id: int) -> str | None:
+        with SessionLocal() as session:
+            row = (
+                session.query(DatasetVersionRow)
+                .filter(DatasetVersionRow.corpus_id == corpus_id)
+                .order_by(DatasetVersionRow.version_id.desc())
+                .first()
+            )
+            return row.version_number if row else None
+
+    def save_eval_case(
+        self,
+        *,
+        version_id: int,
+        case_uid: str,
+        question: str,
+        intent_id: str | None = None,
+        type: str | None = None,
+        scope: str | None = None,
+        difficulty: str | None = None,
+        gold_answer: str | None = None,
+        must_have_points: list | None = None,
+        acceptable_answers: list | None = None,
+        evidence: list | None = None,
+        eiu_ids: list | None = None,
+        content_priority: str | None = None,
+        review_status: str = "candidate",
+        source: str = "native",
+    ) -> int:
+        with SessionLocal() as session:
+            row = EvalCaseRow(
+                version_id=version_id,
+                case_uid=case_uid,
+                intent_id=intent_id,
+                question=question,
+                type=type,
+                scope=scope,
+                difficulty=difficulty,
+                gold_answer=gold_answer,
+                must_have_points=must_have_points,
+                acceptable_answers=acceptable_answers,
+                evidence=evidence,
+                eiu_ids=eiu_ids,
+                content_priority=content_priority,
+                review_status=review_status,
+                source=source,
+                retired=False,
+            )
+            session.add(row)
+            session.commit()
+            session.refresh(row)
+            return row.case_id
+
+    def get_eval_cases(
+        self,
+        version_id: int,
+        *,
+        include_retired: bool = False,
+        source: str | None = None,
+        limit: int = 200,
+        offset: int = 0,
+    ) -> list[dict]:
+        with SessionLocal() as session:
+            query = session.query(EvalCaseRow).filter(EvalCaseRow.version_id == version_id)
+            if not include_retired:
+                query = query.filter(EvalCaseRow.retired.is_(False))
+            if source is not None:
+                query = query.filter(EvalCaseRow.source == source)
+            rows = (
+                query.order_by(EvalCaseRow.case_id.asc())
+                .offset(offset)
+                .limit(limit)
+                .all()
+            )
+            return [self._eval_case_to_dict(row) for row in rows]
+
+    def count_eval_cases(self, version_id: int, *, include_retired: bool = False) -> int:
+        with SessionLocal() as session:
+            query = session.query(EvalCaseRow).filter(EvalCaseRow.version_id == version_id)
+            if not include_retired:
+                query = query.filter(EvalCaseRow.retired.is_(False))
+            return query.count()
+
+    def get_eval_case(self, case_id: int) -> dict | None:
+        with SessionLocal() as session:
+            row = session.get(EvalCaseRow, case_id)
+            return self._eval_case_to_dict(row) if row else None
+
+    def update_eval_case(
+        self,
+        case_id: int,
+        *,
+        question: str | None = None,
+        gold_answer: str | None = None,
+        type: str | None = None,
+        scope: str | None = None,
+        difficulty: str | None = None,
+        content_priority: str | None = None,
+        must_have_points: list | None = None,
+        acceptable_answers: list | None = None,
+        evidence: list | None = None,
+    ) -> None:
+        with SessionLocal() as session:
+            row = session.get(EvalCaseRow, case_id)
+            if not row:
+                return
+            if question is not None:
+                row.question = question
+            if gold_answer is not None:
+                row.gold_answer = gold_answer
+            if type is not None:
+                row.type = type
+            if scope is not None:
+                row.scope = scope
+            if difficulty is not None:
+                row.difficulty = difficulty
+            if content_priority is not None:
+                row.content_priority = content_priority
+            if must_have_points is not None:
+                row.must_have_points = must_have_points
+            if acceptable_answers is not None:
+                row.acceptable_answers = acceptable_answers
+            if evidence is not None:
+                row.evidence = evidence
+            # 手动编辑后回退质量校验状态（复用 FR-DS-EDIT-001）
+            row.review_status = "candidate"
+            session.commit()
+
+    def retire_eval_case(self, case_id: int) -> None:
+        with SessionLocal() as session:
+            row = session.get(EvalCaseRow, case_id)
+            if not row:
+                return
+            row.retired = True
+            session.commit()
+
+    @staticmethod
+    def _eval_case_to_dict(row: "EvalCaseRow") -> dict:
+        return {
+            "case_id": row.case_id,
+            "version_id": row.version_id,
+            "case_uid": row.case_uid,
+            "intent_id": row.intent_id,
+            "question": row.question,
+            "type": row.type,
+            "scope": row.scope,
+            "difficulty": row.difficulty,
+            "gold_answer": row.gold_answer,
+            "must_have_points": row.must_have_points,
+            "acceptable_answers": row.acceptable_answers,
+            "evidence": row.evidence,
+            "eiu_ids": row.eiu_ids,
+            "content_priority": row.content_priority,
+            "review_status": row.review_status,
+            "source": row.source,
+            "retired": row.retired,
+        }
