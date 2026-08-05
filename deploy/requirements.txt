@@ -2,6 +2,7 @@
 fastapi>=0.115.0
 uvicorn[standard]>=0.30.0
 pydantic>=2.8.0
+python-dotenv>=1.0.0             # 加载项目根 .env（LLM Key 等本机配置）
 python-multipart>=0.0.9          # FastAPI 文件上传（UploadFile）必需
 
 # MySQL 存储评测集

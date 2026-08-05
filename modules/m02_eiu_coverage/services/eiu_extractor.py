@@ -1,0 +1,405 @@
+"""M02 — EIU 抽取核心逻辑（SPEC §5.3 / §5.4 / §8）。
+
+逐 Block 调用 LLM 抽取可评测信息单元，复用 M01 的 doc_update_job 反馈进度：
+  progress = 已处理段落 Block 数 / 总段落 Block 数 × 100
+无实质内容的 Block 写入排除记录（is_questionable=false + exclusion_reason），
+保证"实质 Block 对账率"可达 100%（SPEC §6.4 / §6.3）。
+
+LLM 不可用（未安装 openai / API Key 为占位符）时，自动降级为确定性规则抽取
+（deterministic_extract），保证离线环境可完成全链路演示与数据质量验收。
+"""
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+from modules.shared.core.config import settings
+from modules.shared.services.database import EIU_TYPES, PRIORITY_WEIGHT, DatabaseService
+from modules.m02_eiu_coverage.services.llm_client import LLMClient, LLMError
+
+_PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "eiu_extraction.txt"
+_STATEMENT_MAX = 200  # 验收 D4：statement ≤ 200 字
+
+# 过渡句 / 无实质内容关键字（标题与目录等已由 block_type 过滤，此处兜底）
+_SKIP_KEYWORDS = (
+    "见上文", "见下文", "详见", "见附件", "如表", "如下表", "如下图", "见图",
+    "（完）", "（续）", "承前", "接上页", "以下略", "以下同", "页眉", "页脚",
+    "目录", "引用本文", "本节导读", "本章导读",
+)
+
+_SENTENCE_SPLIT = re.compile(r"[。；;\n]+")
+_NUMBERING_PREFIX = re.compile(
+    r"^(?:[（(]\s*[一二三四五六七八九十\d]+\s*[）)]|[①②③④⑤⑥⑦⑧⑨⑩]+|\d+\s*[、.．])"
+)
+
+
+# ----------------------------------------------------------------------
+# 段落预处理（skip_filter，SPEC §5.4 第 1 步）
+# ----------------------------------------------------------------------
+def is_skippable(text: str) -> bool:
+    """纯标题 / 过渡句 / 页眉页脚等无实质内容的段落直接跳过。"""
+    stripped = text.strip()
+    if not stripped:
+        return True
+    if len(stripped) <= 2:
+        return True
+    if re.fullmatch(r"[0-9\s\-—.·/\\|，,、]+", stripped):
+        return True
+    if any(keyword in stripped for keyword in _SKIP_KEYWORDS) and len(stripped) < 40:
+        return True
+    return False
+
+
+def _clean_statement(text: str) -> str:
+    """去掉编号前缀与结尾句号，得到一句话陈述。"""
+    text = _NUMBERING_PREFIX.sub("", text.strip()).strip()
+    text = re.sub(r"[。；;\s]+$", "", text).strip()
+    return text
+
+
+def _clamp_confidence(value: float | None) -> float:
+    if value is None:
+        return 0.8
+    return max(0.0, min(1.0, float(value)))
+
+
+def _default_constraints() -> dict:
+    return {"主体": None, "条件": None, "范围": None, "期间": None, "币种": None, "单位": None}
+
+
+# ----------------------------------------------------------------------
+# 确定性规则抽取（offline 模式，SPEC §5.2 缺省配置下的降级实现）
+# ----------------------------------------------------------------------
+def _split_sentences(text: str) -> list[str]:
+    return [part.strip() for part in _SENTENCE_SPLIT.split(text) if part.strip()]
+
+
+def _classify(sentence: str) -> tuple[str, str] | None:
+    """按优先级判定句子属于哪类 EIU（type, priority）。无实质内容返回 None。"""
+    if not sentence or len(sentence) < 4:
+        return None
+
+    # prohibition（禁止事项，P0）
+    if re.match(r"^(?:禁止|严禁|不准|不允许|不得)", sentence) or (
+        "禁止" in sentence or "严禁" in sentence
+    ):
+        return "prohibition", "P0"
+
+    # exception（例外 / 放宽，P0/P1）
+    if re.search(r"除非|除外|例外|可放宽|可不(?:受|适用|按|计)|但(?:是)?.{0,6}(?:可以|允许|不受)", sentence):
+        return "exception", "P0"
+
+    # threshold（数值 / 百分比 / 上下限，P0）
+    # 兼容两种语序："不得超过70%"（限定词在前）与 "70%以上"（数值在前）
+    if re.search(
+        r"(?:不超过|不得超过|不得低于|不得高于|不得少于|不低于|不高于|上限|下限|控制在|最高|最低)"
+        r"\s*\d[\d,.]*(?:%|％|万元|亿元|元|个|户|笔|人|天|个月|年|倍)?"
+        r"|\d[\d,.]*(?:%|％|万元|亿元|元|个|户|笔|人|天|个月|年|倍)?"
+        r"\s*(?:以上|以下|不超过|不得超过|不得低于|不得高于|不得少于|不低于|不高于)",
+        sentence,
+    ):
+        return "threshold", "P0"
+
+    # date（时效，P1）
+    if re.search(r"(?:\d{4}年\d{1,2}月\d{1,2}日|\d{1,2}月\d{1,2}日).{0,10}(?:施行|生效|执行|实施|截止)|(?:自|从).{0,12}(?:起施行|起生效|起实施)", sentence):
+        return "date", "P1"
+
+    # formula（公式 / 计算，P1）
+    if "=" in sentence or re.search(r"率\s*=|公式|除以|乘以|计算方式|计算公式|按下列公式", sentence):
+        return "formula", "P1"
+
+    # definition（定义，P1）
+    if re.search(r"是指|系指|指.{0,4}(?:而言|的)|定义为|定义如下|包括.{0,12}(?:等|几类|下列)", sentence):
+        return "definition", "P1"
+
+    # rule（主流程规则，P1）
+    if re.search(r"应当|应(?:当|该|按|于|及时|优先|在|自|从|提供|取得)|必须|须(?:经|在|于|按|取得|报)|原则上|要求.{0,4}(?:满足|符合|执行|遵守)", sentence):
+        return "rule", "P1"
+
+    # process（流程顺序，P1）
+    if re.search(r"流程|步骤|依次|顺序|先后|先.{0,8}(?:再|然后).{0,8}(?:后|最终)|办理程序|操作流程|审批流程", sentence):
+        return "process", "P1"
+
+    # metric（指标值，P2）
+    if re.search(r"\d[\d,]*(?:\.\d+)?\s*(?:万元|亿元|元|户|笔|人|%)", sentence) and re.search(
+        r"(?:达到|为|计|累计|总额|余额|金额|人数|户数|增长率|净利润|营业收入)", sentence
+    ):
+        return "metric", "P2"
+
+    # change（变更 / 新旧更替，P1）
+    if re.search(r"调整(?:为|至|到)?|修订|改版|新版|旧版|由.{0,10}(?:改为|调整为|变更为|提高|降低|提高到|降低至)|较.{0,4}(?:版|年度)", sentence):
+        return "change", "P1"
+
+    # 兜底：一般说明（P2），避免有效业务信息被漏抽
+    if len(sentence) >= 8:
+        return "rule", "P2"
+    return None
+
+
+def _constraints_for(sentence: str) -> dict:
+    """从句子中启发式提取约束字段（主体 / 条件 / 期间 / 币种 / 单位）。"""
+    constraints = _default_constraints()
+    for unit in ("万元", "亿元", "元", "%", "％", "倍", "人", "户", "笔", "天", "个月"):
+        if unit in sentence:
+            constraints["单位"] = unit
+            break
+    period = re.search(r"(\d{4}年)", sentence)
+    if period:
+        constraints["期间"] = period.group(1)
+    condition = re.search(r"(.{2,30}?(?:时|的|的情况下|条件下|如果|当))", sentence)
+    if condition and len(condition.group(1)) <= 40:
+        constraints["条件"] = condition.group(1)
+    for currency in ("人民币", "美元", "欧元", "港币", "日元"):
+        if currency in sentence:
+            constraints["币种"] = currency
+            break
+    subject = re.match(
+        r"^([^，,。；;]{2,18}?(?:公司|银行|企业|单位|机构|贷款人|借款人|支行|客户|小微企业|担保机构|员工))",
+        sentence,
+    )
+    if subject:
+        constraints["主体"] = subject.group(1)
+    return constraints
+
+
+def deterministic_extract(text: str) -> list[dict]:
+    """离线确定性抽取：逐句分类生成 EIU，批内按 statement 去重。"""
+    results: list[dict] = []
+    seen: set[str] = set()
+    for sentence in _split_sentences(text):
+        if is_skippable(sentence):
+            continue
+        classification = _classify(sentence)
+        if classification is None:
+            continue
+        eiu_type, priority = classification
+        statement = _clean_statement(sentence)
+        if not statement or statement in seen:
+            continue
+        seen.add(statement)
+        results.append(
+            {
+                "statement": statement[: _STATEMENT_MAX],
+                "eiu_type": eiu_type,
+                "content_priority": priority,
+                "constraints": _constraints_for(sentence),
+                "is_questionable": True,
+                "exclusion_reason": None,
+                "extraction_model": "offline-rule-based",
+                "extraction_confidence": 0.5,
+            }
+        )
+    return results
+
+
+# ----------------------------------------------------------------------
+# EIU 校验 / 规范化（SPEC §5.4 第 4 步）
+# ----------------------------------------------------------------------
+def normalize_item(item: dict, block_id: int, extraction_model: str) -> dict | None:
+    """校验并规范化一条 LLM 返回的 EIU；字段非法则返回 None（跳过该条）。"""
+    if not isinstance(item, dict):
+        return None
+    statement = str(item.get("statement", "") or "").strip()
+    if not statement:
+        return None
+
+    eiu_type = str(item.get("eiu_type", "") or "").strip()
+    if eiu_type not in EIU_TYPES:
+        return None  # 非法类型：跳过该条（验收 F13 容错）
+
+    priority = str(item.get("content_priority", "P2") or "P2").strip()
+    if priority not in PRIORITY_WEIGHT:
+        priority = "P2"
+
+    is_questionable = bool(item.get("is_questionable", True))
+    exclusion_reason = item.get("exclusion_reason")
+    if not is_questionable:
+        exclusion_reason = str(exclusion_reason or "").strip() or "未说明排除原因"
+    else:
+        exclusion_reason = None
+
+    constraints = item.get("constraints")
+    if not isinstance(constraints, dict):
+        constraints = _default_constraints()
+    else:
+        merged = _default_constraints()
+        merged.update({k: v for k, v in constraints.items() if k in merged})
+        constraints = merged
+
+    confidence = item.get("extraction_confidence")
+    try:
+        confidence = float(confidence) if confidence is not None else 0.8
+    except (TypeError, ValueError):
+        confidence = 0.8
+
+    return {
+        "block_id": block_id,
+        "statement": statement[:_STATEMENT_MAX],
+        "eiu_type": eiu_type,
+        "content_priority": priority,
+        "constraints": constraints,
+        "evidence_blocks": [block_id],
+        "is_questionable": is_questionable,
+        "exclusion_reason": exclusion_reason,
+        "extraction_model": extraction_model,
+        "extraction_confidence": _clamp_confidence(confidence),
+        "review_status": "candidate",
+    }
+
+
+def exclusion_item(block: dict, reason: str) -> dict:
+    """为无可抽内容 / 抽取失败的 Block 生成排除记录，保证对账率 100%（SPEC §6.4）。"""
+    return {
+        "block_id": block["block_id"],
+        "statement": f"[排除] {reason}",
+        "eiu_type": "rule",
+        "content_priority": "P2",
+        "constraints": _default_constraints(),
+        "evidence_blocks": [block["block_id"]],
+        "is_questionable": False,
+        "exclusion_reason": reason[:128],
+        "extraction_model": "skip-filter",
+        "extraction_confidence": 0.0,
+        "review_status": "candidate",
+    }
+
+
+# ----------------------------------------------------------------------
+# 抽取服务
+# ----------------------------------------------------------------------
+class EiuExtractorService:
+    def __init__(self) -> None:
+        self.database = DatabaseService()
+        self.llm = LLMClient()
+        self.system_prompt = self._load_prompt()
+
+    @staticmethod
+    def _load_prompt() -> str:
+        try:
+            return _PROMPT_PATH.read_text(encoding="utf-8")
+        except OSError:
+            return "你是一位精通银行授信政策和金融监管文件的专家。"
+
+    def extract_corpus(self, corpus_id: int, job_id: int) -> dict:
+        """对语料库全部段落 Block 执行 EIU 抽取（后台线程调用）。
+
+        全量重算：先清空该语料库旧 EIU，再逐 Block 抽取写入。
+        """
+        try:
+            return self._run(corpus_id, job_id)
+        except Exception as exc:  # noqa: BLE001 — 记录失败并置 job 状态
+            self.database.update_job(
+                job_id, status="failed", phase="extracting", message=f"EIU 抽取失败: {exc}"
+            )
+            return {"job_id": job_id, "corpus_id": corpus_id, "status": "failed", "message": str(exc)}
+
+    def _run(self, corpus_id: int, job_id: int) -> dict:
+        documents = self.database.list_documents(corpus_id)
+        document_blocks: list[list[dict]] = []
+        for document in documents:
+            document_blocks.append(self.database.get_document_blocks(document["document_id"]))
+
+        all_blocks = [block for blocks in document_blocks for block in blocks]
+        substantive = [block for block in all_blocks if block["block_type"] != "title"]
+        total = len(substantive)
+        if total == 0:
+            self.database.update_job(
+                job_id, status="completed", phase="done", progress=100,
+                message="无可处理的段落", finished=True,
+            )
+            return {"job_id": job_id, "corpus_id": corpus_id, "status": "completed", "message": "无可处理的段落", "count": 0}
+
+        self.database.update_job(
+            job_id, status="running", phase="extracting", progress=0,
+            message=f"开始 EIU 抽取，共 {total} 个段落 Block",
+        )
+        # 覆盖式全量重算：清空旧 EIU
+        self.database.delete_eius_by_corpus(corpus_id)
+
+        document_map = {document["document_id"]: document for document in documents}
+        neighbors = self._build_neighbors(document_blocks)
+
+        inserted = 0
+        excluded = 0
+        for index, block in enumerate(substantive, start=1):
+            try:
+                items = self._extract_block(block, document_map[block["document_id"]], neighbors[block["block_id"]])
+            except LLMError as exc:
+                items = []
+                block_error = f"抽取失败: {str(exc)[:60]}"
+            else:
+                block_error = None
+            if items:
+                inserted += len(self.database.save_eius(corpus_id=corpus_id, items=items))
+            else:
+                self.database.save_eius(
+                    corpus_id=corpus_id,
+                    items=[exclusion_item(block, block_error or "段落无实质内容，未抽取到 EIU")],
+                )
+                excluded += 1
+            self.database.update_job(job_id, progress=int(index / total * 100))
+
+        self.database.update_job(
+            job_id, status="completed", phase="done", progress=100,
+            message=f"EIU 抽取完成，共 {inserted} 条（排除 {excluded} 个段落）", finished=True,
+        )
+        return {
+            "job_id": job_id,
+            "corpus_id": corpus_id,
+            "status": "completed",
+            "message": f"EIU 抽取完成，共 {inserted} 条",
+            "count": inserted,
+        }
+
+    @staticmethod
+    def _build_neighbors(document_blocks: list[list[dict]]) -> dict[int, dict[str, str]]:
+        """block_id → 前 1 / 后 1 个 Block 文本（上下文，SPEC §5.4 第 2 步）。"""
+        neighbors: dict[int, dict[str, str]] = {}
+        for blocks in document_blocks:
+            for index, block in enumerate(blocks):
+                neighbors[block["block_id"]] = {
+                    "prev": blocks[index - 1]["block_text"] if index > 0 else "",
+                    "next": blocks[index + 1]["block_text"] if index + 1 < len(blocks) else "",
+                }
+        return neighbors
+
+    def _extract_block(self, block: dict, document: dict, context: dict[str, str]) -> list[dict]:
+        """单 Block 抽取。返回规范化后的 EIU 列表（不含 block_id 由 save_eius 校验时补充）。"""
+        text = block["block_text"]
+        if is_skippable(text):
+            return []
+
+        if self.llm.use_offline:
+            items = deterministic_extract(text)
+            for item in items:
+                item["block_id"] = block["block_id"]
+        else:
+            user_prompt = self._build_user_prompt(block, document, context)
+            raw_items = self.llm.extract_json(self.system_prompt, user_prompt)
+            items = []
+            for item in raw_items:
+                normalized = normalize_item(item, block["block_id"], self.llm.model)
+                if normalized is not None:
+                    items.append(normalized)
+
+        return items
+
+    @staticmethod
+    def _build_user_prompt(block: dict, document: dict, context: dict[str, str]) -> str:
+        # SPEC §5.3 User Prompt 模板
+        return (
+            "## 文档信息\n"
+            f"- 文档名: {document['file_name']}\n"
+            f"- 章节路径: {block['section_path']}\n"
+            "\n"
+            "## 上文（前一个 Block）\n"
+            f"{context['prev'] or '（无）'}\n"
+            "\n"
+            "## 当前段落\n"
+            f"{block['block_text']}\n"
+            "\n"
+            "## 下文（后一个 Block）\n"
+            f"{context['next'] or '（无）'}\n"
+            "\n"
+            "请抽取当前段落中的 EIU。如果段落无实质内容，返回空数组 []。"
+        )

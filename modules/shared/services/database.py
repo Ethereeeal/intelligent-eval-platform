@@ -3,10 +3,27 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import BigInteger, JSON, DateTime, Integer, String, Text, create_engine
+from sqlalchemy import BigInteger, Boolean, Float, JSON, DateTime, Integer, String, Text, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from modules.shared.core.config import settings
+
+# 10 种 EIU 类型（M02 SPEC 4.2）
+EIU_TYPES = {
+    "definition",
+    "rule",
+    "threshold",
+    "date",
+    "formula",
+    "process",
+    "exception",
+    "prohibition",
+    "metric",
+    "change",
+}
+
+# 优先级 → 权重（M02 SPEC 4.3）
+PRIORITY_WEIGHT = {"P0": 5, "P1": 3, "P2": 1}
 
 
 class Base(DeclarativeBase):
@@ -46,6 +63,32 @@ class BlockRow(Base):
     end_offset: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     embedding_vector: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+
+class EiuRow(Base):
+    """EIU — 可评测信息单元（M02 产出，绑定源 Block）。
+
+    review_status: candidate / quality_verified / blocked
+    blocked = 被 DELETE 软删除（不计入覆盖率分母）。
+    """
+
+    __tablename__ = "eiu"
+
+    eiu_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    corpus_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    block_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    statement: Mapped[str] = mapped_column(Text, nullable=False)
+    eiu_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    content_priority: Mapped[str] = mapped_column(String(4), nullable=False)
+    weight: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    constraints_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    evidence_blocks: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    is_questionable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    exclusion_reason: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    extraction_model: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    extraction_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    review_status: Mapped[str] = mapped_column(String(32), nullable=False, default="candidate")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
 class DocUpdateJobRow(Base):
@@ -426,3 +469,172 @@ class DatabaseService:
                 "created_at": row.created_at.isoformat() if row.created_at else None,
                 "finished_at": row.finished_at.isoformat() if row.finished_at else None,
             }
+
+    # ------------------------------------------------------------------
+    # eiu（M02 — EIU 抽取与覆盖规划）
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _eiu_to_dict(eiu: EiuRow, block: BlockRow | None = None, document: DocumentRow | None = None) -> dict:
+        return {
+            "eiu_id": eiu.eiu_id,
+            "corpus_id": eiu.corpus_id,
+            "block_id": eiu.block_id,
+            "document_id": block.document_id if block else None,
+            "document_name": document.file_name if document else None,
+            "section_path": block.section_path if block else None,
+            "statement": eiu.statement,
+            "eiu_type": eiu.eiu_type,
+            "content_priority": eiu.content_priority,
+            "weight": eiu.weight,
+            "constraints": eiu.constraints_json,
+            "evidence_blocks": eiu.evidence_blocks,
+            "is_questionable": bool(eiu.is_questionable),
+            "exclusion_reason": eiu.exclusion_reason,
+            "extraction_model": eiu.extraction_model,
+            "extraction_confidence": eiu.extraction_confidence,
+            "review_status": eiu.review_status,
+            "created_at": eiu.created_at.isoformat() if eiu.created_at else None,
+        }
+
+    def save_eius(self, *, corpus_id: int, items: list[dict]) -> list[int]:
+        """批量写入 EIU。
+
+        items 中每条必须含 block_id / statement / eiu_type / content_priority，
+        其余字段可选。批内按 (block_id, statement) 去重（SPEC D6）。
+        """
+        if not items:
+            return []
+        with SessionLocal() as session:
+            seen: set[tuple[int, str]] = set()
+            rows: list[EiuRow] = []
+            for item in items:
+                key = (item["block_id"], item["statement"])
+                if key in seen:
+                    continue
+                seen.add(key)
+                priority = item.get("content_priority", "P2")
+                row = EiuRow(
+                    corpus_id=corpus_id,
+                    block_id=item["block_id"],
+                    statement=item["statement"],
+                    eiu_type=item.get("eiu_type", "rule"),
+                    content_priority=priority,
+                    weight=PRIORITY_WEIGHT.get(priority, 1),
+                    constraints_json=item.get("constraints"),
+                    evidence_blocks=item.get("evidence_blocks") or [item["block_id"]],
+                    is_questionable=bool(item.get("is_questionable", True)),
+                    exclusion_reason=item.get("exclusion_reason"),
+                    extraction_model=item.get("extraction_model"),
+                    extraction_confidence=item.get("extraction_confidence"),
+                    review_status=item.get("review_status", "candidate"),
+                )
+                session.add(row)
+                rows.append(row)
+            session.flush()
+            ids = [row.eiu_id for row in rows]
+            session.commit()
+        return ids
+
+    def delete_eius_by_corpus(self, corpus_id: int) -> int:
+        """全量重抽前清空该语料库的旧 EIU（覆盖式重算）。返回删除条数。"""
+        with SessionLocal() as session:
+            result = session.query(EiuRow).filter(EiuRow.corpus_id == corpus_id).delete()
+            session.commit()
+            return int(result)
+
+    def list_eius(
+        self,
+        corpus_id: int,
+        *,
+        eiu_type: list[str] | None = None,
+        priority: list[str] | None = None,
+        questionable: bool | None = None,
+        section: str | None = None,
+        document_id: int | None = None,
+        include_blocked: bool = False,
+    ) -> list[dict]:
+        with SessionLocal() as session:
+            query = (
+                session.query(EiuRow, BlockRow, DocumentRow)
+                .join(BlockRow, EiuRow.block_id == BlockRow.block_id)
+                .join(DocumentRow, BlockRow.document_id == DocumentRow.document_id)
+                .filter(EiuRow.corpus_id == corpus_id)
+            )
+            if not include_blocked:
+                query = query.filter(EiuRow.review_status != "blocked")
+            if eiu_type:
+                query = query.filter(EiuRow.eiu_type.in_(eiu_type))
+            if priority:
+                query = query.filter(EiuRow.content_priority.in_(priority))
+            if questionable is not None:
+                query = query.filter(EiuRow.is_questionable == bool(questionable))
+            if section:
+                query = query.filter(BlockRow.section_path.contains(section))
+            if document_id is not None:
+                query = query.filter(DocumentRow.document_id == document_id)
+            rows = query.order_by(EiuRow.eiu_id.asc()).all()
+            return [self._eiu_to_dict(eiu, block, document) for eiu, block, document in rows]
+
+    @staticmethod
+    def _get_eiu_joined(session: Session, eiu_id: int) -> tuple[EiuRow, BlockRow, DocumentRow] | None:
+        """按 eiu_id 联表查询，返回 (eiu, block, document)。"""
+        return (
+            session.query(EiuRow, BlockRow, DocumentRow)
+            .join(BlockRow, EiuRow.block_id == BlockRow.block_id)
+            .join(DocumentRow, BlockRow.document_id == DocumentRow.document_id)
+            .filter(EiuRow.eiu_id == eiu_id)
+            .first()
+        )
+
+    def get_eiu(self, eiu_id: int) -> dict | None:
+        """EIU 详情，含原文上下文（prev / current / next Block 文本）。"""
+        with SessionLocal() as session:
+            row = self._get_eiu_joined(session, eiu_id)
+            if not row:
+                return None
+            eiu, block, document = row
+            siblings = (
+                session.query(BlockRow)
+                .filter(BlockRow.document_id == block.document_id)
+                .order_by(BlockRow.block_id.asc())
+                .all()
+            )
+            index = next((i for i, b in enumerate(siblings) if b.block_id == block.block_id), 0)
+            result = self._eiu_to_dict(eiu, block, document)
+            result["context"] = {
+                "document_name": document.file_name,
+                "section_path": block.section_path,
+                "prev_text": siblings[index - 1].block_text if index > 0 else "",
+                "block_text": block.block_text,
+                "next_text": siblings[index + 1].block_text if index + 1 < len(siblings) else "",
+            }
+            return result
+
+    def update_eiu(self, eiu_id: int, **updates: object) -> dict | None:
+        with SessionLocal() as session:
+            row = session.get(EiuRow, eiu_id)
+            if not row:
+                return None
+            for field, value in updates.items():
+                setattr(row, field, value)
+            session.commit()
+            joined = self._get_eiu_joined(session, eiu_id)
+            if joined is None:
+                return self._eiu_to_dict(row)
+            eiu, block, document = joined
+            return self._eiu_to_dict(eiu, block, document)
+
+    def mark_eiu_blocked(self, eiu_id: int) -> dict | None:
+        """DELETE 软删除：review_status=blocked，不再计入覆盖率分母。"""
+        with SessionLocal() as session:
+            row = session.get(EiuRow, eiu_id)
+            if not row:
+                return None
+            row.review_status = "blocked"
+            row.is_questionable = False
+            session.commit()
+            joined = self._get_eiu_joined(session, eiu_id)
+            if joined is None:
+                return self._eiu_to_dict(row)
+            eiu, block, document = joined
+            return self._eiu_to_dict(eiu, block, document)

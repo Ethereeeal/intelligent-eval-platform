@@ -2,6 +2,8 @@
 models/
 .git/
 .gitignore
+.env
+.env.*
 __pycache__/
 *.pyc
 *.pyo
@@ -9,8 +11,5 @@ __pycache__/
 .mypy_cache/
 .codebuddy/
 
-# studio 镜像构建上下文只需 ai-eval-studio 目录，排除其余子目录避免把源码/模型带入
+# studio 镜像: 只需 ai-eval-studio/ 目录的静态文件，排除源码/依赖/模型
 ai-eval-studio/.dockerignore
-modules/
-deploy/
-*.md

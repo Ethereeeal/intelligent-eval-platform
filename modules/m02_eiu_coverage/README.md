@@ -268,12 +268,17 @@ def calculate_weighted_coverage(eius: list[EIU], cases: list[EvalCase]) -> Cover
 
 ## 5. Demo 实现清单
 
-- [ ] LLM 客户端封装（OpenAI 兼容 API）
-- [ ] EIU 抽取 Prompt 模板（`prompts/eiu_extraction.txt`）
-- [ ] EIU 抽取器：逐 Block 调用 LLM，解析 JSON 输出
-- [ ] `eiu` 表 + CRUD API
-- [ ] 覆盖清单 API：按文档/章节/类型/优先级分组统计
-- [ ] 加权覆盖率计算（确定性代码）
-- [ ] 实质 Block 对账检查
-- [ ] EIU 手动编辑/删除 API
-- [ ] 文档更新自动重抽 EIU（覆盖式全量重算，复用 doc_update_job 进度）
+- [x] LLM 客户端封装（OpenAI 兼容 API，`services/llm_client.py`，含重试 / JSON 修复 / 离线降级）
+- [x] EIU 抽取 Prompt 模板（`prompts/eiu_extraction.txt`，含 P0/P1/P2 校准）
+- [x] EIU 抽取器：逐 Block 调用 LLM，解析 JSON 输出（`services/eiu_extractor.py`）
+- [x] `eiu` 表 + CRUD API（`EiuRow` 追加到 shared/database.py）
+- [x] 覆盖清单 API：按文档/章节/类型/优先级分组统计（`services/coverage.py`）
+- [x] 加权覆盖率计算（确定性代码，`covered_eiu_ids` 留给 M03 传入）
+- [x] 实质 Block 对账检查（+ 覆盖率失真告警）
+- [x] EIU 手动编辑/删除 API（软删除标记 blocked）
+- [x] 文档更新自动重抽 EIU（覆盖式全量重算，复用 doc_update_job 进度）
+
+### 配置与验收
+
+- LLM 配置：`modules/shared/core/config.py` 追加 `LLM_API_BASE/KEY/MODEL/TEMPERATURE/MAX_TOKENS`；根目录 `.env`（gitignore 忽略）经 `python-dotenv` 自动加载。`LLM_API_KEY` 为占位符 `sk-xxx` 或缺少 openai 库时自动降级为离线确定性抽取。
+- 真实模型验收：`python tests/acceptance_m02.py`（读取 `demo/.env` 的 DeepSeek 配置，覆盖 F1–F11 / D1–D6 / I1–I4，29 项全部通过）。

@@ -7,8 +7,8 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# 构建上下文为项目根，复制全部源码（含 modules/）
-COPY . .
+# 先复制依赖清单并安装依赖（层缓存：改源码不触发重装 torch / requirements）
+COPY deploy/requirements.txt deploy/requirements.txt
 
 # 先写入全局 pip 配置（超时 600s / 重试 10 / 国内镜像），对所有后续 pip 安装生效，
 # 以对抗容器内访问 pypi.org / download.pytorch.org / files.pythonhosted.org 的网络抖动
@@ -38,6 +38,9 @@ RUN for i in 1 2 3 4 5; do \
 # 完全不依赖构建期或运行期的 HuggingFace / hf-mirror 联网。模型文件由使用者手动下载
 # （下载方式与目录结构见 models/README.md）。
 # 注意：HF_HUB_OFFLINE=1 仍开启，确保本地目录缺失时也不会意外发起网络请求。
+
+# 最后复制全部源码（构建上下文为项目根，含 modules/）
+COPY . .
 
 EXPOSE 8000
 CMD ["uvicorn", "modules.shared.main:app", "--host", "0.0.0.0", "--port", "8000"]

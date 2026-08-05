@@ -1,7 +1,16 @@
 import os
+from pathlib import Path
 
 from pydantic import BaseModel
-from pathlib import Path
+
+# 加载项目根 .env（gitignore 已忽略，存放本机密钥），不覆盖已有环境变量。
+# 容器内直接由 compose/环境变量注入，不强制依赖 python-dotenv。
+try:  # pragma: no cover - 可选依赖
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass
 
 
 class Settings(BaseModel):
@@ -27,6 +36,13 @@ class Settings(BaseModel):
         f"mysql+pymysql://{mysql_user}:{mysql_password}@"
         f"{mysql_host}:{mysql_port}/{mysql_database}"
     )
+    # LLM（OpenAI 兼容 API，用于 M02 EIU 抽取 / 后续题目生成）
+    # LLM_API_KEY 为占位符 "sk-xxx" 或缺少 openai 库时，M02 自动切换为离线确定性抽取
+    llm_api_base: str = os.getenv("LLM_API_BASE", "https://api.openai.com/v1")
+    llm_api_key: str = os.getenv("LLM_API_KEY", "sk-xxx")
+    llm_model: str = os.getenv("LLM_MODEL", "gpt-4o-mini")
+    llm_temperature: float = float(os.getenv("LLM_TEMPERATURE", "0.1"))  # 抽取任务需低温
+    llm_max_tokens: int = int(os.getenv("LLM_MAX_TOKENS", "4096"))
     minio_bucket: str = os.getenv("MINIO_BUCKET", "evalforge")
     storage_root: Path = Path(os.getenv("STORAGE_ROOT", "storage"))
     state_file: Path = Path(os.getenv("STATE_FILE", "storage/demo_state.json"))
