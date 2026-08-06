@@ -928,3 +928,276 @@ class DatabaseService:
             "source": row.source,
             "retired": row.retired,
         }
+
+    # ------------------------------------------------------------------
+    # 追加：m03 评测集生成 / m04 质量治理（corpus 语义，独立于 m05 的 eval_case）
+    # 说明：本组方法对应"智能评测集生成平台"m03/m04 的数据模型，
+    #       使用独立表 generated_case / quality_check_result，
+    #       与 m05 的 eval_case(version_id 语义) 并存互不干扰。
+    # ------------------------------------------------------------------
+    def save_generated_case(
+        self,
+        *,
+        intent_id: str,
+        eiu_id: int | None,
+        corpus_id: int,
+        document_id: int | None,
+        question: str,
+        question_type: str,
+        difficulty: str,
+        scope_type: str,
+        gold_answer: str,
+        must_have_points: list | None = None,
+        acceptable_answers: list | None = None,
+        evidence: list | None = None,
+        content_priority: str = "P2",
+        review_status: str = "candidate",
+    ) -> dict:
+        """保存一条 m03 生成的评测样本（corpus 语义）。"""
+        with SessionLocal() as session:
+            row = GeneratedCaseRow(
+                intent_id=intent_id,
+                eiu_id=eiu_id,
+                corpus_id=corpus_id,
+                document_id=document_id,
+                question=question,
+                question_type=question_type,
+                difficulty=difficulty,
+                scope_type=scope_type,
+                gold_answer=gold_answer,
+                must_have_points=must_have_points,
+                acceptable_answers=acceptable_answers,
+                evidence=evidence,
+                content_priority=content_priority,
+                review_status=review_status,
+            )
+            session.add(row)
+            session.commit()
+            session.refresh(row)
+            return self._generated_case_to_dict(row)
+
+    def list_generated_cases(
+        self,
+        corpus_id: int | None = None,
+        *,
+        priority: str | None = None,
+        question_type: str | None = None,
+        difficulty: str | None = None,
+        status: str | None = None,
+    ) -> list[dict]:
+        """查询 m03 生成的评测样本；默认排除 retired。"""
+        with SessionLocal() as session:
+            query = session.query(GeneratedCaseRow)
+            if corpus_id is not None:
+                query = query.filter(GeneratedCaseRow.corpus_id == corpus_id)
+            if priority is not None:
+                query = query.filter(GeneratedCaseRow.content_priority == priority)
+            if question_type is not None:
+                query = query.filter(GeneratedCaseRow.question_type == question_type)
+            if difficulty is not None:
+                query = query.filter(GeneratedCaseRow.difficulty == difficulty)
+            if status is not None:
+                query = query.filter(GeneratedCaseRow.review_status == status)
+            else:
+                query = query.filter(GeneratedCaseRow.review_status != "retired")
+            rows = query.order_by(GeneratedCaseRow.case_id.desc()).all()
+            return [self._generated_case_to_dict(row) for row in rows]
+
+    def get_generated_case(self, case_id: int) -> dict | None:
+        """查询单条 m03 评测样本。"""
+        with SessionLocal() as session:
+            row = session.get(GeneratedCaseRow, case_id)
+            return self._generated_case_to_dict(row) if row else None
+
+    def update_generated_case(
+        self,
+        case_id: int,
+        *,
+        question: str | None = None,
+        question_type: str | None = None,
+        difficulty: str | None = None,
+        gold_answer: str | None = None,
+        must_have_points: list | None = None,
+        acceptable_answers: list | None = None,
+        evidence: list | None = None,
+        content_priority: str | None = None,
+        review_status: str | None = None,
+        review_tag: str | None = None,
+    ) -> dict | None:
+        """更新单条 m03 评测样本（含 m04 状态机字段）。"""
+        with SessionLocal() as session:
+            row = session.get(GeneratedCaseRow, case_id)
+            if not row:
+                return None
+            if question is not None:
+                row.question = question
+            if question_type is not None:
+                row.question_type = question_type
+            if difficulty is not None:
+                row.difficulty = difficulty
+            if gold_answer is not None:
+                row.gold_answer = gold_answer
+            if must_have_points is not None:
+                row.must_have_points = must_have_points
+            if acceptable_answers is not None:
+                row.acceptable_answers = acceptable_answers
+            if evidence is not None:
+                row.evidence = evidence
+            if content_priority is not None:
+                row.content_priority = content_priority
+            if review_status is not None:
+                row.review_status = review_status
+            if review_tag is not None:
+                row.review_tag = review_tag
+            session.commit()
+            session.refresh(row)
+            return self._generated_case_to_dict(row)
+
+    def retire_generated_case(self, case_id: int) -> bool:
+        """删除 = 标记 retired，保留审计痕迹。"""
+        updated = self.update_generated_case(case_id, review_status="retired")
+        return updated is not None
+
+    def list_covered_eiu_ids(self, corpus_id: int) -> set[int]:
+        """该语料库下已生成评测样本的 EIU id 集合（批量生成跳过已覆盖项）。"""
+        with SessionLocal() as session:
+            rows = (
+                session.query(GeneratedCaseRow.eiu_id)
+                .filter(GeneratedCaseRow.corpus_id == corpus_id)
+                .filter(GeneratedCaseRow.eiu_id.isnot(None))
+                .filter(GeneratedCaseRow.review_status != "retired")
+                .all()
+            )
+            return {row[0] for row in rows}
+
+    # ------------------------------------------------------------------
+    # m04 质量检查结果（quality_check_result 表）
+    # ------------------------------------------------------------------
+    def clear_quality_checks(self, case_id: int) -> None:
+        """重跑质检前清空该 case 的历史结果。"""
+        with SessionLocal() as session:
+            session.query(QualityCheckRow).filter(
+                QualityCheckRow.case_id == case_id
+            ).delete(synchronize_session=False)
+            session.commit()
+
+    def save_quality_check(
+        self,
+        *,
+        case_id: int,
+        check_type: str,
+        passed: bool,
+        reason: str,
+    ) -> dict:
+        """保存单条检查结果。"""
+        with SessionLocal() as session:
+            row = QualityCheckRow(
+                case_id=case_id,
+                check_type=check_type,
+                passed=1 if passed else 0,
+                reason=reason or "",
+            )
+            session.add(row)
+            session.commit()
+            session.refresh(row)
+            return self._quality_check_to_dict(row)
+
+    def list_quality_checks(self, case_id: int) -> list[dict]:
+        """查询单个 case 的全部检查结果。"""
+        with SessionLocal() as session:
+            rows = (
+                session.query(QualityCheckRow)
+                .filter(QualityCheckRow.case_id == case_id)
+                .order_by(QualityCheckRow.check_id)
+                .all()
+            )
+            return [self._quality_check_to_dict(row) for row in rows]
+
+    def list_quality_checks_by_corpus(self, corpus_id: int) -> list[dict]:
+        """查询语料库下全部检查结果（join generated_case 按 corpus 过滤，跳过 retired）。"""
+        with SessionLocal() as session:
+            rows = (
+                session.query(QualityCheckRow)
+                .join(GeneratedCaseRow, QualityCheckRow.case_id == GeneratedCaseRow.case_id)
+                .filter(GeneratedCaseRow.corpus_id == corpus_id)
+                .filter(GeneratedCaseRow.review_status != "retired")
+                .all()
+            )
+            return [self._quality_check_to_dict(row) for row in rows]
+
+    @staticmethod
+    def _quality_check_to_dict(row: "QualityCheckRow") -> dict:
+        return {
+            "check_id": row.check_id,
+            "case_id": row.case_id,
+            "check_type": row.check_type,
+            "passed": bool(row.passed),
+            "reason": row.reason,
+            "checked_at": row.checked_at.isoformat() if row.checked_at else None,
+        }
+
+    @staticmethod
+    def _generated_case_to_dict(row: "GeneratedCaseRow") -> dict:
+        return {
+            "case_id": row.case_id,
+            "intent_id": row.intent_id,
+            "eiu_id": row.eiu_id,
+            "corpus_id": row.corpus_id,
+            "document_id": row.document_id,
+            "question": row.question,
+            "question_type": row.question_type,
+            "difficulty": row.difficulty,
+            "scope_type": row.scope_type,
+            "gold_answer": row.gold_answer,
+            "must_have_points": row.must_have_points,
+            "acceptable_answers": row.acceptable_answers,
+            "evidence": row.evidence,
+            "content_priority": row.content_priority,
+            "review_status": row.review_status,
+            "review_tag": row.review_tag,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        }
+
+
+class GeneratedCaseRow(Base):
+    """m03 生成的评测样本（corpus 语义，独立于 m05 的 eval_case 表）。"""
+
+    __tablename__ = "generated_case"
+
+    case_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    intent_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    eiu_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 用户上传路径可无 EIU
+    corpus_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    document_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    question_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    difficulty: Mapped[str] = mapped_column(String(16), nullable=False)
+    scope_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    gold_answer: Mapped[str] = mapped_column(Text, nullable=False)
+    must_have_points: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    acceptable_answers: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    evidence: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    content_priority: Mapped[str] = mapped_column(String(8), nullable=False)
+    review_status: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="candidate"
+    )
+    # m04 质量门禁失败标签：answer_coverage / generation_issue
+    review_tag: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
+class QualityCheckRow(Base):
+    """单题质量检查结果（m04 产出）。"""
+
+    __tablename__ = "quality_check_result"
+
+    check_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    case_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    check_type: Mapped[str] = mapped_column(String(64), nullable=False)
+    passed: Mapped[bool] = mapped_column(Integer, nullable=False, default=1)
+    reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    checked_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

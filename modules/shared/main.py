@@ -9,6 +9,12 @@ from modules.m01_data_foundation.api import (
     jobs_router,
 )
 from modules.m02_eiu_coverage.api import corpus_eiu_router, eiu_router
+from modules.m03_generation.api import (
+    cases_router,
+    eiu_router as generation_eiu_router,
+    generation_router,
+)
+from modules.m04_quality_governance.api import quality_router
 from modules.m05_dataset_lifecycle.api import router as dataset_lifecycle_router
 from modules.m07_smart_qa.api import router as chat_router
 from modules.shared.services.database import DatabaseService
@@ -37,6 +43,10 @@ app.include_router(corpus_router)
 app.include_router(jobs_router)
 app.include_router(corpus_eiu_router)
 app.include_router(eiu_router)
+app.include_router(generation_router)
+app.include_router(generation_eiu_router)
+app.include_router(cases_router)
+app.include_router(quality_router)
 app.include_router(dataset_lifecycle_router)
 app.include_router(chat_router)
 

@@ -2,6 +2,9 @@
 
 > 覆盖 BRD：8.9 问题质量门禁与评测治理审核 Skill
 > Demo 状态：必做（5 项基础质量检查，含问题相关性），治理审核 Skill 延后
+> 代码状态：**已实现**（Demo 范围）。结构：`api.py`（4 个路由）→ `services/pipeline.py`（编排）
+> → `services/quality_checker.py`（单题 5 项检查）+ `services/llm_service.py` + `services/prompts.py`；
+> 持久化复用 `modules/shared/services/database.py` 的 `quality_check_result` 表；`scripts/export_quality_report.py` 导出报告。
 
 ---
 
@@ -14,7 +17,7 @@
 | FR-QA-001 | 10 项自动质量检查：可回答性/忠实性/唯一性/证据充分性/问题独立性/非泄漏性/非重复性/难度有效性/安全合规性/格式完整性 |
 | FR-QA-002 | 评测治理审核 Skill：独立版本化的自动审核组件，含 SKILL.md / policy_rules / 授信审核包 / 财务审核包 / 内容安全审核包 / 隐私审核包 / 证据审核包 / 测试样例 |
 | FR-QA-003 | 不可逾越的发布规则（10 条 S0 强制规则）：内容安全/政治事实忠实/非歧视/客户信息脱敏/敏感个人信息不外发/商业秘密/证据忠实/提示注入防护/跨语料库边界/版本混用 |
-| FR-QA-004 | 审核状态机：candidate → quality_verified → governance_passed → user_confirmed → published，以及 blocked/rejected/needs_revision/retired |
+| FR-QA-004 | 审核状态机：candidate → quality_verified → governance_passed → user_confirmed → published，以及 blocked/rejected/needs_revision/retired（Demo 简化版：candidate → needs_review（review_tag 区分 answer_coverage / generation_issue）→ quality_verified → published） |
 | FR-QA-005 | 问题表意清晰度：问句通顺无病句、无歧义；指向唯一不产生两种理解；不宽泛空洞（如"文档讲了什么"） |
 | FR-QA-006 | 问答匹配度：答案严格对应问题诉求，不答非所问 / 不附带无关冗余；问细节不给全篇总结 |
 | FR-QA-007 | 要点完备性：答案不删减原文关键限定条件 / 阈值 / 前置场景；多条件规则全部写入，无缺漏 |
@@ -50,8 +53,14 @@
      - 答案侧：可回答性 / 答案忠实性 / 唯一性 / 证据充分性（#1–#4）
   3. LLM 返回逐项 passed/failed + reason
   4. 写 quality_check_result 表
-  5. 所有 5 项 passed → case.review_status = "quality_verified"
-     任一 failed → case.review_status = "needs_revision"
+  5. 失败分流（_check_and_handle）：
+     - 5 项全部 passed → case.review_status = "quality_verified", review_tag = None
+     - 仅 soft 失败（uniqueness / evidence_sufficiency）→ needs_review + review_tag = "answer_coverage"
+       （证据覆盖度存疑，交人工复核，不自动重生成）
+     - 有 hard 失败（faithfulness / question_relevance）→ 自动回 m03 换角度重生成（最多 2 次）：
+         · 重生成的新 case 通过 → 原 case 置 retired（保留审计），新 case → quality_verified
+         · 全部重生成仍失败 → needs_review + review_tag = "generation_issue"（题目生成有问题，交人工）
+     - case 无 eiu_id / EIU 缺失，无法重生成 → 直接 needs_review + review_tag = "generation_issue"
 ```
 
 ### 2.3 质量校验数据模型
@@ -93,10 +102,21 @@
 ```
 candidate ──→ quality_verified ──→ published
     │               │
-    └──→ blocked    └──→ needs_revision
+    │               ├──→ needs_review (review_tag = answer_coverage)
+    │               │     仅 soft 失败：证据/答案覆盖度待人工复核
+    │               │
+    │               └──→ needs_review (review_tag = generation_issue)
+    │                      hard 失败且自动重生成仍失败 / EIU 缺失：
+    │                      题目生成有问题，交人工
+    │
+    └──→ retired（重生成成功后，原失败 case 退役保留审计）
 ```
 
-Demo 阶段：5 项全部通过 → quality_verified → 用户确认 → published。任一失败 → needs_revision。
+Demo 阶段：5 项全部通过 → `quality_verified` → 用户确认 → `published`。
+
+- **review_tag = `answer_coverage`**：`uniqueness` / `evidence_sufficiency` 失败（soft），因质检可见上下文 ≈ 生成时上下文，无法获得新信息，自动重生成无效，故留人工复核答案/证据覆盖度。
+- **review_tag = `generation_issue`**：`faithfulness` / `question_relevance` 失败（hard，幻觉/偏题），自动回 m03 换角度重生成最多 2 次仍失败，或 case 无 EIU 无法重生成，说明题目本身生成有问题，交人工。
+- **retired**：hard 失败重生成成功后，原失败 case 标记 retired 保留审计痕迹，新 case 正式替代。
 
 ### 2.5 补充质量维度（FR-QA-005~012，后续版本 / 可选）
 
@@ -194,7 +214,7 @@ published          ←── 冻结发布
 - [ ] （可选/后续）补充质量维度 FR-QA-005~012（表意清晰度/问答匹配度/要点完备性/术语一致/内部无矛盾/题型分布/答案精简/无主观）
 - [ ] `quality_check_result` 表 + API
 - [ ] 校验结果汇总 API（按检查类型、优先级分组统计）
-- [ ] case.review_status 状态更新（passed → quality_verified, failed → needs_revision）
+- [ ] case.review_status 状态更新（passed → quality_verified；soft 失败 → needs_review + answer_coverage；hard 失败自动重生成，成功则原 case retired + 新 case quality_verified，失败则 needs_review + generation_issue）
 - [ ] （延后）10 条 S0 强制规则 + 治理审核 Skill
 - [ ] （延后）审核状态机完整版（governance_passed / user_confirmed / blocked）
 - [ ] （延后）审核 Skill 版本化管理
