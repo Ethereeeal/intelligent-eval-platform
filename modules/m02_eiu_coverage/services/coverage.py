@@ -11,6 +11,34 @@ from typing import Iterable
 from modules.shared.services.database import PRIORITY_WEIGHT, DatabaseService
 
 
+def save_coverage_report(
+    corpus_id: int,
+    *,
+    covered_eiu_ids: Iterable[int] | None = None,
+    blocked_eiu_ids: Iterable[int] | None = None,
+    snapshot_metadata: dict | None = None,
+) -> int:
+    """计算覆盖率并落库为一条 coverage_report，返回 report_id（供 m05 冻结外键引用）。"""
+    report = compute_coverage(
+        corpus_id, covered_eiu_ids=covered_eiu_ids, blocked_eiu_ids=blocked_eiu_ids
+    )
+    return DatabaseService().save_coverage_report(
+        corpus_id=corpus_id,
+        total_eiu=report["total_eiu"],
+        questionable_eiu=report["questionable_eiu"],
+        excluded_eiu=report["excluded_eiu"],
+        by_priority=report["by_priority"],
+        by_type=report["by_type"],
+        by_document=report["by_document"],
+        by_section=report["by_section"],
+        weighted_coverage=report["weighted_coverage"],
+        p0_coverage_pct=report["p0_coverage_pct"],
+        block_reconciliation=report["block_reconciliation"],
+        alerts=report["alerts"],
+        snapshot_metadata=snapshot_metadata,
+    )
+
+
 def compute_coverage(
     corpus_id: int,
     *,

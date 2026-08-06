@@ -373,7 +373,7 @@ GET /api/corpus/{corpus_id}/tree
 
 | 模块 | 数据表 / 接口 | m05 用途 |
 |---|---|---|
-| m02 EIU 覆盖 | `eiu`（list_eius） | 无问题判定（EIU 总数 / is_questionable）、树形覆盖率分母、快照 coverage |
+| m02 EIU 覆盖 | `eiu`（list_eius）、`coverage_report`（save_coverage_report） | 无问题判定（EIU 总数 / is_questionable）、树形覆盖率分母；冻结时落库 coverage_report 并回填 `coverage_report_id`（FR-DS-003 外键） |
 | m03 生成 | `generated_case`（list_generated_cases） | 冻结时筛选 `review_status ∈ {quality_verified, governance_passed, user_confirmed, published}` 的样例，快照为 eval_case |
 | m04 质量治理 | `generated_case.review_status` 状态机 | 门禁：仅通过质量校验 + 治理审核的样本纳入冻结集；编辑后回退 candidate |
 | m01 数据基座 | `document_block`、`doc_update_job` | 文档重传触发 `rebuild_on_reupload` 覆盖式重算；树形反查 section_path / document_name |

@@ -136,3 +136,23 @@ CREATE TABLE IF NOT EXISTS eval_case (
   UNIQUE KEY uniq_case_uid (case_uid),
   INDEX idx_eval_case_version_id (version_id)
 );
+
+-- m02 覆盖率报告快照（供 m05 冻结版本 coverage_report_id 外键引用）
+CREATE TABLE IF NOT EXISTS coverage_report (
+  report_id INT PRIMARY KEY AUTO_INCREMENT,
+  corpus_id INT NOT NULL,
+  total_eiu INT DEFAULT 0,
+  questionable_eiu INT DEFAULT 0,
+  excluded_eiu INT DEFAULT 0,
+  by_priority JSON,
+  by_type JSON,
+  by_document JSON,
+  by_section JSON,
+  weighted_coverage FLOAT DEFAULT 0,
+  p0_coverage_pct FLOAT DEFAULT 0,
+  block_reconciliation JSON,
+  alerts JSON,
+  snapshot_metadata JSON,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_coverage_report_corpus_id (corpus_id)
+);

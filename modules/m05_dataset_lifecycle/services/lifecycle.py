@@ -21,6 +21,7 @@ import json
 import re
 from datetime import datetime
 
+from modules.m02_eiu_coverage.services.coverage import save_coverage_report
 from modules.shared.services.database import DatabaseService
 
 # m04 审核状态机中"可纳入冻结集"的终态（不纳入 blocked / retired / needs_revision）
@@ -84,7 +85,15 @@ class DatasetLifecycleService:
         latest = self.db.get_latest_version_number(corpus_id)
         version_number = _next_version_number(latest)
 
-        coverage = self._compute_coverage(corpus_id)
+        # 落库覆盖率报告（m02），回填 coverage_report_id（FR-DS-003 外键）
+        coverage_report_id = save_coverage_report(
+            corpus_id,
+            snapshot_metadata={
+                "frozen_at": datetime.utcnow().isoformat() + "Z",
+                "corpus_version": corpus.get("version"),
+            },
+        )
+        coverage = self.db.get_latest_coverage_report(corpus_id) or {}
         snapshot_metadata = self._build_snapshot_metadata(
             corpus_id=corpus_id,
             corpus=corpus,
@@ -96,6 +105,8 @@ class DatasetLifecycleService:
             corpus_id=corpus_id,
             version_number=version_number,
             status="frozen",
+            case_count=0,
+            coverage_report_id=coverage_report_id,
             split_config={"format": "full", "include_retired": False},
             snapshot_metadata=snapshot_metadata,
         )
@@ -127,34 +138,6 @@ class DatasetLifecycleService:
             )
             count += 1
         return count
-
-    def _compute_coverage(self, corpus_id: int) -> dict:
-        """基于 m02 EIU 计算加权/分优先级覆盖率（与 m02 coverage 口径一致）。"""
-        eius = self.db.list_eius(corpus_id, include_blocked=False)
-        total = len(eius)
-        if total == 0:
-            return {"weighted": 0.0, "p0": 0.0, "p1": 0.0, "p2": 0.0, "total_eiu": 0}
-        covered_by_priority: dict[str, float] = {}
-        for p in ("P0", "P1", "P2"):
-            grp = [e for e in eius if e.get("content_priority") == p]
-            if not grp:
-                covered_by_priority[p.lower()] = 1.0
-                continue
-            covered = sum(1 for e in grp if e.get("is_questionable"))
-            covered_by_priority[p.lower()] = round(covered / len(grp), 3)
-        weighted = round(
-            covered_by_priority["p0"] * 0.4
-            + covered_by_priority["p1"] * 0.4
-            + covered_by_priority["p2"] * 0.2,
-            3,
-        )
-        return {
-            "weighted": weighted,
-            "p0": covered_by_priority["p0"],
-            "p1": covered_by_priority["p1"],
-            "p2": covered_by_priority["p2"],
-            "total_eiu": total,
-        }
 
     def _build_snapshot_metadata(
         self, *, corpus_id: int, corpus: dict, coverage: dict, created_by: str | None

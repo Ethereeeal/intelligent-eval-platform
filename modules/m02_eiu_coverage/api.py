@@ -18,6 +18,7 @@ from fastapi import APIRouter, HTTPException, Query
 from modules.shared.services.database import EIU_TYPES, PRIORITY_WEIGHT, DatabaseService
 from modules.m02_eiu_coverage.schemas import (
     CoverageReport,
+    CoverageReportOut,
     DeleteResponse,
     EiuDetail,
     EiuExtractResponse,
@@ -26,7 +27,11 @@ from modules.m02_eiu_coverage.schemas import (
     EiuUpdate,
     GapListResponse,
 )
-from modules.m02_eiu_coverage.services.coverage import compute_coverage, compute_gaps
+from modules.m02_eiu_coverage.services.coverage import (
+    compute_coverage,
+    compute_gaps,
+    save_coverage_report,
+)
 from modules.m02_eiu_coverage.services.eiu_extractor import EiuExtractorService
 
 # 绑定语料库：/api/corpus/{corpus_id}/eiu
@@ -121,6 +126,15 @@ def get_coverage(corpus_id: int) -> CoverageReport:
     _ensure_corpus(corpus_id)
     # M02 阶段无题目（covered 为空）；M03 接入后可传入 covered_eiu_ids
     return CoverageReport(**compute_coverage(corpus_id))
+
+
+@corpus_eiu_router.post("/coverage", response_model=CoverageReportOut, status_code=201)
+def persist_coverage(corpus_id: int) -> CoverageReportOut:
+    """计算覆盖率并落库为 coverage_report，返回带 report_id 的报告（供 m05 冻结外键引用）。"""
+    _ensure_corpus(corpus_id)
+    report_id = save_coverage_report(corpus_id)
+    row = database.get_latest_coverage_report(corpus_id)
+    return CoverageReportOut(**row)
 
 
 @corpus_eiu_router.get("/gaps", response_model=GapListResponse)

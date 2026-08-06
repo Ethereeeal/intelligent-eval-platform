@@ -196,6 +196,29 @@ class EvalCaseRow(Base):
     retired: Mapped[bool] = mapped_column(default=False)
 
 
+# ----------------------------------------------------------------------
+# m02 — 覆盖率报告快照（供 m05 冻结版本外键引用）
+# ----------------------------------------------------------------------
+class CoverageReportRow(Base):
+    __tablename__ = "coverage_report"
+
+    report_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    corpus_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    total_eiu: Mapped[int] = mapped_column(Integer, default=0)
+    questionable_eiu: Mapped[int] = mapped_column(Integer, default=0)
+    excluded_eiu: Mapped[int] = mapped_column(Integer, default=0)
+    by_priority: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    by_type: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    by_document: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    by_section: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    weighted_coverage: Mapped[float] = mapped_column(default=0.0)
+    p0_coverage_pct: Mapped[float] = mapped_column(default=0.0)
+    block_reconciliation: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    alerts: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    snapshot_metadata: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 engine = create_engine(settings.database_url, future=True)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, future=True)
 
@@ -689,6 +712,7 @@ class DatabaseService:
         version_number: str,
         status: str = "draft",
         case_count: int = 0,
+        coverage_report_id: int | None = None,
         split_config: dict | None = None,
         snapshot_metadata: dict | None = None,
     ) -> int:
@@ -698,6 +722,7 @@ class DatabaseService:
                 version_number=version_number,
                 status=status,
                 case_count=case_count,
+                coverage_report_id=coverage_report_id,
                 split_config=split_config,
                 snapshot_metadata=snapshot_metadata,
             )
@@ -927,6 +952,79 @@ class DatabaseService:
             "review_status": row.review_status,
             "source": row.source,
             "retired": row.retired,
+        }
+
+    # ------------------------------------------------------------------
+    # m02 — coverage_report 快照（供 m05 冻结版本外键引用）
+    # ------------------------------------------------------------------
+    def save_coverage_report(
+        self,
+        *,
+        corpus_id: int,
+        total_eiu: int = 0,
+        questionable_eiu: int = 0,
+        excluded_eiu: int = 0,
+        by_priority: dict | None = None,
+        by_type: dict | None = None,
+        by_document: list | None = None,
+        by_section: list | None = None,
+        weighted_coverage: float = 0.0,
+        p0_coverage_pct: float = 0.0,
+        block_reconciliation: dict | None = None,
+        alerts: list | None = None,
+        snapshot_metadata: dict | None = None,
+    ) -> int:
+        with SessionLocal() as session:
+            row = CoverageReportRow(
+                corpus_id=corpus_id,
+                total_eiu=total_eiu,
+                questionable_eiu=questionable_eiu,
+                excluded_eiu=excluded_eiu,
+                by_priority=by_priority,
+                by_type=by_type,
+                by_document=by_document,
+                by_section=by_section,
+                weighted_coverage=weighted_coverage,
+                p0_coverage_pct=p0_coverage_pct,
+                block_reconciliation=block_reconciliation,
+                alerts=alerts,
+                snapshot_metadata=snapshot_metadata,
+            )
+            session.add(row)
+            session.commit()
+            session.refresh(row)
+            return row.report_id
+
+    def get_latest_coverage_report(self, corpus_id: int) -> dict | None:
+        with SessionLocal() as session:
+            row = (
+                session.query(CoverageReportRow)
+                .filter(CoverageReportRow.corpus_id == corpus_id)
+                .order_by(CoverageReportRow.report_id.desc())
+                .first()
+            )
+            if not row:
+                return None
+            return self._coverage_report_to_dict(row)
+
+    @staticmethod
+    def _coverage_report_to_dict(row: "CoverageReportRow") -> dict:
+        return {
+            "report_id": row.report_id,
+            "corpus_id": row.corpus_id,
+            "total_eiu": row.total_eiu,
+            "questionable_eiu": row.questionable_eiu,
+            "excluded_eiu": row.excluded_eiu,
+            "by_priority": row.by_priority,
+            "by_type": row.by_type,
+            "by_document": row.by_document,
+            "by_section": row.by_section,
+            "weighted_coverage": row.weighted_coverage,
+            "p0_coverage_pct": row.p0_coverage_pct,
+            "block_reconciliation": row.block_reconciliation,
+            "alerts": row.alerts,
+            "snapshot_metadata": row.snapshot_metadata,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
         }
 
     # ------------------------------------------------------------------

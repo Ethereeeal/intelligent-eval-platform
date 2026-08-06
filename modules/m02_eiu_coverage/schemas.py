@@ -101,3 +101,10 @@ class GapListResponse(BaseModel):
     corpus_id: int
     total: int
     items: list[GapItem]
+
+
+class CoverageReportOut(CoverageReport):
+    """持久化后的覆盖率报告（含 report_id / created_at）。"""
+
+    report_id: int
+    created_at: str | None = None
