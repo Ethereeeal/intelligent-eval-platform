@@ -8,7 +8,7 @@
 - `docker-compose.yml`：backend + mysql + minio + studio 服务编排
 - `requirements.txt`：Python 依赖清单
 - `README.md`：本文件
-- `../ai-eval-studio/`：纯静态前端工作台（nginx 托管，无构建、无后端依赖）
+- `../front-end/`：纯静态前端工作台（nginx 托管，无构建、无后端依赖）
 
 ## 构建镜像
 
@@ -57,8 +57,8 @@ docker compose -f deploy/docker-compose.yml up -d
 
 ## 前端工作台（AI Eval Studio）
 
-纯静态前端，由 `ai-eval-studio/` 目录下的 `Dockerfile`（nginx 托管）构建为 `studio` 服务，
-无需构建步骤、无后端依赖（使用内置 mock 数据）：
+纯静态前端，由 `front-end/` 目录（独立构建上下文）下的 `Dockerfile`（nginx 托管）构建为 `studio` 服务，
+无需构建步骤、无后端依赖：
 
 ```bash
 # 单独构建 / 启动
@@ -67,5 +67,5 @@ docker compose -f deploy/docker-compose.yml up -d studio
 ```
 
 - 容器内监听 80，宿主通过 `http://localhost:8080` 访问。
-- 构建上下文为项目根，`.dockerignore` 已将其限定为 `ai-eval-studio/` 静态资源，
+- 构建上下文已限定为 `front-end/` 目录，仅打包前端静态资源，
   不会把 backend 源码或 `models/` 权重带入镜像。

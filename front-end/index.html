@@ -27,7 +27,6 @@
       </div>
       <nav class="nav" id="nav"><!-- 由 app.js 渲染五大栏目 --></nav>
       <div class="top-utils">
-        <div class="top-search"><i data-lucide="search"></i><input type="text" placeholder="搜索文档、知识点、问答对…" /></div>
         <button class="icon-btn bell" id="bellBtn" aria-label="提醒"><i data-lucide="bell"></i><span class="bell-count" id="bellCount"></span></button>
         <button class="icon-btn" id="settingsBtn" aria-label="个人设置"><i data-lucide="settings"></i></button>
         <button class="btn ask-btn" id="askBtn"><i data-lucide="message-circle"></i>智能问答</button>
@@ -48,15 +47,11 @@
           <div class="hl-banner">
             <div class="hl-ic"><i data-lucide="sparkles"></i></div>
             <div class="hl-tx"><div class="hl-t">生产洞察</div>
-              <div class="hl-d">反欺诈场景本周新增 1,240 条问答对，建议优先补充五级分类长链题；逾期不良认定待人工复核 12 条。</div></div>
-            <button class="hl-btn" data-go="qalib">查看建议 <i data-lucide="arrow-right"></i></button>
+              <div class="hl-d" id="hlInsight">加载中…</div></div>
           </div>
 
           <div class="kpi-grid">
-            <div class="kpi"><div class="kpi-top"><span class="kpi-ic" style="--c:#124571"><i data-lucide="layers"></i></span><span class="kpi-label">问答对总量</span></div><div class="kpi-num">82.4<i>k</i></div><div class="kpi-trend up">+12.6% <i data-lucide="trending-up"></i></div></div>
-            <div class="kpi"><div class="kpi-top"><span class="kpi-ic" style="--c:#2E5E8C"><i data-lucide="git-fork"></i></span><span class="kpi-label">多跳占比</span></div><div class="kpi-num">32<i>%</i></div><div class="kpi-trend up">+4.1% <i data-lucide="trending-up"></i></div></div>
-            <div class="kpi"><div class="kpi-top"><span class="kpi-ic" style="--c:#1B4A78"><i data-lucide="shield-check"></i></span><span class="kpi-label">证据回溯率</span></div><div class="kpi-num">98<i>%</i></div><div class="kpi-trend up">+1.2% <i data-lucide="trending-up"></i></div></div>
-            <div class="kpi"><div class="kpi-top"><span class="kpi-ic" style="--c:#B5C7F5"><i data-lucide="check-check"></i></span><span class="kpi-label">待人工审核</span></div><div class="kpi-num">12<i>i</i></div><div class="kpi-trend down">-3 <i data-lucide="trending-down"></i></div></div>
+            <div class="kpi"><div class="kpi-top"><span class="kpi-ic" style="--c:#124571"><i data-lucide="layers"></i></span><span class="kpi-label">问答对总量</span></div><div class="kpi-num" id="kpiQaTotal">—</div><div class="kpi-trend up">实时 <i data-lucide="activity"></i></div></div>
           </div>
 
           <div class="panel open">
@@ -100,7 +95,7 @@
             <div class="seg-wrap"><span class="seg-label">从</span>
               <div class="seg" id="srcTypeSeg">
                 <button class="on" data-type="doc">待生成问答文件</button>
-                <button data-type="qa">待泛化文件</button>
+                <button data-type="qa">仅泛化</button>
               </div>
             </div>
             <div class="src-list" id="srcList"><!-- 由 app.js 渲染 --></div>
@@ -113,11 +108,7 @@
 
           <div class="card card-pad mt">
             <div class="card-t">运行监测</div>
-            <div id="monitorList">
-              <div class="monitor-row"><span class="mr-name">授信管理办法.pdf · 待生成问答文件</span><span class="mr-bar"><span style="width:100%"></span></span><span class="mr-pct"><a href="#" class="mr-dl-link" data-goto="qalib">下载</a></span></div>
-              <div class="monitor-row"><span class="mr-name">反欺诈管理办法.pdf · 待生成问答文件</span><span class="mr-bar"><span style="width:64%"></span></span><span class="mr-pct">64%</span></div>
-              <div class="monitor-row"><span class="mr-name">理财适当性规则.pdf · 待泛化文件</span><span class="mr-bar"><span style="width:100%"></span></span><span class="mr-pct">无问题</span></div>
-            </div>
+            <div id="monitorList"></div>
           </div>
         </section>
 
@@ -139,6 +130,7 @@
         <section class="view" data-view="qalib" hidden>
           <div class="page-head">
             <div><h1>输出问答对库</h1><p class="sub">按输入文档目录组织的问答对、质量与人工审核</p></div>
+            <div class="page-actions"><button class="btn ghost" id="qaLibExportBtn"><i data-lucide="download"></i>导出问答对</button></div>
           </div>
           <div class="lib-split">
             <div class="tree" id="qaTree">

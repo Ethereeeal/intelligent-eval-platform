@@ -11,5 +11,6 @@ __pycache__/
 .mypy_cache/
 .codebuddy/
 
-# studio 镜像: 只需 ai-eval-studio/ 目录的静态文件，排除源码/依赖/模型
-ai-eval-studio/.dockerignore
+# studio 镜像: 前端已独立为 front-end/ 目录作为构建上下文，无需在项目根排除；
+# 后端镜像（context 为项目根）构建时带上 front-end/ 仅为静态资源，体积可控，可保留。
+# front-end/

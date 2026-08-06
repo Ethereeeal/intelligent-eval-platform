@@ -32,7 +32,7 @@ npx serve .
 ## 目录结构
 
 ```
-ai-eval-studio/
+front-end/
 ├── index.html        # 页面结构
 ├── styles.css        # 样式（玻璃拟态 UI）
 ├── app.js            # 全部交互逻辑（无打包、无模块系统，IIFE 封装）

@@ -35,6 +35,8 @@ services:
       context: ..
       dockerfile: deploy/Dockerfile
     container_name: evalforge-backend
+    env_file:
+      - ../.env
     environment:
       MYSQL_HOST: mysql
       MYSQL_PORT: "3306"
@@ -44,15 +46,10 @@ services:
       MINIO_ENDPOINT: minio:9000
       MINIO_ACCESS_KEY: minio
       MINIO_SECRET_KEY: minio12345
-      EMBEDDING_MODEL_NAME: "BAAI/bge-small-zh-v1.5"
-      HF_ENDPOINT: "https://hf-mirror.com"
-      LOCAL_MODELS_DIR: "/app/models"   # 宿主机 ./models 挂载进容器的本地模型目录
-      # LLM（M02 EIU 抽取，OpenAI 兼容 API；缺省 Key 为占位符时容器内自动离线抽取）
-      LLM_API_BASE: "${LLM_API_BASE:-https://api.openai.com/v1}"
-      LLM_API_KEY: "${LLM_API_KEY:-sk-xxx}"
-      LLM_MODEL: "${LLM_MODEL:-gpt-4o-mini}"
-      LLM_TEMPERATURE: "${LLM_TEMPERATURE:-0.1}"
-      LLM_MAX_TOKENS: "${LLM_MAX_TOKENS:-4096}"
+      EMBEDDING_MODEL_PATH: "/app/models/bge-small-zh-v1.5"   # 宿主机 ./models 挂载进容器
+      # LLM（OpenAI 兼容 API）：DeepSeek，配置来自 ../.env（已 gitignore，本地使用，不入库）
+      LLM_TEMPERATURE: "0.1"
+      LLM_MAX_TOKENS: "4096"
     ports:
       - "8000:8000"
     volumes:
@@ -65,10 +62,11 @@ services:
         condition: service_started
 
   # 纯静态前端工作台（AI Eval Studio）：nginx 托管，无构建、无后端依赖
+  # 构建上下文限定在前端目录 front-end/，仅打包静态资源，不误带后端源码/依赖
   studio:
     build:
-      context: ..
-      dockerfile: ai-eval-studio/Dockerfile
+      context: ../front-end
+      dockerfile: Dockerfile
     container_name: evalforge-studio
     ports:
       - "8080:80"

@@ -4,6 +4,7 @@ uvicorn[standard]>=0.30.0
 pydantic>=2.8.0
 python-dotenv>=1.0.0             # 加载项目根 .env（LLM Key 等本机配置）
 python-multipart>=0.0.9          # FastAPI 文件上传（UploadFile）必需
+requests>=2.31.0                 # m03 LLMService 调用 OpenAI 兼容 API 必需
 
 # MySQL 存储评测集
 sqlalchemy>=2.0.0

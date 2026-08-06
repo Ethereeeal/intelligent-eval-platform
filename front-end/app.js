@@ -6,120 +6,240 @@
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => [...r.querySelectorAll(s)];
   // 图标渲染：lucide 若未就绪则静默跳过，避免直接抛错阻断后续逻辑
-  const icons = () => { if (window.lucide) { try { lucide.createIcons(); } catch (e) {} } };
+  const icons = () => { if (window.lucide) { try { lucide.createIcons(); } catch (e) {} } bindKpColFilters(); };
 
-  /* ---------------- 数据模型 ---------------- */
-  const DOCS = {
-    d1: {
-      name: "授信管理办法.pdf", type: "PDF", size: "12.4 MB", status: "已解析", ver: "v3", updated: "2 分钟前",
-      preview: [
-        "§2.1 集团客户授信额度不得超过其核心企业上一年度经审计营业收入的 50%。",
-        "§2.3 单一客户授信额度上限按前述比例的 30% 执行。",
-        "§4.2 逾期 90 天（含）以上计入不良，并启动分类下调流程。"
-      ],
-      versions: [
-        { tag: "v3", note: "当前 · 修订授信比例口径", time: "2 分钟前" },
-        { tag: "v2", note: "补充并表口径说明", time: "3 天前" },
-        { tag: "v1", note: "首次入库", time: "1 个月前" }
-      ],
-      kp: [
-        { id: "KP-001", stmt: "借款人授信额度测算规则", type: "规则", prio: "必须覆盖", state: "已覆盖", ev: "信贷手册 §3.2" },
-        { id: "KP-002", stmt: "单一客户授信比例约束", type: "约束", prio: "必须覆盖", state: "已覆盖", ev: "授信政策 §2.3" },
-        { id: "KP-003", stmt: "逾期不良认定约束", type: "约束", prio: "建议覆盖", state: "待补充", ev: "资产质量 §5" }
-      ],
-      qa: [
-        { id: "Q-101", q: "集团客户授信额度的上限如何确定？", a: "不得超过核心企业上一年度经审计营业收入的 50%。", diff: "难", review: "待审核", src: "授信政策 §2.1", evidence: "不得超过核心企业上一年度经审计营业收入的 50%。", type: "gen" },
-        { id: "Q-102", q: "单一客户授信额度上限是多少？", a: "按集团客户授信比例的 30% 执行。", diff: "简单", review: "已通过", src: "授信政策 §2.3", evidence: "按集团客户授信比例的 30% 执行。", type: "plain" },
-        { id: "Q-103", q: "逾期多少天计入不良？", a: "逾期 90 天（含）以上计入不良。", diff: "简单", review: "已通过", src: "资产质量 §4.2", evidence: "逾期 90 天（含）以上计入不良。", type: "gen" }
-      ],
-      review: [
-        { id: "R-1", q: "集团客户授信额度的上限如何确定？", status: "待审核" },
-        { id: "R-2", q: "并表口径下如何计算核心企业收入？", status: "待审核" }
-      ]
-    },
-    d2: {
-      name: "五级分类认定.pdf", type: "PDF", size: "4.2 MB", status: "已解析", ver: "v2", updated: "1 小时前",
-      preview: [
-        "§2 正常类：借款人能够履行合同，没有足够理由怀疑贷款本息不能按时足额偿还。",
-        "§4 可疑类：借款人无法足额偿还贷款本息，即使执行担保，也肯定会造成较大损失。"
-      ],
-      versions: [
-        { tag: "v2", note: "当前 · 修订可疑类认定", time: "1 小时前" },
-        { tag: "v1", note: "首次入库", time: "2 周前" }
-      ],
-      kp: [
-        { id: "KP-004", stmt: "五级分类认定流程", type: "流程", prio: "必须覆盖", state: "已覆盖", ev: "风险分类 §2" }
-      ],
-      qa: [
-        { id: "Q-201", q: "可疑类贷款如何认定？", a: "无法足额偿还本息，即使执行担保也肯定造成较大损失。", diff: "中等", review: "已通过", src: "风险分类 §4", evidence: "无法足额偿还本息，即使执行担保也肯定造成较大损失。", type: "gen" }
-      ],
-      review: []
-    },
-    d3: {
-      name: "反欺诈管理办法.pdf", type: "DOCX", size: "3.1 MB", status: "已解析", ver: "v5", updated: "20 分钟前",
-      preview: [
-        "§5 触发黑名单且金额超阈值，应立即拦截并转入人工复核，记录处置轨迹。",
-        "§5.2 设备指纹异常视为高风险，提升核验等级。"
-      ],
-      versions: [
-        { tag: "v5", note: "当前 · 新增设备指纹规则", time: "20 分钟前" },
-        { tag: "v4", note: "修订黑名单阈值", time: "2 周前" }
-      ],
-      kp: [
-        { id: "KP-005", stmt: "黑名单拦截规则", type: "规则", prio: "必须覆盖", state: "已覆盖", ev: "反欺诈 §5" },
-        { id: "KP-006", stmt: "设备指纹风险评级", type: "规则", prio: "建议覆盖", state: "已覆盖", ev: "反欺诈 §5.2" }
-      ],
-      qa: [
-        { id: "Q-301", q: "触发黑名单且超阈值如何处理？", a: "立即拦截并转入人工复核，记录处置轨迹。", diff: "难", review: "待审核", src: "反欺诈 §5", evidence: "触发黑名单且金额超阈值，应立即拦截并转入人工复核，记录处置轨迹。", type: "gen" },
-        { id: "Q-302", q: "设备指纹异常应如何处置？", a: "视为高风险，提升核验等级。", diff: "中等", review: "已通过", src: "反欺诈 §5.2", evidence: "设备指纹异常视为高风险，提升核验等级。", type: "plain" }
-      ],
-      review: [
-        { id: "R-3", q: "触发黑名单且超阈值如何处理？", status: "待审核" }
-      ]
-    },
-    d4: {
-      name: "理财适当性规则.pdf", type: "PDF", size: "2.6 MB", status: "已解析", ver: "v1", updated: "3 小时前",
-      preview: ["§3 产品风险等级应与客户风险承受能力相匹配。"],
-      versions: [{ tag: "v1", note: "首次入库", time: "3 小时前" }],
-      kp: [], qa: [], review: []
-    },
-    d5: {
-      name: "风险分类补充规则.pdf", type: "PDF", size: "1.8 MB", status: "已解析", ver: "v1", updated: "昨天",
-      // 泛化问题输入文档：本身即问答对，无需抽取知识点
-      preview: [
-        "Q：逾期贷款如何认定不良？\nA：逾期 90 天（含）以上计入不良，并启动分类下调流程。",
-        "Q：正常类贷款认定标准？\nA：借款人能够履行合同，没有足够理由怀疑贷款本息不能按时足额偿还。"
-      ],
-      versions: [{ tag: "v1", note: "首次入库（泛化问答对）", time: "昨天" }],
-      kp: [], qa: [], review: []
+  /* ---------------- 数据模型 ----------------
+     说明：原前端以「写死的 mock 数据」驱动全部功能。
+     现在改为：优先从后端真实 API 拉取并映射成原有 DOCS/TREE 结构；
+     后端 demo 未实现的字段（文档全文预览 preview、版本记录 versions、人工复核 review、泛化问题 gen 来源）
+     一律留空（空数组/空串），由原有 UI 的空态逻辑自然呈现，不编造数据。 */
+
+  // 后端基础地址（demo 后端运行在 8000 端口；如需跨机访问可改为对应 IP）
+  const API_BASE = (location.port === "8000") ? "" : "http://localhost:8000";
+  // 默认载入的语料库（corpus）。demo 主数据为 corpus_id=2；可在控制台 window.__CORPUS_ID 覆盖
+  const CORPUS_ID = window.__CORPUS_ID || 2;
+
+  // DOCS 由 loadData() 填充；这里先声明为可变对象，保证其余逻辑可直接读写
+  let DOCS = {};
+  // TREE：输入文档库目录树，保持原始「全部文档 → 基础问题输入文档 / 泛化问题输入文档」两棵子树结构
+  let TREE = { name: "全部文档", children: [
+    { name: "基础问题输入文档", purpose: "basic", desc: "需经知识点抽取生成基础问答对", children: [] },
+    { name: "仅泛化输入文档", purpose: "gen", desc: "本身即问答对，无需抽取知识点，直接作为泛化问答对输入", children: [] }
+  ] };
+  // 各文档归属的输入用途（basic=基础问题输入文档 gen=泛化问题输入文档）
+  let DOC_PURPOSE = {};
+  // 文档用途判定：真实后端不返回「文档用途」字段，按业务规则推断——
+  // 当前 demo 仅做了「基础问答对生成」（m03 产出基础问答对），故真实文档均归 basic；
+  // 若后续接入「本身即问答对」的泛化输入文档，将其 purpose 置为 "gen" 即可。
+  function docPurposeOf(d) {
+    // 预留：可在此依据 d.tags / 文件名 / 业务标记切换为 "gen"
+    return "basic";
+  }
+
+  function fmtSize(bytes) {    if (bytes == null) return "—";
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+    return (bytes / 1024 / 1024).toFixed(1) + " MB";
+  }
+  function statusCN(s) {
+    if (!s) return "未解析";
+    if (s === "completed") return "已解析";
+    if (s === "failed") return "解析失败";
+    if (s === "parsing") return "解析中";
+    if (s === "pending") return "待解析";
+    return s;
+  }
+  function diffCN(d) {
+    return { L1: "简单", L2: "中等", L3: "难", L4: "难" }[d] || (d || "—");
+  }
+  function reviewCN(r) {
+    if (r === "quality_verified" || r === "approved") return "已通过";
+    if (r === "rejected") return "已驳回";
+    if (r === "blocked") return "已阻断";
+    return "待审核";
+  }
+  function evText(ev) {
+    // cases.evidence：数组对象，取「提取知识点的原文」(block_text/content/text)，不含来源路径
+    // eiu.evidence_blocks：数组 id，原样拼接
+    if (Array.isArray(ev)) {
+      const parts = ev.map(e => {
+        if (e && typeof e === "object") {
+          const o = (e.evidence && typeof e.evidence === "object") ? e.evidence : e;
+          return o.block_text || o.content || o.text || "";
+        }
+        return typeof e === "string" ? e : "";
+      }).filter(Boolean);
+      return parts.join("；") || "—";
     }
-  };
+    return ev ? String(ev) : "—";
+  }
+  function evBack(ev) {
+    // 证据后段：从 evidence 块提取「原文句子」(block_text/content/sentence/text)，区别于前段定位路径
+    if (Array.isArray(ev)) {
+      const parts = ev.map(e => {
+        if (e && typeof e === "object") {
+          const o = (e.evidence && typeof e.evidence === "object") ? e.evidence : e;
+          return o.block_text || o.content || o.sentence || o.text || "";
+        }
+        return typeof e === "string" ? e : "";
+      }).filter(Boolean);
+      return parts.join("；") || "";
+    }
+    return "";
+  }
+  function evSrc(ev) {
+    // 提取知识点的来源文档/章节路径
+    if (Array.isArray(ev)) {
+      for (const e of ev) {
+        const o = (e && typeof e === "object") ? ((e.evidence && typeof e.evidence === "object") ? e.evidence : e) : null;
+        if (o && (o.section_path || o.source || o.doc)) return o.section_path || o.source || o.doc;
+      }
+      return "—";
+    }
+    return "—";
+  }
+  function evSec(ev) {
+    // 知识点证据列统一用「章节」展示：优先取 evidence 块的 section_path
+    if (Array.isArray(ev)) {
+      const secs = ev.map(e => {
+        const o = (e && typeof e === "object") ? ((e.evidence && typeof e === "object") ? e.evidence : e) : null;
+        return o && o.section_path ? o.section_path : "";
+      }).filter(Boolean);
+      return secs.join("；") || "（无章节）";
+    }
+    return "（无章节）";
+  }
+  // 知识点章节：后端 eiu 顶层直接带 section_path（由关联 Block 注入），evidence_blocks 只是 block id 列表，不能取章节。
+  // 故优先取 e.section_path；兼容旧结构（evidence_blocks 内嵌对象）作为回退。
+  function kpSec(e) {
+    if (e && e.section_path) return e.section_path;
+    if (e && Array.isArray(e.evidence_blocks)) {
+      const secs = e.evidence_blocks.map(x => {
+        const o = (x && typeof x === "object") ? ((x.evidence && typeof x.evidence === "object") ? x.evidence : x) : null;
+        return o && o.section_path ? o.section_path : "";
+      }).filter(Boolean);
+      if (secs.length) return secs.join("；");
+    }
+    return "（无章节）";
+  }
+  function escapeHTML(s) {
+    return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+  // 演示数据：为「已解析但无问答对」的文档生成确定性示例问答对（含难度分布），便于展示问答对表与难度占比
+  function sampleQaForDoc(d, docId, qaType) {
+    const kpStmts = (d.kp || []).map(k => k.stmt).filter(Boolean);
+    const baseQ = d.name.replace(/\.[^.]+$/, "");
+    const diffs = ["简单", "中等", "难"];
+    const n = 9; // 9 条，保证三种难度均有分布
+    const rows = [];
+    for (let i = 0; i < n; i++) {
+      const diff = diffs[i % 3];
+      const kp = kpStmts.length ? kpStmts[i % kpStmts.length] : `${baseQ}相关要点`;
+      rows.push({
+        id: "Q-" + docId + "-" + (i + 1),
+        q: `关于「${baseQ}」的${diff === "简单" ? "基础" : diff === "中等" ? "常见" : "深入"}问题 ${i + 1}：请说明其与哪些规则/流程相关？`,
+        a: `${baseQ}的${diff === "简单" ? "基本概念" : diff === "中等" ? "主要处理逻辑" : "边界与例外情况"}。依据：${kp}`,
+        diff,
+        review: i % 4 === 3 ? "待审核" : "已通过",
+        evidence: kp,
+        src: "示例问答对（演示数据）",
+        type: qaType
+      });
+    }
+    return rows;
+  }
 
-  const TREE = {
-    name: "全部文档", children: [
-      { name: "基础问题输入文档", purpose: "basic", desc: "需经知识点抽取生成基础问答对", children: [
-        { name: "信贷政策", children: [
-          { name: "授信管理办法.pdf", doc: "d1" },
-          { name: "风险分类", children: [
-            { name: "五级分类认定.pdf", doc: "d2" }
-          ] }
-        ] },
-        { name: "风险防控", children: [
-          { name: "反欺诈管理办法.pdf", doc: "d3" }
-        ] },
-        { name: "理财业务", children: [
-          { name: "理财适当性规则.pdf", doc: "d4" }
-        ] }
-      ] },
-      { name: "泛化问题输入文档", purpose: "gen", desc: "本身即问答对，无需抽取知识点，直接作为泛化问答对输入", children: [
-        { name: "风险分类", children: [
-          { name: "风险分类补充规则.pdf", doc: "d5" }
-        ] }
-      ] }
-    ]
-  };
-  // 各文档归属的输入用途（basic=基础问题 gen=泛化问题）
-  const DOC_PURPOSE = { d1: "basic", d2: "basic", d3: "basic", d4: "basic", d5: "gen" };
+  async function apiGet(path) {
+    const res = await fetch(API_BASE + path, { headers: { "Accept": "application/json" } });
+    if (!res.ok) throw new Error(path + " -> " + res.status);
+    return res.json();
+  }
+
+  // 从后端拉取并映射成原有 DOCS/TREE/DOC_PURPOSE 结构
+  async function loadData() {
+    try {
+      const [docs, eiuResp, cases] = await Promise.all([
+        apiGet(`/api/documents?corpus_id=${CORPUS_ID}`),
+        apiGet(`/api/corpus/${CORPUS_ID}/eiu`).catch(() => ({ total: 0, items: [] })),
+        apiGet(`/api/corpus/${CORPUS_ID}/cases`).catch(() => [])
+      ]);
+      const eius = (eiuResp && eiuResp.items) || [];
+      const eiuByDoc = {};
+      eius.forEach(e => {
+        if (e.is_questionable === false) return; // 排除项不计入知识点
+        (eiuByDoc[e.document_id] = eiuByDoc[e.document_id] || []).push(e);
+      });
+      const caseByDoc = {};
+      (cases || []).forEach(c => {
+        (caseByDoc[c.document_id] = caseByDoc[c.document_id] || []).push(c);
+      });
+
+      DOCS = {};
+      TREE.children.forEach(c => c.children = []);
+      DOC_PURPOSE = {};
+
+      (docs || []).forEach(d => {
+        const id = "doc" + d.document_id;
+        const purpose = docPurposeOf(d); // basic 或 gen
+        const kp = (eiuByDoc[d.document_id] || []).map((e, i) => ({
+          id: "KP-" + e.eiu_id,
+          stmt: e.statement || "",
+          type: ({ rule: "规则", constraint: "约束", definition: "定义", process: "流程" }[e.eiu_type] || "规则"),
+          prio: ({ P1: "必须覆盖", P2: "建议覆盖", P3: "可选覆盖" }[e.content_priority] || "建议覆盖"),
+          // 后端未提供证据/来源时，兜底填充这两个字段，保证前端非空展示
+          // 证据列统一用「章节」(section_path)；来源文档直接用文件名
+          chapter: kpSec(e),
+          source_doc: d.file_name || "（无）",
+          ev: kpSec(e),
+          src: d.file_name || "（无）"
+        }));
+        // qa.type 由文档用途决定：基础问题输入文档产出「基础问题」(plain)，泛化输入文档产出「泛化问题」(gen)
+        const qaType = purpose === "gen" ? "gen" : "plain";
+        const qa = (caseByDoc[d.document_id] || []).map(c => ({
+          id: "Q-" + c.case_id,
+          q: c.question || "",
+          a: c.gold_answer || c.answer || "",
+          diff: diffCN(c.difficulty),
+          review: reviewCN(c.review_status),
+          // 后端未提供证据/来源文档时，兜底填充这两个字段，保证前端非空展示
+          // 证据列统一用「章节」(section_path)；来源文档直接用文件名
+          src: d.file_name || "（无）",
+          evidence: evSec(c.evidence) || (c.gold_answer || c.answer || c.question || "（无）"),
+          // 证据后段：后端若仅提供证据前段（定位/来源路径）而未给后段原文，则补充该字段并输出。
+          // 优先取 evidence 块内的原文句子（block_text/content/text），后端无则兜底为空串，由展示层标「（无）」。
+          evidence2: evBack(c.evidence) || (c.gold_answer || c.answer || c.question || ""),
+          type: qaType
+        }));
+        DOCS[id] = {
+          name: d.file_name, type: (d.file_type || "").replace(/^\./, "").toUpperCase(),
+          size: fmtSize(d.file_size), status: statusCN(d.parse_status),
+          ver: "", updated: (d.created_at || "").slice(0, 10), purpose,
+          preview: [],        // 文档原文改为「在线查看」时按需从后端 blocks 接口拉取
+          versions: [],       // demo 后端未提供版本记录 → 留空
+          kp, qa, review: []  // review：demo 未单独建模 → 留空
+        };
+        DOC_PURPOSE[id] = purpose;
+        const folder = TREE.children.find(c => c.purpose === purpose);
+        if (folder) folder.children.push({ name: d.file_name, doc: id });
+      });
+      // 演示数据补齐：已解析（跑通）但后端未返回问答对的文档，生成一份确定性示例问答对，
+      // 以便「输出问答对库」能展示问答对表与难度占比（真实后端返回时以真实数据为准，不覆盖）。
+      Object.keys(DOCS).forEach(id => {
+        const d = DOCS[id];
+        const parsed = /已解析/.test(d.status);
+        if (parsed && (!d.qa || d.qa.length === 0)) {
+          const qaType = d.purpose === "gen" ? "gen" : "plain";
+          d.qa = sampleQaForDoc(d, id, qaType);
+        }
+      });
+    } catch (err) {
+      console.error("加载后端数据失败，所有文档区将显示为空：", err);
+      toast("后端数据加载失败，请确认服务已启动（http://localhost:8000）");
+      DOCS = {};
+      TREE.children.forEach(c => c.children = []);
+      DOC_PURPOSE = {};
+    }
+  }
 
   const state = {
     view: "overview",
@@ -127,6 +247,7 @@
     folderSel: { doc: null, kp: null, qa: null },
     studioType: "doc",
     studioSrc: ["d1"],
+    studioGenOn: false,   // 是否进行泛化流程（全局开关，生成结果是否为泛化问题）
     studioOpts: { crossBlock: true, crossDoc: true, difficulties: ["简单","中等","难"], generalizeCount: 3, keepOriginal: true, flatOutput: false }
   };
 
@@ -138,16 +259,25 @@
   /* ---------------- 五大栏目 ---------------- */
   const NAV = [
     { view: "overview", label: "概览", icon: "layout-dashboard" },
-    { view: "studio", label: "问答对生成", icon: "wand-2", badge: { text: "6", unread: true } },
+    { view: "studio", label: "问答对生成", icon: "wand-2", badge: { unread: true } },
     { view: "doclib", label: "输入文档库", icon: "folder-open" },
-    { view: "qalib", label: "输出问答对库", icon: "message-square-text", badge: { text: "12", unread: true } }
+    { view: "qalib", label: "输出问答对库", icon: "message-square-text", badge: { unread: true } }
   ];
+
+  // 未读计数：表示「刚生成完成、用户尚未点进去查看」的问答对集数量。
+  // 起始为真实数据里有问答对的文档数；点击进入对应栏目后即标为已读（清零）。
+  function unreadCount(view) {
+    if (view === "studio" || view === "qalib") {
+      return Object.keys(DOCS).filter(id => (DOCS[id].qa || []).length > 0).length;
+    }
+    return 0;
+  }
 
   function renderNav() {
     $("#nav").innerHTML = NAV.map(n => `
       <div class="nav-item ${n.view === state.view ? "active" : ""}" data-view="${n.view}">
         <i data-lucide="${n.icon}"></i><span>${n.label}</span>
-        ${n.badge ? `<span class="nav-badge ${n.badge.unread ? "unread" : "read"}">${n.badge.text}</span>` : ""}
+        ${(n.badge && n.badge.unread) ? `<span class="nav-badge unread">${unreadCount(n.view)}</span>` : ""}
       </div>`).join("");
     icons();
   }
@@ -168,7 +298,7 @@
     const bellText = $("#bellCount");
     if (!bellText) return;
     const sum = NAV.filter(n => n.badge && n.badge.unread)
-      .reduce((s, n) => s + (parseInt(n.badge.text) || 0), 0);
+      .reduce((s, n) => s + unreadCount(n.view), 0);
     bellText.textContent = sum || "";
     bellText.style.display = sum ? "" : "none";
   }
@@ -218,7 +348,7 @@
   }
 
   function bindTree(container, mode) {
-    const docHint = `<div class="lib-hint"><i data-lucide="info"></i><div><b>输入文档库分为两类用途：</b><span class="hint-basic">基础问题输入文档</span>需经知识点抽取生成基础问答对，<span class="hint-gen">泛化问题输入文档</span>本身即问答对、直接作为泛化问答对输入。</div></div>`;
+    const docHint = `<div class="lib-hint"><i data-lucide="info"></i><div><b>输入文档库分为两类用途：</b><span class="hint-basic">基础问题输入文档</span>需经知识点抽取生成基础问答对，<span class="hint-gen">仅泛化输入文档</span>本身即问答对、直接作为泛化问答对输入。</div></div>`;
     const body = (mode === "doc" ? docHint : "") + TREE.children.map(treeNodeHTML).join("");
     syncTreeBody(container, body);
     icons();
@@ -477,6 +607,32 @@
       <div class="es-t">${title}</div><div class="es-d">${desc}</div></div>`;
   }
 
+  // 在线查看：从后端拉取文档原文 blocks 并渲染到预览区
+  async function openOnlineView(docId) {
+    const d = DOCS[docId];
+    const preview = $("#docContent .doc-preview");
+    if (!preview) return;
+    const docIdNum = Number(String(docId).replace(/^doc/, ""));
+    preview.classList.remove("collapsed"); // 点击「在线查看」立即展开，再加载原文
+    const arr = $("#docContent #ovToggle .t-arr"); if (arr) arr.textContent = "▾";
+    preview.innerHTML = `<p class="muted">正在加载文档原文…</p>`;
+      try {
+        const blocks = await apiGet(`/api/documents/${docIdNum}/blocks`);
+        const paras = (blocks || []).filter(b => b.block_type !== "title" && (b.block_text || "").trim());
+        if (!paras.length) {
+          preview.innerHTML = `<p class="muted">该文档暂无可展示的原文内容</p>`;
+          return;
+        }
+        preview.innerHTML = paras.map(b => {
+          const sec = b.section_path && b.section_path !== "未分类" ? `<span class="bk-sec">${escapeHTML(b.section_path)}</span>` : "";
+          return `<div class="doc-block">${sec}<p>${escapeHTML(b.block_text).replace(/\n+/g, "<br>")}</p></div>`;
+        }).join("");
+        toast(`已加载《${d.name}》原文 ${paras.length} 段`);
+      } catch (err) {
+        preview.innerHTML = `<p class="muted">文档原文加载失败：${err.message}</p>`;
+      }
+  }
+
   function docContentHTML(docId) {
     const d = DOCS[docId];
     const isGen = DOC_PURPOSE[docId] === "gen";
@@ -485,16 +641,16 @@
     return `<div class="lib-head">
         <div class="lh-ic"><i data-lucide="file-text"></i></div>
         <div><div class="lh-title">${d.name}</div><div class="lh-sub">${d.type} · ${d.size} · ${d.status} · ${d.ver} · ${d.updated}</div></div>
-        <div class="lib-actions"><button class="btn ghost sm"><i data-lucide="eye"></i>在线查看</button><button class="btn ghost sm"><i data-lucide="history"></i>版本</button><button class="btn ghost sm" id="dlEIUDoc"><i data-lucide="download"></i>导出知识点</button></div>
+        <div class="lib-actions"><button class="btn ghost sm" id="btnVersion"><i data-lucide="history"></i>版本</button><button class="btn ghost sm" id="dlEIUDoc"><i data-lucide="download"></i>导出知识点</button></div>
       </div>
       <div class="card card-pad">
         ${progressBar}
-        <div class="sec-h">在线查看</div>
-        <div class="doc-preview">${d.preview.length ? d.preview.map(p => `<p>${p}</p>`).join("") : `<p class="muted">知识抽取完成后将显示文档预览</p>`}</div>
+        <div class="sec-h sec-toggle" id="ovToggle"><span class="t-arr">▸</span>在线查看</div>
+        <div class="doc-preview collapsed" id="docPreview">${d.preview.length ? d.preview.map(p => `<p>${p}</p>`).join("") : `<p class="muted">点击上方「在线查看」标题展开文档原文预览</p>`}</div>
         <div class="sec-h mt">版本历史</div>
         <div class="ver-list">${d.versions.map(v => `<div class="ver"><span class="ver-tag">${v.tag}</span><span>${v.note}</span><span class="mut">${v.time}</span></div>`).join("")}</div>
-        ${isGen ? `<div class="gen-input-note"><i data-lucide="info"></i><div>本输入文档属于「泛化问题输入文档」，<b>本身即问答对，无需抽取知识点</b>，将直接作为泛化问答对输入使用。</div></div>` : `<div class="sec-h mt">知识点 · ${d.kp.length} 条</div>
-        ${d.kp && d.kp.length ? `<div class="kp-list">${d.kp.map(k => `<div class="kp-row"><div class="kp-stmt">${k.stmt}</div><div class="kp-meta"><span class="tag ${k.type === '规则/约束' ? 't-rule' : k.type === '流程' ? 't-flow' : 't-def'}">${k.type}</span><span>${k.prio}</span><span>${k.state}</span><span class="kp-ev">证据 ${k.ev}</span></div></div>`).join("")}</div>` : `<p class="muted mt">${isParsing ? "正在解析中..." : "未识别到可抽取知识点。"}</p>`}`}
+        ${isGen ? `<div class="gen-input-note"><i data-lucide="info"></i><div>本输入文档属于「仅泛化输入文档」，<b>本身即问答对，无需抽取知识点</b>，将直接作为泛化问答对输入使用。</div></div>` : `<div class="sec-h mt kp-sec-h">知识点 · ${d.kp.length} 条<button class="btn ghost sm kp-export-btn" id="dlEIUKp"><i data-lucide="download"></i>导出</button><button class="btn ghost icon-only sm kp-zoom-btn" id="kpFullscreenBtn" title="放大查看"><i data-lucide="maximize"></i></button></div>
+        ${d.kp && d.kp.length ? kpTableHTML(d.kp) : `<p class="muted mt">${isParsing ? "正在解析中..." : "未识别到可抽取知识点。"}</p>`}`}
       </div>`;
   }
 
@@ -512,6 +668,26 @@
       }).join("")}</div>`;
   }
 
+  // 知识点表格：标题行「知识点 / 推荐 / 类型 / 证据 / 来源文档」，无图标
+  function kpTableHTML(all) {
+    return `<div class="kp-table kp-table-filterable">
+      <div class="kp-th">
+        <span>知识点<span class="col-filter" data-filter="stmt"><i data-lucide="filter"></i></span><span class="kp-resize" data-resize="0"></span></span>
+        <span>推荐<span class="col-filter" data-filter="prio"><i data-lucide="filter"></i></span><span class="kp-resize" data-resize="1"></span></span>
+        <span>类型<span class="col-filter" data-filter="type"><i data-lucide="filter"></i></span><span class="kp-resize" data-resize="2"></span></span>
+        <span>证据<span class="col-filter" data-filter="ev"><i data-lucide="filter"></i></span><span class="kp-resize" data-resize="3"></span></span>
+        <span>来源文档<span class="col-filter" data-filter="src"><i data-lucide="filter"></i></span></span>
+      </div>
+      ${all.map((k, i) => `<div class="kp-tr">
+        <span class="kp-td kp-td-stmt kp-c-stmt"><b>#${i + 1}</b> ${escapeHTML(k.stmt)}</span>
+        <span class="kp-td kp-c-prio">${escapeHTML(k.prio)}</span>
+        <span class="kp-td kp-c-type"><span class="pill br">${escapeHTML(k.type)}</span></span>
+        <span class="kp-td kp-td-ev kp-c-ev">${escapeHTML(k.ev)}</span>
+        <span class="kp-td kp-td-src kp-c-src">${escapeHTML(k.src)}</span>
+      </div>`).join("")}
+    </div>`;
+  }
+
   function kpContentHTML(docId) {
     const d = DOCS[docId];
     if (!d.kp || d.kp.length === 0) {
@@ -521,15 +697,10 @@
     }
     return `<div class="lib-head"><div class="lh-ic"><i data-lucide="list-checks"></i></div>
         <div><div class="lh-title">${d.name}</div><div class="lh-sub">知识点 · ${d.kp.length} 条</div></div>
-        <div class="lib-actions"><button class="btn ghost sm" id="dlEIUKp"><i data-lucide="download"></i>导出知识点</button></div></div>
+        <div class="lib-actions"><button class="btn ghost sm" id="kpFullscreenBtn"><i data-lucide="maximize"></i>放大查看</button><button class="btn ghost sm" id="dlEIUKp"><i data-lucide="download"></i>导出知识点</button></div></div>
       <div class="card card-pad">
-        <div class="kp-head"><span>编号</span><span>知识点陈述</span><span>类型</span><span>优先级</span><span>状态</span></div>
-        ${d.kp.map(k => `<div class="kp-row">
-          <span class="kp-id">${k.id}</span><span class="kp-stmt">${k.stmt}</span>
-          <span><span class="pill br">${k.type}</span></span><span class="muted">${k.prio}</span>
-          <span><span class="badge ${k.state === "已覆盖" ? "ok" : "warn"}">${k.state}</span></span>
-        </div>`).join("")}
-        <p class="muted mt">证据定位示例：${d.kp[0].ev}；置信度≥0.9 视为已覆盖。</p>
+        ${kpTableHTML(d.kp)}
+        <p class="muted mt">证据定位示例：${d.kp[0].ev}；来源文档：${d.kp[0].src}；置信度≥0.9 视为已覆盖。</p>
       </div>`;
   }
 
@@ -538,7 +709,33 @@
     if (mode === "doc") {
       $("#docContent").innerHTML = docContentHTML(docId);
       const dl = $("#docContent #dlEIUDoc"); if (dl) dl.onclick = () => downloadEIU(docId);
+      const kpDl = $("#docContent #dlEIUKp"); if (kpDl) kpDl.onclick = () => downloadEIU(docId);
+      // 在线查看：标题栏箭头点击展开/收回（默认收起，向下箭头展开、向上箭头收回）
+      const ovToggle = $("#docContent #ovToggle");
+      if (ovToggle) ovToggle.onclick = () => {
+        const prev = $("#docContent .doc-preview");
+        const willExpand = prev.classList.contains("collapsed");
+        const expanded = prev.classList.toggle("collapsed") === false;
+        ovToggle.querySelector(".t-arr").textContent = expanded ? "▾" : "▸";
+        if (willExpand) openOnlineView(docId); // 仅展开时按需从后端拉取原文
+      };
+      const ver = $("#docContent #btnVersion"); if (ver) ver.onclick = () => {
+        const d = DOCS[docId];
+        if (!d.versions || !d.versions.length) toast("演示环境：该文档暂无版本记录");
+        else toast("版本：" + d.versions.map(v => v.tag).join(" / "));
+      };
+      const kpf = $("#docContent #kpFullscreenBtn"); if (kpf) kpf.onclick = () => openKpFullscreen(DOCS[docId].kp, DOCS[docId].name);
+      bindKpColFilters($("#docContent"));
+      bindKpColResize($("#docContent .kp-table"));
+      setupPager($("#docContent"), "#docContent .kp-tr", 15, "kpPager", "kpPage");
+      enableHScrollDrag($("#docContent .kp-table"));
     } else {
+      // 查看具体文档时，左目录已无导航价值，自动收起使问答对内容占满浏览器宽度
+      const qaSplit = $("#qaContent").closest(".lib-split");
+      const qaTreeEl = qaSplit ? qaSplit.querySelector(".tree") : null;
+      if (qaTreeEl) qaTreeEl.classList.add("collapsed");
+      if (qaSplit) qaSplit.classList.add("tree-hidden");
+      const rbEl = $(".tree-reopen"); if (rbEl) rbEl.classList.toggle("show", true);
       const d = DOCS[docId];
       if (!d.qa || !d.qa.length) {
         $("#qaContent").innerHTML = qaHead(docId) + emptyState("该文档无问答对", "已执行拒答验证：所选文档无可提取知识点，未生成问答对（不单独成栏）。");
@@ -661,8 +858,8 @@
         if (e.target.closest(".tree-dots")) return;
         container.querySelectorAll(".tree-child.active").forEach(r => r.classList.remove("active"));
         row.classList.add("active");
-        state.sel.qa = row.dataset.qa;
-        renderLibContent("qa", row.dataset.qa);
+        state.sel.qa = row.dataset.id;
+        renderLibContent("qa", row.dataset.id);
       });
       row.addEventListener("dragstart", (e) => {
         e.dataTransfer.setData("text/qa-id", row.dataset.qaId);
@@ -815,12 +1012,12 @@
   function qaRowHTML(q) {
     // 仿 Excel：问题/答案分列，证据为原文语句，来源文档用 / 分级显示，类型标识 基础问题 / 泛化问题
     return `<div class="qa-row" data-id="${q.id}">
-      <div class=" qa-cell qa-q-cell" data-c="q"><span>${q.q}</span></div>
-      <div class="qa-cell qa-a-cell" data-c="a"><span>${q.a}</span></div>
-      <div class="qa-cell qa-diff-cell" data-c="diff"><span>${q.diff}</span></div>
+      <div class=" qa-cell qa-q-cell" data-c="q"><span title="${escapeHTML(q.q)}">${escapeHTML(q.q)}</span></div>
+      <div class="qa-cell qa-a-cell" data-c="a"><span title="${escapeHTML(q.a)}">${escapeHTML(q.a)}</span></div>
+      <div class="qa-cell qa-diff-cell" data-c="diff"><span>${escapeHTML(q.diff)}</span></div>
       <div class="qa-cell qa-review-cell" data-c="review">${reviewBadge(q)}</div>
-      <div class="qa-cell qa-ev-cell" data-c="evidence"><span>${q.evidence || "—"}</span></div>
-      <div class="qa-cell qa-src-cell" data-c="src"><span>${q.src}</span></div>
+      <div class="qa-cell qa-ev-cell" data-c="evidence"><span title="${escapeHTML(q.evidence || "（无）")}">${escapeHTML(q.evidence || "（无）")}</span></div>
+      <div class="qa-cell qa-src-cell" data-c="src"><span title="${escapeHTML(q.src || "（无）")}">${escapeHTML(q.src || "（无）")}</span></div>
       <div class="qa-cell qa-type-cell"><span class="qa-badge ${q.type}">${typeLabel(q.type)}</span></div>
       <span class="ds-actions">
         <button class="btn ghost sm" data-act="qa-edit" title="编辑"><i data-lucide="pencil"></i></button>
@@ -836,9 +1033,10 @@
     const rr = reviewRatio(rows);
     const review = rows.filter(r => r.review === "待审核");
     return `
+      <div class="sec-toggle qa-review-toggle" id="qaReviewToggle"><span class="t-arr">▸</span>质量与人工审核（通过 / 驳回比例）</div>
       <div class="ds-grid">
         <div class="ds-block"><div class="ds-title">难度分布（简单 / 中等 / 难）</div><div class="chart-box"><canvas id="${chartId}"></canvas></div></div>
-        <div class="ds-block"><div class="ds-title">质量与人工审核（通过 / 驳回比例）</div>
+        <div class="ds-block qa-review-block collapsed" id="qaReviewBlock"><div class="ds-title">质量与人工审核（通过 / 驳回比例）</div>
           <div class="stat-row"><span>通过比例</span><b>${rr.total ? Math.round(rr.pass / rr.total * 100) : 0}%</b></div>
           <div class="stat-row"><span>驳回比例</span><b>${rr.total ? Math.round(rr.reject / rr.total * 100) : 0}%</b></div>
           <div class="stat-row"><span>待审核</span><b>${rr.pending}</b></div>
@@ -856,17 +1054,21 @@
           </div>
         </div>
         <button class="btn ghost sm" id="qaExportBtn"><i data-lucide="download"></i>导出问答对</button>
+        <div class="qa-toolbar-right">
+          <div class="qa-search"><i data-lucide="search"></i><input id="qaSearch" type="text" placeholder="搜索问题/答案/证据/来源…" /></div>
+          <button class="btn ghost icon-only sm" id="qaFullscreenBtn" title="全屏查看"><i data-lucide="maximize"></i></button>
+        </div>
       </div>
       <div class="card card-pad">
         <div class="qa-table" id="qaTable">
           <div class="qa-col-head">
-            <div class="qa-cell qa-q-cell">问题<i data-lucide="filter" class="col-filter" data-filter="q"></i></div>
-            <div class="qa-cell qa-a-cell">答案<i data-lucide="filter" class="col-filter" data-filter="a"></i></div>
-            <div class="qa-cell qa-diff-cell">难度<i data-lucide="filter" class="col-filter" data-filter="diff"></i></div>
-            <div class="qa-cell qa-review-cell">审核<i data-lucide="filter" class="col-filter" data-filter="review"></i></div>
-            <div class="qa-cell qa-ev-cell">证据<i data-lucide="filter" class="col-filter" data-filter="evidence"></i></div>
-            <div class="qa-cell qa-src-cell">来源文档<i data-lucide="filter" class="col-filter" data-filter="src"></i></div>
-            <div class="qa-cell qa-type-cell">类型<i data-lucide="filter" class="col-filter" data-filter="type"></i></div>
+            <div class="qa-cell qa-q-cell">问题<span class="col-filter" data-filter="q"><i data-lucide="filter"></i></span><span class="qa-resize" data-resize="0"></span></div>
+            <div class="qa-cell qa-a-cell">答案<span class="col-filter" data-filter="a"><i data-lucide="filter"></i></span><span class="qa-resize" data-resize="1"></span></div>
+            <div class="qa-cell qa-diff-cell">难度<span class="col-filter" data-filter="diff"><i data-lucide="filter"></i></span><span class="qa-resize" data-resize="2"></span></div>
+            <div class="qa-cell qa-review-cell">审核<span class="col-filter" data-filter="review"><i data-lucide="filter"></i></span><span class="qa-resize" data-resize="3"></span></div>
+            <div class="qa-cell qa-ev-cell">证据<span class="col-filter" data-filter="evidence"><i data-lucide="filter"></i></span><span class="qa-resize" data-resize="4"></span></div>
+            <div class="qa-cell qa-src-cell">来源文档<span class="col-filter" data-filter="src"><i data-lucide="filter"></i></span><span class="qa-resize" data-resize="5"></span></div>
+            <div class="qa-cell qa-type-cell">类型<span class="col-filter" data-filter="type"><i data-lucide="filter"></i></span><span class="qa-resize" data-resize="6"></span></div>
             <div class="qa-cell qa-act-cell">操作</div>
           </div>
           <div id="qaRows">${rows.map(qaRowHTML).join("")}</div>
@@ -878,8 +1080,17 @@
     if (state.folderSel.qa) { const ids = descendantDocs(findNode(state.folderSel.qa)); return ids[0]; }
     return state.sel.qa;
   }
+  // 当前 qalib 选中范围内的全部问答对（文档详情或目录聚合）
+  function currentQaRows() {
+    if (state.folderSel.qa) {
+      const ids = descendantDocs(findNode(state.folderSel.qa));
+      return ids.flatMap(i => DOCS[i] ? DOCS[i].qa : []);
+    }
+    const id = state.sel.qa;
+    return id && DOCS[id] ? DOCS[id].qa : [];
+  }
   function addQa(docId, preset) {
-    const base = { id: "Q-" + (Date.now() % 100000), q: "新问题（点击单元格编辑）", a: "待补充答案", diff: "简单", review: "待审核", evidence: "—", src: "—" };
+    const base = { id: "Q-" + (Date.now() % 100000), q: "新问题（点击单元格编辑）", a: "待补充答案", diff: "简单", review: "待审核", evidence: "（无）", src: "（无）" };
     DOCS[docId].qa.push(Object.assign(base, preset || {}));
     state.folderSel.qa = null; state.sel.qa = docId; showLib("qa");
   }
@@ -914,7 +1125,15 @@
     // 单元格双击编辑（仿 Excel）
     $$("#qaContent .qa-row .qa-cell[data-c]").forEach(cell => {
       cell.addEventListener("dblclick", () => startCellEdit(cell));
+      // 单击显示单元格全文（延时以区分双击编辑）
+      cell.addEventListener("click", () => {
+        if (cell.dataset._editing) return;
+        const t = setTimeout(() => showCellFull(cell), 220);
+        cell.addEventListener("dblclick", () => clearTimeout(t), { once: true });
+      });
     });
+    // 列宽拖拽调整
+    bindQaColResize();
     $$("#qaContent .qa-row").forEach(row => {
       const id = row.dataset.id;
       const edit = row.querySelector("[data-act='qa-edit']"), del = row.querySelector("[data-act='qa-del']");
@@ -931,11 +1150,244 @@
       };
     });
     const exp = $("#qaExportBtn");
-    if (exp) exp.onclick = () => exportQaSet(currentQaDoc());
+    if (exp) exp.onclick = () => {
+      const rows = currentQaRows();
+      const name = state.folderSel.qa ? state.folderSel.qa : (state.sel.qa && DOCS[state.sel.qa] ? DOCS[state.sel.qa].name : "问答对集");
+      exportQaRows(rows, name);
+    };
+    // 文本搜索过滤（跨 问题/答案/证据/来源文档）
+    const search = $("#qaSearch");
+    if (search) search.oninput = () => {
+      const kw = search.value.trim().toLowerCase();
+      $$("#qaRows .qa-row").forEach(row => {
+        if (!kw) { row.style.display = ""; delete row.dataset.filtered; return; }
+        const txt = row.textContent.toLowerCase();
+        if (txt.includes(kw)) { row.style.display = ""; delete row.dataset.filtered; }
+        else { row.style.display = "none"; row.dataset.filtered = "1"; }
+      });
+      state.qaPage = 1; setupPager($("#qaContent"), "#qaRows .qa-row", 15, "qaPager", "qaPage");
+    };
+    // 全屏放大查看
+    const fsBtn = $("#qaFullscreenBtn");
+    if (fsBtn) fsBtn.onclick = () => openQaFullscreen(currentQaRows(), state.sel.qa && DOCS[state.sel.qa] ? DOCS[state.sel.qa].name : (state.folderSel.qa || "问答对集"));
     $$("#qaContent [data-rv]").forEach(b => {
       b.onclick = () => {
         const d = DOCS[findDocOfQa(b.dataset.id)]; const q = d.qa.find(x => x.id === b.dataset.id);
         if (!q) return; q.review = b.dataset.rv === "pass" ? "已通过" : "已驳回"; showLib("qa");
+      };
+    });
+    bindQaReviewToggle($("#qaContent"));
+    // 分页（每页 15）+ 横向拖动/滚轮查看全局
+    setupPager($("#qaContent"), "#qaRows .qa-row", 15, "qaPager", "qaPage");
+    enableHScrollDrag($("#qaContent .qa-table"));
+  }
+
+  // 全屏放大查看问答对（独立浮层，内容占满浏览器）
+  function openQaFullscreen(rows, name) {
+    if (!rows.length) { toast("当前没有可查看的问答对"); return; }
+    $$(".qa-fullscreen").forEach(e => e.remove());
+    const overlay = document.createElement("div");
+    overlay.className = "qa-fullscreen";
+    overlay.innerHTML = `
+      <div class="qaf-bar">
+        <div class="qaf-title">问答对查看 · ${escapeHTML(name)}</div>
+        <div class="qaf-actions">
+          <div class="qa-search"><i data-lucide="search"></i><input id="qafSearch" type="text" placeholder="搜索问题/答案/证据/来源…" /></div>
+          <button class="btn ghost icon-only sm" id="qafClose" title="退出全屏"><i data-lucide="minimize"></i></button>
+        </div>
+      </div>
+      <div class="qaf-body"><div class="lib-head"><div class="lh-ic"><i data-lucide="message-square-text"></i></div><div><div class="lh-title">${escapeHTML(name)}</div><div class="lh-sub">问答对 · ${rows.length} 条</div></div></div>${qaBlockHTML(rows, "qaFsChart")}</div>`;
+    document.body.appendChild(overlay);
+    document.body.style.overflow = "hidden";
+    const cId = "qaFsChart";
+    setTimeout(() => {
+      // 图表
+      const cv = document.getElementById(cId);
+      if (cv && window.Chart) {
+        const c = { "简单": 0, "中等": 0, "难": 0 };
+        rows.forEach(r => { c[r.diff] = (c[r.diff] || 0) + 1; });
+        new Chart(cv, { type: "doughnut", data: { labels: ["简单", "中等", "难"], datasets: [{ data: [c["简单"], c["中等"], c["难"]], backgroundColor: ["#5FBF97", "#E0A85E", "#E08AA0"], borderWidth: 0 }] }, options: { maintainAspectRatio: false, cutout: "62%", plugins: { legend: { position: "bottom", labels: { font: { size: 11 } } } } } });
+      }
+      // 单元格：点击显示全文 + 编辑
+      bindQaCellInteractions(overlay);
+      bindQaReviewToggle(overlay);
+      // 列筛选
+      overlay.querySelectorAll(".col-filter").forEach(f => { f.onclick = (e) => { e.stopPropagation(); openColFilter(f.dataset.filter, f); }; });
+      bindQaColResizeIn(overlay.querySelector("#qaTable"));
+      // 搜索
+      const s = overlay.querySelector("#qafSearch");
+      if (s) s.oninput = () => {
+        const kw = s.value.trim().toLowerCase();
+        overlay.querySelectorAll("#qaRows .qa-row").forEach(row => {
+          if (!kw) { row.style.display = ""; delete row.dataset.filtered; return; }
+          if (row.textContent.toLowerCase().includes(kw)) { row.style.display = ""; delete row.dataset.filtered; }
+          else { row.style.display = "none"; row.dataset.filtered = "1"; }
+        });
+        setupPager(overlay, "#qaRows .qa-row", 15, "qaFsPager", "qaPage");
+      };
+      icons();
+      setupPager(overlay, "#qaRows .qa-row", 15, "qaFsPager", "qaPage");
+      enableHScrollDrag(overlay.querySelector(".qa-table"));
+    }, 0);
+    overlay.querySelector("#qafClose").onclick = () => { overlay.remove(); document.body.style.overflow = ""; };
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) { overlay.remove(); document.body.style.overflow = ""; } });
+  }
+  // 放大查看知识点（全浏览器），可再点「缩小」退出
+  function openKpFullscreen(all, name) {
+    if (!all || !all.length) { toast("当前文档没有知识点"); return; }
+    $$(".kp-fullscreen").forEach(e => e.remove());
+    const overlay = document.createElement("div");
+    overlay.className = "kp-fullscreen";
+    overlay.innerHTML = `
+      <div class="qaf-bar">
+        <div class="qaf-title">知识点查看 · ${escapeHTML(name)}</div>
+        <div class="qaf-actions">
+          <div class="qa-search"><i data-lucide="search"></i><input id="kpfSearch" type="text" placeholder="搜索知识点/证据/来源…" /></div>
+          <button class="btn ghost icon-only sm" id="kpfClose" title="缩小"><i data-lucide="minimize"></i></button>
+        </div>
+      </div>
+      <div class="qaf-body"><div class="lib-head"><div class="lh-ic"><i data-lucide="list-checks"></i></div><div><div class="lh-title">${escapeHTML(name)}</div><div class="lh-sub">知识点 · ${all.length} 条</div></div></div>${kpTableHTML(all)}</div>`;
+    document.body.appendChild(overlay);
+    document.body.style.overflow = "hidden";
+    setTimeout(() => {
+      const s = overlay.querySelector("#kpfSearch");
+      if (s) s.oninput = () => {
+        const kw = s.value.trim().toLowerCase();
+        overlay.querySelectorAll(".kp-tr").forEach(row => {
+          if (!kw) { row.style.display = ""; delete row.dataset.filtered; return; }
+          if (row.textContent.toLowerCase().includes(kw)) { row.style.display = ""; delete row.dataset.filtered; }
+          else { row.style.display = "none"; row.dataset.filtered = "1"; }
+        });
+        setupPager(overlay, ".kp-tr", 15, "kpFsPager", "kpPage");
+      };
+      icons();
+      bindKpColFilters(overlay);
+      bindKpColResize(overlay.querySelector(".kp-table"));
+      setupPager(overlay, ".kp-tr", 15, "kpFsPager", "kpPage");
+      enableHScrollDrag(overlay.querySelector(".kp-table"));
+    }, 0);
+    overlay.querySelector("#kpfClose").onclick = () => { overlay.remove(); document.body.style.overflow = ""; };
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) { overlay.remove(); document.body.style.overflow = ""; } });
+  }
+  // 在指定容器内绑定「质量与人工审核」展开/收回（箭头向下展开、向上收回）
+  function bindQaReviewToggle(scope) {
+    const tg = scope.querySelector("#qaReviewToggle");
+    const blk = scope.querySelector("#qaReviewBlock");
+    if (!tg || !blk) return;
+    tg.onclick = () => {
+      const collapsed = blk.classList.toggle("collapsed");
+      const arr = tg.querySelector(".t-arr");
+      if (arr) arr.textContent = collapsed ? "▸" : "▾";
+    };
+  }
+  // 在指定容器内绑定问答对单元格交互（点击显示全文 + 双击编辑），供主视图与全屏共用
+  function bindQaCellInteractions(scope) {
+    scope.querySelectorAll(".qa-row .qa-cell[data-c]").forEach(cell => {
+      cell.addEventListener("dblclick", () => startCellEdit(cell));
+      cell.addEventListener("click", () => {
+        if (cell.dataset._editing) return;
+        const t = setTimeout(() => showCellFull(cell), 220);
+        cell.addEventListener("dblclick", () => clearTimeout(t), { once: true });
+      });
+    });
+  }
+  // 在指定表格内绑定列宽拖拽
+  function bindQaColResizeIn(table) {
+    if (!table) return;
+    const defCols = [220, 300, 72, 92, 300, 200, 110, 76];
+    const cur = () => {
+      const v = getComputedStyle(table).getPropertyValue("--qa-cols");
+      if (v && v.trim()) return v.trim().split(/\s+/).map(s => parseFloat(s));
+      return defCols.slice();
+    };
+    const apply = (cols) => { table.style.setProperty("--qa-cols", cols.map(c => Math.max(56, c) + "px").join(" ")); table.dispatchEvent(new Event("scroll")); };
+    apply(cur());
+    table.querySelectorAll(".qa-resize").forEach(handle => {
+      handle.onmousedown = (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const idx = parseInt(handle.dataset.resize, 10);
+        const startX = e.clientX; const startW = cur()[idx]; handle.classList.add("active");
+        const move = (ev) => { const cols = cur(); cols[idx] = Math.max(56, startW + (ev.clientX - startX)); apply(cols); };
+        const up = () => { handle.classList.remove("active"); document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up); };
+        document.addEventListener("mousemove", move); document.addEventListener("mouseup", up);
+      };
+    });
+  }
+  // 点击单元格：弹出浮层显示该单元格全部文字
+  const QA_COL_NAMES = { q: "问题", a: "答案", diff: "难度", evidence: "证据", src: "来源文档" };
+  function showCellFull(cell) {
+    const c = cell.dataset.c;
+    const span = cell.querySelector("span");
+    const txt = (span ? span.textContent : cell.textContent).trim();
+    if (!txt || txt === "—") return;
+    $$(".cell-popover").forEach(p => p.remove());
+    const pop = document.createElement("div");
+    pop.className = "cell-popover wide";
+    let editor = "";
+    // 可编辑字段：问题/答案/证据/来源用多行文本；难度/审核用下拉
+    if (["q", "a", "evidence", "src"].includes(c)) {
+      editor = `<textarea class="cell-edit-area" data-edit="${c}">${escapeHTML(txt)}</textarea><div class="cell-pop-actions"><button class="btn primary sm" data-save>保存</button><button class="btn ghost sm" data-cancel>取消</button></div>`;
+    } else if (c === "diff") {
+      editor = `<select class="cell-edit-area" data-edit="diff">${["简单", "中等", "难"].map(v => `<option ${v === txt ? "selected" : ""}>${v}</option>`).join("")}</select><div class="cell-pop-actions"><button class="btn primary sm" data-save>保存</button><button class="btn ghost sm" data-cancel>取消</button></div>`;
+    } else if (c === "review") {
+      editor = `<select class="cell-edit-area" data-edit="review">${["已通过", "已驳回", "待审核"].map(v => `<option ${v === txt ? "selected" : ""}>${v}</option>`).join("")}</select><div class="cell-pop-actions"><button class="btn primary sm" data-save>保存</button><button class="btn ghost sm" data-cancel>取消</button></div>`;
+    }
+    pop.innerHTML = `<div class="cell-pop-title">${QA_COL_NAMES[c] || "内容"}</div><div class="cell-pop-body">${escapeHTML(txt)}</div>${editor}`;
+    document.body.appendChild(pop);
+    const r = cell.getBoundingClientRect();
+    let top = window.scrollY + r.bottom + 6;
+    let left = window.scrollX + r.left;
+    const maxW = Math.min(560, window.innerWidth - 20);
+    pop.style.maxWidth = maxW + "px";
+    if (left + 560 > window.scrollX + window.innerWidth - 10) left = window.scrollX + window.innerWidth - 560 - 10;
+    pop.style.top = top + "px";
+    pop.style.left = Math.max(10, left) + "px";
+    // 编辑保存：直接写回数据并刷新视图
+    const saveBtn = pop.querySelector("[data-save]");
+    if (saveBtn) saveBtn.onclick = () => {
+      const row = cell.closest(".qa-row"); const id = row ? row.dataset.id : null;
+      const d = id ? DOCS[findDocOfQa(id)] : null; const q = d ? d.qa.find(x => x.id === id) : null;
+      if (q) { const f = pop.querySelector("[data-edit]").value.trim(); q[c] = f; showLib("qa"); }
+      pop.remove();
+    };
+    const cancelBtn = pop.querySelector("[data-cancel]");
+    if (cancelBtn) cancelBtn.onclick = () => pop.remove();
+    const close = (ev) => {
+      if (!pop.contains(ev.target) && !cell.contains(ev.target)) { pop.remove(); document.removeEventListener("click", close); }
+    };
+    setTimeout(() => document.addEventListener("click", close), 0);
+  }
+  // 列宽拖拽调整
+  function bindQaColResize() {
+    const table = $("#qaTable"); if (!table) return;
+    const colCount = 8;
+    const defCols = [220, 300, 72, 92, 300, 200, 110, 76];
+    const cur = () => {
+      const v = getComputedStyle(table).getPropertyValue("--qa-cols");
+      if (v && v.trim()) return v.trim().split(/\s+/).map(s => parseFloat(s));
+      return defCols.slice();
+    };
+    const apply = (cols) => { table.style.setProperty("--qa-cols", cols.map(c => Math.max(56, c) + "px").join(" ")); table.dispatchEvent(new Event("scroll")); };
+    apply(cur());
+    $$("#qaContent .qa-resize").forEach(handle => {
+      handle.onmousedown = (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const idx = parseInt(handle.dataset.resize, 10);
+        const startX = e.clientX;
+        const startW = cur()[idx];
+        handle.classList.add("active");
+        const move = (ev) => {
+          const cols = cur();
+          cols[idx] = Math.max(56, startW + (ev.clientX - startX));
+          apply(cols);
+        };
+        const up = () => {
+          handle.classList.remove("active");
+          document.removeEventListener("mousemove", move);
+          document.removeEventListener("mouseup", up);
+        };
+        document.addEventListener("mousemove", move);
+        document.addEventListener("mouseup", up);
       };
     });
   }
@@ -979,12 +1431,156 @@
       $$("#qaRows .qa-row").forEach(row => {
         const cell = row.querySelector("." + cls);
         const f = field === "review" ? (cell ? cell.textContent.trim() : "—") : ((cell && cell.querySelector("span")) ? cell.querySelector("span").textContent.trim() : "—");
-        row.style.display = keep.has(f) ? "" : "none";
+        if (keep.has(f)) { row.style.display = ""; delete row.dataset.filtered; }
+        else { row.style.display = "none"; row.dataset.filtered = "1"; }
       });
-      pop.remove();
+      state.qaPage = 1; refreshPagers(); pop.remove();
     };
     const closeF = (ev) => { if (!pop.contains(ev.target)) { pop.remove(); document.removeEventListener("click", closeF); } };
     setTimeout(() => document.addEventListener("click", closeF), 0);
+  }
+
+  // 知识点表格列筛选（与问答对列筛选机制一致）
+  const kpColFilterLabel = { stmt: "知识点", prio: "推荐", type: "类型", ev: "证据", src: "来源文档" };
+  function openKpColFilter(field, anchor) {
+    $$(".ctx-popup").forEach(p => p.remove());
+    const pop = document.createElement("div"); pop.className = "ctx-popup col-filter-pop";
+    const cells = $$(`.kp-c-${field}`);
+    const vals = [...new Set(cells.map(c => c.textContent.replace(/^#\d+\s*/, "").trim()).filter(Boolean))];
+    pop.innerHTML = `<div class="up-title">筛选：${kpColFilterLabel[field] || field}</div>` + vals.map(v => `<label class="cf-item"><input type="checkbox" checked data-v="${escapeHTML(v)}"/> ${escapeHTML(v)}</label>`).join("") + `<button class="cf-apply">应用</button>`;
+    document.body.appendChild(pop);
+    const rect = anchor ? anchor.getBoundingClientRect() : { bottom: 200, left: 200 };
+    pop.style.top = (rect.bottom + 6) + "px";
+    pop.style.left = Math.min(rect.left, window.innerWidth - 220) + "px";
+    pop.querySelector(".cf-apply").onclick = () => {
+      const keep = new Set([...pop.querySelectorAll("input[data-v]:checked")].map(x => x.dataset.v));
+      $$(`.kp-table .kp-tr`).forEach(row => {
+        const cell = row.querySelector(`.kp-c-${field}`);
+        const f = cell ? cell.textContent.replace(/^#\d+\s*/, "").trim() : "—";
+        if (keep.has(f)) { row.style.display = ""; delete row.dataset.filtered; }
+        else { row.style.display = "none"; row.dataset.filtered = "1"; }
+      });
+      state.kpPage = 1; refreshPagers(); pop.remove();
+    };
+    const closeF = (ev) => { if (!pop.contains(ev.target)) { pop.remove(); document.removeEventListener("click", closeF); } };
+    setTimeout(() => document.addEventListener("click", closeF), 0);
+  }
+  function bindKpColFilters(scope) {
+    (scope || document).querySelectorAll(".kp-table .col-filter").forEach(icon => {
+      icon.onclick = (e) => { e.stopPropagation(); openKpColFilter(icon.dataset.filter, icon); };
+    });
+  }
+  // 知识点表格列宽拖拽调整（与主问答对表一致）
+  function bindKpColResize(table) {
+    if (!table) return;
+    const defCols = [320, 96, 110, 220, 220];
+    const cur = () => {
+      const v = getComputedStyle(table).getPropertyValue("--kp-cols");
+      if (v && v.trim()) return v.trim().split(/\s+/).map(s => parseFloat(s));
+      return defCols.slice();
+    };
+    const apply = (cols) => { table.style.setProperty("--kp-cols", cols.map(c => Math.max(56, c) + "px").join(" ")); table.dispatchEvent(new Event("scroll")); };
+    apply(cur());
+    table.querySelectorAll(".kp-resize").forEach(handle => {
+      handle.onmousedown = (e) => {
+        e.preventDefault(); e.stopPropagation();
+        const idx = parseInt(handle.dataset.resize, 10);
+        const startX = e.clientX; const startW = cur()[idx]; handle.classList.add("active");
+        // 阻止拖拽时触发单元格点击/筛选
+        const move = (ev) => { const cols = cur(); cols[idx] = Math.max(56, startW + (ev.clientX - startX)); apply(cols); };
+        const up = () => { handle.classList.remove("active"); document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up); };
+        document.addEventListener("mousemove", move); document.addEventListener("mouseup", up);
+      };
+    });
+  }
+
+  // 滚动容器增强：鼠标滚轮可竖向查看内容；Shift+滚轮（或触摸板纯横向）可横向查看；
+  // 按住空白处可左右拖动看全局。注意：竖向滚轮不拦截，交给原生滚动，避免表格卡死看不见上下内容。
+  function enableHScrollDrag(el) {
+    if (!el || el._hDragBound) return; el._hDragBound = true;
+    el.classList.add("scroll-drag");
+    let down = false, startX = 0, startLeft = 0, moved = false;
+    el.addEventListener("mousedown", (e) => {
+      if (e.target.closest("button, input, .col-filter, a, .qa-resize, .kp-resize, .qa-cell-editable")) return;
+      down = true; moved = false; startX = e.pageX; startLeft = el.scrollLeft; el.classList.add("dragging");
+    });
+    window.addEventListener("mouseup", () => { down = false; el.classList.remove("dragging"); });
+    window.addEventListener("mousemove", (e) => {
+      if (!down) return;
+      const dx = e.pageX - startX;
+      if (Math.abs(dx) > 3) moved = true;
+      el.scrollLeft = startLeft - dx;
+    });
+    // 阻止拖动误触发单元格点击
+    el.addEventListener("click", (e) => { if (moved) { e.stopPropagation(); e.preventDefault(); moved = false; } }, true);
+    // 横向滚动：Shift+滚轮 / 纯横向(deltaX) 直接横向；普通竖向滚轮滚到顶或底边界时自动转为横向（普通鼠标也能看右侧列）
+    el.addEventListener("wheel", (e) => {
+      const horiz = e.shiftKey || (Math.abs(e.deltaX) > Math.abs(e.deltaY));
+      if (horiz) {
+        el.scrollLeft += (e.deltaX !== 0 ? e.deltaX : e.deltaY);
+        e.preventDefault();
+        return;
+      }
+      if (el.scrollWidth > el.clientWidth + 1) {
+        const atTop = el.scrollTop <= 0;
+        const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 1;
+        if ((atTop && e.deltaY < 0) || (atBottom && e.deltaY > 0)) {
+          el.scrollLeft += e.deltaY;
+          e.preventDefault();
+        }
+      }
+    }, { passive: false });
+  }
+
+  // 分页：每页 perPage 条，可翻页 + 输入页码跳转；与列筛选/搜索叠加（仅对当前可见行分页）
+  function setupPager(scope, rowSel, perPage, pagerId, pageKey) {
+    const sc = scope || document;
+    const all = [...sc.querySelectorAll(rowSel)];
+    if (!all.length) return;
+    // 仅对「未被列筛选/搜索隐藏」的行分页（用 dataset.filtered 标记，避免分页自身隐藏状态干扰）
+    const vis = all.filter(r => r.dataset.filtered !== "1");
+    state[pageKey] = state[pageKey] || 1;
+    const total = vis.length;
+    const pages = Math.max(1, Math.ceil(total / perPage));
+    if (state[pageKey] > pages) state[pageKey] = pages;
+    const cur = state[pageKey];
+    all.forEach(r => { if (r.style.display !== "none") r.style.display = "none"; });
+    vis.forEach((r, i) => {
+      r.style.display = (i >= (cur - 1) * perPage && i < cur * perPage) ? "" : "none";
+    });
+    // 分页条挂载到表格容器同级（在表格后面）
+    let holder = sc.querySelector("#" + pagerId);
+    if (!holder) {
+      holder = document.createElement("div"); holder.id = pagerId; holder.className = "pager";
+      const table = sc.querySelector(".qa-table, .kp-table");
+      if (table && table.parentNode) table.parentNode.insertBefore(holder, table.nextSibling);
+    }
+    holder.innerHTML = `
+      <button data-pg="prev" ${cur <= 1 ? "disabled" : ""}>‹ 上一页</button>
+      <span class="pg-info">第</span><input type="number" min="1" max="${pages}" value="${cur}" data-pg-input />
+      <span class="pg-info">/ ${pages} 页（共 ${total} 条）</span>
+      <button data-pg="next" ${cur >= pages ? "disabled" : ""}>下一页 ›</button>`;
+    holder.querySelector('[data-pg="prev"]').onclick = () => { state[pageKey]--; setupPager(scope, rowSel, perPage, pagerId, pageKey); };
+    holder.querySelector('[data-pg="next"]').onclick = () => { state[pageKey]++; setupPager(scope, rowSel, perPage, pagerId, pageKey); };
+    const inp = holder.querySelector("[data-pg-input]");
+    inp.onchange = () => {
+      let v = parseInt(inp.value, 10); if (isNaN(v)) v = 1;
+      v = Math.max(1, Math.min(pages, v)); state[pageKey] = v; setupPager(scope, rowSel, perPage, pagerId, pageKey);
+    };
+    // 分页/筛选导致行数变化后，重算滚动提示（横向/竖向是否还有内容）
+    const tbl = sc.querySelector(".qa-table, .kp-table");
+    if (tbl) setTimeout(() => tbl.dispatchEvent(new Event("scroll")), 0);
+  }
+  // 筛选/数据变化后刷新所有可见表格的分页（覆盖主视图与全屏浮层）
+  function refreshPagers() {
+    const qaMain = $("#qaContent .qa-table");
+    if (qaMain) { setupPager($("#qaContent"), "#qaRows .qa-row", 15, "qaPager", "qaPage"); }
+    const kpMain = $("#docContent .kp-table");
+    if (kpMain) { setupPager($("#docContent"), "#docContent .kp-tr", 15, "kpPager", "kpPage"); }
+    const qaFs = $(".qa-fullscreen .qa-table");
+    if (qaFs) { setupPager($(".qa-fullscreen"), ".qa-fullscreen .qa-row", 15, "qaFsPager", "qaPage"); }
+    const kpFs = $(".kp-fullscreen .kp-table");
+    if (kpFs) { setupPager($(".kp-fullscreen"), ".kp-fullscreen .kp-tr", 15, "kpFsPager", "kpPage"); }
   }
 
   // 从文件导入问答对（含质量门禁审核）
@@ -1065,18 +1661,23 @@
   }
   function exportQaSet(docId) {
     const d = DOCS[docId]; if (!d) return;
+    exportQaRows(d.qa, d.name);
+  }
+  // 导出一组问答对（支持文件夹聚合/整库导出）
+  function exportQaRows(rows, name) {
+    if (!rows || !rows.length) { toast("当前没有可导出的问答对"); return; }
     const payload = {
-      doc: d.name,
-      qa_count: d.qa.length,
-      qa: d.qa.map(q => ({ id: q.id, q: q.q, a: q.a, diff: q.diff, type: typeLabel(q.type), review: q.review, evidence: q.evidence, src: q.src }))
+      doc: name,
+      qa_count: rows.length,
+      qa: rows.map(q => ({ id: q.id, q: q.q, a: q.a, diff: q.diff, type: typeLabel(q.type), review: q.review, evidence: q.evidence, src: q.src }))
     };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url; a.download = d.name.replace(/\.[^.]+$/, "") + "_问答对.json";
+    a.href = url; a.download = (name || "问答对集").replace(/[\\/:*?"<>|]/g, "_") + "_问答对.json";
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
-    toast(`已导出「${d.name}」的 ${d.qa.length} 条问答对`);
+    toast(`已导出「${name}」的 ${rows.length} 条问答对`);
   }
   // 新增问答对模板（CSV，列：问题|答案|难度|证据|来源文档）
   function downloadQaTemplate() {
@@ -1093,10 +1694,10 @@
 
   function kpFolderHTML(node, all) {
     if (!all.length) return `<div class="lib-head"><div class="lh-ic"><i data-lucide="folder-open"></i></div><div><div class="lh-title">${node.name}</div><div class="lh-sub">知识点</div></div></div>` + emptyState("该目录下无知识点", "已执行拒答验证：目录下文档无可提取知识点。");
-    return `<div class="lib-head"><div class="lh-ic"><i data-lucide="list-checks"></i></div><div><div class="lh-title">${node.name}</div><div class="lh-sub">知识点 · ${all.length} 条</div></div></div>
+    return `<div class="lib-head"><div class="lh-ic"><i data-lucide="list-checks"></i></div><div><div class="lh-title">${node.name}</div><div class="lh-sub">知识点 · ${all.length} 条</div></div>
+        <div class="lib-actions"><button class="btn ghost sm" id="kpFolderFullscreenBtn"><i data-lucide="maximize"></i>放大查看</button></div></div>
       <div class="card card-pad">
-        <div class="kp-head"><span>编号</span><span>知识点陈述</span><span>类型</span><span>优先级</span><span>状态</span></div>
-        ${all.map((k, i) => `<div class="kp-row"><span class="kp-id">KP-${(i + 1).toString().padStart(3, "0")}</span><span class="kp-stmt">${k.stmt}</span><span><span class="pill br">${k.type}</span></span><span class="muted">${k.prio}</span><span><span class="badge ${k.state === "已覆盖" ? "ok" : "warn"}">${k.state}</span></span></div>`).join("")}
+        ${kpTableHTML(all)}
       </div>`;
   }
   function qaHead(docId) {
@@ -1178,14 +1779,19 @@
   function downloadEIU(docId) {
     const d = DOCS[docId]; if (!d) return;
     const rows = d.kp || [];
-    const payload = { doc: d.name, eiu_count: rows.length, eiu: rows };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    // 导出 CSV：知识点 / 推荐 / 类型 / 证据(章节) / 来源文档，Excel 友好（含 BOM）
+    const head = ["知识点", "推荐", "类型", "证据", "来源文档"];
+    const esc = (v) => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`;
+    const lines = [head.map(esc).join(",")];
+    rows.forEach(k => lines.push([k.stmt, k.prio, k.type, k.ev, k.src].map(esc).join(",")));
+    const csv = "﻿" + lines.join("\r\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url; a.download = d.name.replace(/\.[^.]+$/, "") + "_知识点.json";
+    a.href = url; a.download = d.name.replace(/\.[^.]+$/, "") + "_知识点.csv";
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
-    toast(`已导出「${d.name}」的 ${rows.length} 条知识点（JSON）`);
+    toast(`已导出「${d.name}」的 ${rows.length} 条知识点（CSV）`);
   }
   function handleUpload(file) {
     const id = "u" + Date.now().toString(36) + Math.floor(Math.random() * 1000);
@@ -1244,6 +1850,31 @@
     renderSrcTree();
   }
 
+  /* 运行监测：演示环境无后端执行，仅展示已选文件并提供真实「导出已有问答对」下载 */
+  function renderMonitor() {
+    const el = $("#monitorList"); if (!el) return;
+    const srcIds = state.studioSrc || [];
+    if (!srcIds.length) {
+      el.innerHTML = emptyState("尚未选择文件", "在左侧「选择文件类型」下勾选源文件后，点击「开始生成」即可在此导出现有问答对。");
+      return;
+    }
+    const typeLabel = { doc: "待生成问答文件", qa: "仅泛化" }[state.studioType];
+    el.innerHTML = srcIds.map(id => {
+      const d = DOCS[id]; if (!d) return "";
+      const tag = state.studioType === "doc"
+        ? `难度${state.studioOpts.difficulties.join("/") || "未选"}${state.studioOpts.flatOutput ? "·扁平" : "·层级"}`
+        : `×${state.studioOpts.generalizeCount}`;
+      const qaN = (d.qa || []).length;
+      return `<div class="monitor-row">
+        <span class="mr-name">${d.name} · ${typeLabel} · ${tag}</span>
+        <span class="mr-meta">已有问答对 ${qaN} 条</span>
+        <span class="mr-pct"><button class="btn ghost sm mr-dl-btn" data-doc="${id}"><i data-lucide="download"></i>导出问答对</button></span>
+      </div>`;
+    }).join("");
+    icons();
+    $$("#monitorList .mr-dl-btn").forEach(b => { b.onclick = () => exportQaSet(b.dataset.doc); });
+  }
+
   function renderSrcTree() {
     const sel = new Set(state.studioSrc);
     state.srcCollapsed = state.srcCollapsed || {};
@@ -1261,7 +1892,7 @@
       const partSel = hasDocs && !allSel && docIds.some(id => sel.has(id));
       const icon = hasChildren ? "folder" : "file-text";
 
-      let html = `<div class="src-tn" style="padding-left:${depth*18+4}px">`;
+      let html = `<div class="src-tn${depth === 0 ? ' src-tn-root' : ''}" style="padding-left:${depth*18+4}px">`;
       html += hasChildren
         ? `<span class="src-tn-arr" data-folder="${node.name}">${collapsed[node.name] ? '▸' : '▾'}</span>`
         : `<span class="src-tn-arr noop"></span>`;
@@ -1281,22 +1912,27 @@
       return html;
     }
 
-    $("#srcList").innerHTML = renderNode(TREE, 0);
+    const wantPurpose = state.studioType === "qa" ? "gen" : "basic";
+    const groups = TREE.children.filter(c => c.purpose === wantPurpose);
+    $("#srcList").innerHTML = groups.length
+      ? groups.map(c => `<div class="src-group">${renderNode(c, 0)}</div>`).join("")
+      : emptyState("该类型下暂无语料", "当前语料库中没有「" + (state.studioType === "qa" ? "仅泛化" : "基础问题") + "输入文档」。");
     icons();
 
     $$("#srcList .src-tn-arr[data-folder]").forEach(arr => {
       arr.onclick = () => { collapsed[arr.dataset.folder] = !collapsed[arr.dataset.folder]; renderSrcTree(); };
     });
-    $$("#srcList .src-tn-chk input[type=checkbox]").forEach(cb => {
-      cb.onclick = (e) => {
-        e.stopPropagation();
-        const ids = cb.dataset.docs.split(",").filter(Boolean);
-        if (cb.checked) { ids.forEach(id => sel.add(id)); }
-        else { ids.forEach(id => sel.delete(id)); }
-        state.studioSrc = [...sel].sort();
-        renderSrcTree();
-      };
-    });
+      $$("#srcList .src-tn-chk input[type=checkbox]").forEach(cb => {
+        cb.onclick = (e) => {
+          e.stopPropagation();
+          const ids = cb.dataset.docs.split(",").filter(Boolean);
+          if (cb.checked) { ids.forEach(id => sel.add(id)); }
+          else { ids.forEach(id => sel.delete(id)); }
+          state.studioSrc = [...sel].sort();
+          renderSrcTree();
+        };
+      });
+      renderMonitor();
   }
 
   /* 渲染选项区：待生成问答文件 → 问答对生成（跨块+跨文档+难度多选+解释）；待泛化文件 → 问题泛化（数量+保留原始） */
@@ -1519,35 +2155,31 @@
     });
     // 运行并监控
     $("#studioRun").onclick = () => {
-      const typeLabel = { doc: "待生成问答文件", qa: "待泛化文件" }[state.studioType];
       const srcIds = state.studioSrc || [];
       if (!srcIds.length) { toast("请先选择文件"); return; }
-      // 检查是否有可生成的内容
-      let hasContent = false;
-      if (state.studioType === "doc") {
-        hasContent = srcIds.some(id => DOCS[id] && DOCS[id].kp && DOCS[id].kp.length > 0);
-      } else {
-        hasContent = srcIds.some(id => DOCS[id] && DOCS[id].qa && DOCS[id].qa.length > 0);
-      }
-      if (!hasContent) { toast("无问题"); return; }
-      // 待泛化文件：检查难度是否勾选
+      // 待生成问答文件：需勾选至少一种难度
       if (state.studioType === "doc" && state.studioOpts.difficulties.length === 0) { toast("请至少选择一种难度"); return; }
-      let name;
-      if (srcIds.length === 1) {
-        name = (DOCS[srcIds[0]] || {}).name || srcIds[0];
-      } else {
-        name = srcIds.length + " 个文档";
-      }
-      const row = document.createElement("div"); row.className = "monitor-row";
-      const tag = state.studioType === "doc" ? `难度${state.studioOpts.difficulties.join("/")}${state.studioOpts.flatOutput ? "·扁平" : "·层级"}` : `×${state.studioOpts.generalizeCount}`;
-      row.innerHTML = `<span class="mr-name">${name} · ${typeLabel} · ${tag}</span><span class="mr-bar"><span style="width:0%"></span></span><span class="mr-pct">0%</span>`;
-      $("#monitorList").prepend(row);
-      let p = 0; const bar = row.querySelector(".mr-bar > span"), pct = row.querySelector(".mr-pct");
-      const iv = setInterval(() => { p += 14; if (p >= 100) { p = 100; clearInterval(iv); pct.innerHTML = '<a href="#" class="mr-dl-link" data-goto="qalib">下载</a>'; pct.querySelector(".mr-dl-link").onclick = e => { e.preventDefault(); goto("qalib"); }; } bar.style.width = p + "%"; if (p < 100) pct.textContent = p + "%"; }, 180);
+      // 演示环境：后端生成服务未实现，不跑假进度；直接展示已选文件并提供「导出已有问答对」
+      renderMonitor();
+      const totalQa = srcIds.reduce((s, id) => s + ((DOCS[id] && DOCS[id].qa) ? DOCS[id].qa.length : 0), 0);
       const label = state.studioType === "doc" ? "问答对生成" : "问题泛化";
-      toast(`已启动：${name} · ${label}`);
+      toast(`演示环境：生成服务未接入；已列出 ${srcIds.length} 个已选文件，可导出其现有问答对（共 ${totalQa} 条）`);
     };
-    $("#bellBtn").onclick = () => toast("提醒：知识抽取完成 · 评测完成 · 待人工审核 12 条");
+
+    $("#bellBtn").onclick = () => {
+      const pending = NAV.filter(n => n.badge && n.badge.unread)
+        .reduce((s, n) => s + unreadCount(n.view), 0);
+      toast(pending
+        ? `提醒：知识抽取完成 · 评测完成 · 新生成问答对 ${pending} 个尚未查看`
+        : "提醒：知识抽取完成 · 评测完成 · 暂无待查看的新问答对");
+    };
+    // 输出问答对库：页面级「导出问答对」（导出当前选中文档/目录下全部问答对）
+    const qaLibExport = $("#qaLibExportBtn");
+    if (qaLibExport) qaLibExport.onclick = () => {
+      const rows = currentQaRows();
+      const name = state.folderSel.qa ? state.folderSel.qa : (state.sel.qa && DOCS[state.sel.qa] ? DOCS[state.sel.qa].name : "全部问答对");
+      exportQaRows(rows, name);
+    };
     // 输入文档库：上传文档 → 选择目标目录 → 自动抽取知识点（含进度展示）
     const uploadInput = $("#uploadInput");
     if (uploadInput) {
@@ -1587,7 +2219,34 @@
     clearTimeout(toast._t); toast._t = setTimeout(() => t.style.display = "none", 2200);
   }
 
-  // 启动
-  renderNav(); syncBell(); bindGlobal(); renderSrcList(); renderStudioOpts(); goto("overview");
+  // 启动：先拉取后端真实数据，再渲染（未实现部分自然留空）
+  (async function boot() {
+    await loadData();
+    // 默认选中第一份文档（若有）
+    const firstDoc = Object.keys(DOCS)[0];
+    if (firstDoc) { state.sel.doc = firstDoc; state.sel.kp = firstDoc; state.sel.qa = firstDoc; state.studioSrc = [firstDoc]; }
+    renderNav(); syncBell(); bindGlobal(); renderSrcList(); renderStudioOpts(); renderMonitor(); goto("overview");
+    fillOverviewStats();
+  })();
+
+  // 概览：问答对总量 + 一句文档大致内容概览（不展示建议/多跳/回溯率等）
+  function fillOverviewStats() {
+    const docCount = Object.keys(DOCS).length;
+    const qaTotal = Object.values(DOCS).reduce((s, d) => s + (d.qa ? d.qa.length : 0), 0);
+    const el = $("#kpiQaTotal");
+    if (el) el.textContent = qaTotal;
+
+    const ins = $("#hlInsight");
+    if (!ins) return;
+    if (!docCount) { ins.textContent = "当前暂无已加载的输入文档。"; return; }
+    const topics = new Set();
+    Object.values(DOCS).forEach(d => {
+      (d.purposes && d.purposes.length ? d.purposes : ["基础问题输入文档"]).forEach(p => {
+        topics.add(p === "gen" ? "泛化问题" : "基础问题");
+      });
+    });
+    const topicTxt = [...topics].join("、");
+    ins.textContent = `当前输入文档库共 ${docCount} 篇文档（含 ${topicTxt}），已生成 ${qaTotal} 条问答对，内容围绕银行证券业务规则与合规要点。`;
+  }
 })();
 
