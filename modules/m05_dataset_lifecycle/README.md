@@ -356,15 +356,26 @@ GET /api/corpus/{corpus_id}/tree
 
 ## 6. Demo 实现清单
 
-- [ ] `dataset_version` 表 + 版本冻结 API（含快照元信息记录）
-- [ ] JSONL 扁平导出（整集，不做 dev/val/test 拆分）
-- [ ] JSON 目录结构导出（含跨文档题时，跨文档题单独成"跨文档"文件夹，不混入单文档章节树）
-- [ ] 无问题判定 + 提示逻辑（不发布空集）
-- [ ] 基础手动编辑 API（PUT /api/cases/{case_id}）+ 删除（DELETE 标记 retired）
-- [ ] 评测集表格视图：筛选/排序/聚合统计/就地编辑，原生与泛化同表可按来源区分
-- [ ] 参数可视化统计图：难度/优先级/类型/章节/scope 分布图，随筛选实时联动
-- [ ] （可选）编辑批次与版本草案
-- [ ] 文档重传采用覆盖式整体作废 + 全量重算（见 §3.3 与 §8.14）；增量更新（FR-DS-INC）已废弃，不再实现
+- [x] `dataset_version` 表 + 版本冻结 API（含快照元信息记录）：冻结时把 m03 生成 + m04 通过门禁的 generated_case 快照为不可变 eval_case 副本
+- [x] JSONL 扁平导出（整集，不做 dev/val/test 拆分）
+- [x] JSON 目录结构导出（按文档 → 章节 → 小节嵌套；跨文档题隔离字段预留，Demo 阶段不生成跨文档题故不输出 `cross_document`）
+- [x] 无问题判定 + 提示逻辑（不发布空集）：基于 m02 EIU 总数 / 是否全不可出题 / 是否存在通过门禁样本三重判定
+- [x] 基础手动编辑 API（PUT /api/cases/{case_id}）+ 删除（DELETE 标记 retired）
+- [x] 评测集表格视图：筛选/排序/聚合统计/就地编辑（GET cases + PUT cases 复用；前端网格待补）
+- [x] 参数可视化统计图：GET /api/versions/{version_id}/stats 已按维度聚合，前端图表待补
+- [ ] （可选）编辑批次与版本草案（FR-DS-EDIT-003/004）
+- [x] 文档重传采用覆盖式整体作废 + 全量重算（见 §3.3 与 §8.14）；增量更新（FR-DS-INC）已废弃，不再实现
 - [ ] 泛化（输出模式 B，基于种子问答对扩写更多相关问题对）
 - [ ] （Demo 不做）评测后数据回流（06）
-- [ ] （延后）Excel 导出
+- [ ] （延后）Excel 导出（当前 export?format=xlsx 返回 CSV 字节占位，待 openpyxl 接入）
+
+### 6.1 与 m01–m04 的数据衔接（实现要点）
+
+| 模块 | 数据表 / 接口 | m05 用途 |
+|---|---|---|
+| m02 EIU 覆盖 | `eiu`（list_eius） | 无问题判定（EIU 总数 / is_questionable）、树形覆盖率分母、快照 coverage |
+| m03 生成 | `generated_case`（list_generated_cases） | 冻结时筛选 `review_status ∈ {quality_verified, governance_passed, user_confirmed, published}` 的样例，快照为 eval_case |
+| m04 质量治理 | `generated_case.review_status` 状态机 | 门禁：仅通过质量校验 + 治理审核的样本纳入冻结集；编辑后回退 candidate |
+| m01 数据基座 | `document_block`、`doc_update_job` | 文档重传触发 `rebuild_on_reupload` 覆盖式重算；树形反查 section_path / document_name |
+
+> 冻结集为 **不可变快照**：冻结后 eval_case 不再随 m03/m04 后续变更而变；如需更新，走新版本（freeze 生成新 version_number）。

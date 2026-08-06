@@ -1,16 +1,18 @@
 """m05 数据集生命周期服务。
 
 职责（对齐 README §1 / §3）：
-- 版本冻结（freeze）：生成 version_number、记录快照元信息、状态置 frozen。
+- 版本冻结（freeze）：把 m03 生成 + m04 审核通过的 generated_case 快照为不可变 eval_case 副本，
+  记录完整 snapshot_metadata（语料版本/模型版本/覆盖率）。
+- 无问题提示（FR-DS-EMPTY）：基于 m02 EIU 与 m03 可出题样本判定，EIU=0 或全不可出题时不发布空集。
 - 导出：扁平 JSONL / 目录结构 JSON / Excel。
 - 编辑：手动编辑样本（PUT）→ 回退 review_status=candidate；删除标记 retired 保留审计。
-- 树形浏览：按 section_path 组织，标注样本数 / 覆盖率 / 未覆盖缺口。
-- 无问题提示：EIU=0 或 全部不可出题时不发布空集。
-- 文档重传处理：**覆盖式整体作废 + 全量重算**（无增量更新）。
+- 树形浏览（FR-DS-TREE-001）：按 section_path/doc 组织，标注样本数 / 覆盖率 / 未覆盖缺口。
+- 文档重传：覆盖式整体作废 + 全量重算（无增量，见 README §8.14 / §3.3）。
 
-说明：m03 生成 / m04 质量治理尚未就绪，本模块的样本生成用占位实现
-（直接基于 m01 的 document_block 文本抽题），仅用于打通端到端流程；
-正式题面/质量校验接入 m03、m04 后替换 `generate_cases_for_document` 即可。
+数据来源（m01–m04 已跑通）：
+- m02 EIU：database.list_eius（含 is_questionable / review_status / section_path / document_name）
+- m03 生成样本：database.list_generated_cases（含 eiu_id / review_status / content_priority / scope_type）
+- m04 质量门禁：generated_case.review_status（candidate → quality_verified → governance_passed → user_confirmed → published / blocked / needs_revision / retired）
 """
 
 from __future__ import annotations
@@ -20,6 +22,14 @@ import re
 from datetime import datetime
 
 from modules.shared.services.database import DatabaseService
+
+# m04 审核状态机中"可纳入冻结集"的终态（不纳入 blocked / retired / needs_revision）
+PUBLISHABLE_STATUSES = {
+    "quality_verified",
+    "governance_passed",
+    "user_confirmed",
+    "published",
+}
 
 
 def _next_version_number(latest: str | None) -> str:
@@ -37,6 +47,28 @@ class DatasetLifecycleService:
         self.db = db or DatabaseService()
 
     # ------------------------------------------------------------------
+    # 无问题判定（FR-DS-EMPTY）
+    # ------------------------------------------------------------------
+    def _empty_reason(self, *, corpus_id: int) -> str | None:
+        """返回 None 表示可生成；否则返回"无问题"原因（不发布空集）。"""
+        eius = self.db.list_eius(corpus_id, include_blocked=False)
+        if not eius:
+            return "EIU 总数 = 0：语料未抽到任何可出题单元（可能全部被排除或确无实质内容）"
+        questionable = [e for e in eius if e.get("is_questionable")]
+        if not questionable:
+            return "全部 EIU 均标记为不可出题（is_questionable=false），无未处理文段"
+        # 有可出题 EIU，再确认 m03 是否产出可纳入样本
+        cases = self._publishable_cases(corpus_id)
+        if not cases:
+            return "有可出题 EIU，但尚无通过质量门禁的生成样本（请先跑 m03 生成 + m04 校验）"
+        return None
+
+    def _publishable_cases(self, corpus_id: int) -> list[dict]:
+        """取 m03 生成、且 m04 审核达到可发布态的 generated_case。"""
+        all_cases = self.db.list_generated_cases(corpus_id)
+        return [c for c in all_cases if c.get("review_status") in PUBLISHABLE_STATUSES]
+
+    # ------------------------------------------------------------------
     # 版本冻结
     # ------------------------------------------------------------------
     def freeze_version(self, *, corpus_id: int, created_by: str | None = None) -> dict:
@@ -44,62 +76,109 @@ class DatasetLifecycleService:
         if corpus is None:
             raise ValueError("corpus not found")
 
-        # 无问题判定（FR-DS-EMPTY）：基于 m01 语料是否有可出题 Block
-        blocks = self.db.list_blocks(corpus_id=corpus_id)
-        if not blocks:
-            raise ValueError("无问题可生成：语料库没有任何解析后的文段，未进入发布流程")
+        reason = self._empty_reason(corpus_id=corpus_id)
+        if reason:
+            # 不创建空集、不进入发布流程（FR-DS-EMPTY-002）
+            raise ValueError(f"无问题可生成：{reason}")
 
-        # 占位生成：基于 m01 block 文本抽题（待 m03 生成接入后替换）
         latest = self.db.get_latest_version_number(corpus_id)
         version_number = _next_version_number(latest)
+
+        coverage = self._compute_coverage(corpus_id)
+        snapshot_metadata = self._build_snapshot_metadata(
+            corpus_id=corpus_id,
+            corpus=corpus,
+            coverage=coverage,
+            created_by=created_by,
+        )
+
         version_id = self.db.save_dataset_version(
             corpus_id=corpus_id,
             version_number=version_number,
             status="frozen",
             split_config={"format": "full", "include_retired": False},
-            snapshot_metadata={
-                "corpus_version": corpus.get("version"),
-                "created_by": created_by,
-                "created_at": datetime.utcnow().isoformat() + "Z",
-                "generator": "m05_placeholder(v1 blocks)",
-            },
+            snapshot_metadata=snapshot_metadata,
         )
-        case_count = self._generate_cases(version_id=version_id, corpus_id=corpus_id)
+        # 把通过门禁的 generated_case 快照为不可变 eval_case 副本
+        case_count = self._snapshot_cases(version_id=version_id, corpus_id=corpus_id)
         self.db.update_dataset_version(version_id, case_count=case_count, freeze=True)
         return self.db.get_dataset_version(version_id)
+
+    def _snapshot_cases(self, *, version_id: int, corpus_id: int) -> int:
+        """将可发布态的 generated_case 复制为 eval_case 快照（冻结后不可变）。"""
+        count = 0
+        for case in self._publishable_cases(corpus_id):
+            self.db.save_eval_case(
+                version_id=version_id,
+                case_uid=f"case_{version_id:04d}_{case['case_id']:06d}",
+                intent_id=case.get("intent_id"),
+                question=case["question"],
+                type=case.get("question_type"),
+                scope=case.get("scope_type"),
+                difficulty=case.get("difficulty"),
+                gold_answer=case.get("gold_answer"),
+                must_have_points=case.get("must_have_points"),
+                acceptable_answers=case.get("acceptable_answers"),
+                evidence=case.get("evidence"),
+                eiu_ids=[case.get("eiu_id")] if case.get("eiu_id") else [],
+                content_priority=case.get("content_priority"),
+                review_status=case.get("review_status"),
+                source="native",
+            )
+            count += 1
+        return count
+
+    def _compute_coverage(self, corpus_id: int) -> dict:
+        """基于 m02 EIU 计算加权/分优先级覆盖率（与 m02 coverage 口径一致）。"""
+        eius = self.db.list_eius(corpus_id, include_blocked=False)
+        total = len(eius)
+        if total == 0:
+            return {"weighted": 0.0, "p0": 0.0, "p1": 0.0, "p2": 0.0, "total_eiu": 0}
+        covered_by_priority: dict[str, float] = {}
+        for p in ("P0", "P1", "P2"):
+            grp = [e for e in eius if e.get("content_priority") == p]
+            if not grp:
+                covered_by_priority[p.lower()] = 1.0
+                continue
+            covered = sum(1 for e in grp if e.get("is_questionable"))
+            covered_by_priority[p.lower()] = round(covered / len(grp), 3)
+        weighted = round(
+            covered_by_priority["p0"] * 0.4
+            + covered_by_priority["p1"] * 0.4
+            + covered_by_priority["p2"] * 0.2,
+            3,
+        )
+        return {
+            "weighted": weighted,
+            "p0": covered_by_priority["p0"],
+            "p1": covered_by_priority["p1"],
+            "p2": covered_by_priority["p2"],
+            "total_eiu": total,
+        }
+
+    def _build_snapshot_metadata(
+        self, *, corpus_id: int, corpus: dict, coverage: dict, created_by: str | None
+    ) -> dict:
+        return {
+            "corpus_id": corpus_id,
+            "corpus_version": corpus.get("version"),
+            "parser_version": "pymupdf-1.24.0",
+            "embedding_model": "BAAI/bge-small-zh-v1.5",
+            "llm_model": "gpt-4o-mini-2024-07-18",
+            "eiu_extraction_prompt_version": "eiu_v2",
+            "question_prompt_version": "qg_v1",
+            "answer_prompt_version": "ag_v1",
+            "quality_check_prompt_version": "qc_v1",
+            "coverage": coverage,
+            "created_by": created_by,
+            "created_at": datetime.utcnow().isoformat() + "Z",
+        }
 
     def list_versions(self, corpus_id: int) -> list[dict]:
         return self.db.list_dataset_versions(corpus_id)
 
     def get_version(self, version_id: int) -> dict | None:
         return self.db.get_dataset_version(version_id)
-
-    # ------------------------------------------------------------------
-    # 样本生成（占位，待 m03/m04 接入）
-    # ------------------------------------------------------------------
-    def _generate_cases(self, *, version_id: int, corpus_id: int) -> int:
-        blocks = self.db.list_blocks(corpus_id=corpus_id)
-        count = 0
-        for idx, block in enumerate(blocks, start=1):
-            text = (block.get("block_text") or "").strip()
-            if len(text) < 20:
-                continue  # 过短文段不单独出题
-            question = text
-            self.db.save_eval_case(
-                version_id=version_id,
-                case_uid=f"case_{version_id:04d}_{idx:04d}",
-                question=question,
-                type="fact_recall",
-                scope="single_document",
-                difficulty="L2",
-                gold_answer=text,
-                evidence=[{"block_id": block.get("block_id")}],
-                eiu_ids=[block.get("block_id")],
-                content_priority="P1",
-                source="native",
-            )
-            count += 1
-        return count
 
     # ------------------------------------------------------------------
     # 编辑 / 删除
@@ -170,40 +249,49 @@ class DatasetLifecycleService:
         return {"total": len(cases), "by_dimension": stats}
 
     # ------------------------------------------------------------------
-    # 树形浏览
+    # 树形浏览（FR-DS-TREE-001）
     # ------------------------------------------------------------------
     def tree(self, corpus_id: int) -> dict:
-        blocks = self.db.list_blocks(corpus_id=corpus_id)
-        nodes: dict[str, dict] = {}
-        for block in blocks:
-            path = block.get("section_path") or "未分类"
-            node = nodes.setdefault(
-                path, {"section_path": path, "eiu_count": 0, "case_count": 0, "coverage_pct": 0.0}
+        cases = self._publishable_cases(corpus_id)
+        eius = self.db.list_eius(corpus_id, include_blocked=False)
+
+        # section_path → 文档名 → 计数
+        by_section: dict[str, dict] = {}
+        for case in cases:
+            eiu_id = (case.get("eiu_ids") or [None])[0] if case.get("eiu_ids") else None
+            eiu = next((e for e in eius if e.get("eiu_id") == eiu_id), None)
+            path = (eiu or {}).get("section_path") or "未分类"
+            doc = (eiu or {}).get("document_name") or "未关联文档"
+            node = by_section.setdefault(
+                path, {"section_path": path, "eiu_count": 0, "case_count": 0, "coverage_pct": 0.0, "documents": {}}
+            )
+            node["documents"].setdefault(doc, 0)
+            node["documents"][doc] += 1
+            node["case_count"] += 1
+
+        for eiu in eius:
+            path = eiu.get("section_path") or "未分类"
+            node = by_section.setdefault(
+                path, {"section_path": path, "eiu_count": 0, "case_count": 0, "coverage_pct": 0.0, "documents": {}}
             )
             node["eiu_count"] += 1
-        # case_count / coverage 暂基于最新版本（占位，待 m03 出题回写 eiu_ids）
-        latest = self.db.get_latest_version_number(corpus_id)
-        if latest:
-            version = self.db.get_dataset_version(
-                self.db.list_dataset_versions(corpus_id)[0]["version_id"]
+            node["documents"].setdefault(eiu.get("document_name") or "未关联文档", 0)
+
+        tree_list = []
+        for path, node in by_section.items():
+            eiu_count = node["eiu_count"]
+            covered = sum(1 for e in eius if (e.get("section_path") or "未分类") == path and e.get("is_questionable"))
+            node["coverage_pct"] = round(covered / eiu_count * 100, 1) if eiu_count else 0.0
+            tree_list.append(
+                {
+                    "section_path": path,
+                    "eiu_count": eiu_count,
+                    "case_count": node["case_count"],
+                    "coverage_pct": node["coverage_pct"],
+                    "gap": max(eiu_count - node["case_count"], 0),
+                    "documents": node["documents"],
+                }
             )
-            cases = self.db.get_eval_cases(version["version_id"]) if version else []
-            by_section: dict[str, int] = {}
-            for case in cases:
-                for eiu in case.get("eiu_ids") or []:
-                    by_section.setdefault(str(eiu), 0)
-            for case in cases:
-                for eiu in case.get("eiu_ids") or []:
-                    by_section[str(eiu)] = by_section.get(str(eiu), 0) + 1
-        tree_list = [
-            {
-                "section_path": path,
-                "eiu_count": node["eiu_count"],
-                "case_count": node["eiu_count"],  # 占位：1 block→1 题
-                "coverage_pct": 100.0 if node["eiu_count"] > 0 else 0.0,
-            }
-            for path, node in nodes.items()
-        ]
         return {"corpus_id": corpus_id, "tree": tree_list}
 
     # ------------------------------------------------------------------
@@ -230,16 +318,29 @@ class DatasetLifecycleService:
         if not version:
             raise ValueError("version not found")
         cases = self.db.get_eval_cases(version_id)
-        return {
+        by_doc: dict[str, dict] = {}
+        for case in cases:
+            eiu_id = (case.get("eiu_ids") or [None])[0] if case.get("eiu_ids") else None
+            doc = "未关联文档"
+            section = "未分类"
+            # 通过 eiu 反查文档/章节（轻量：仅用于目录组织）
+            if eiu_id is not None:
+                eiu = self._get_eiu(eiu_id)
+                if eiu:
+                    doc = eiu.get("document_name") or doc
+                    section = eiu.get("section_path") or section
+            by_doc.setdefault(doc, {}).setdefault(section, []).append(case)
+
+        documents = [
+            {"document_name": doc, "sections": [{"section_path": sec, "cases": sec_cases} for sec, sec_cases in secs.items()]}
+            for doc, secs in by_doc.items()
+        ]
+        result = {
             "dataset_version": version["version_number"],
-            "coverage": version.get("snapshot_metadata", {}).get("coverage"),
-            "documents": [
-                {
-                    "document_name": "placeholder",
-                    "sections": [{"section_path": "all", "cases": cases}],
-                }
-            ],
+            "coverage": (version.get("snapshot_metadata") or {}).get("coverage"),
+            "documents": documents,
         }
+        return result
 
     def export_xlsx(self, version_id: int) -> bytes:
         """Excel 导出（Demo 占位：返回 CSV 字节，待 openpyxl 接入后替换）。"""
@@ -268,40 +369,34 @@ class DatasetLifecycleService:
         return buf.getvalue().encode("utf-8-sig")
 
     # ------------------------------------------------------------------
-    # 文档重传：覆盖式整体作废 + 全量重算（无增量）
+    # 文档重传：覆盖式整体作废 + 全量重算（无增量，见 §8.14 / §3.3）
     # ------------------------------------------------------------------
     def rebuild_on_reupload(self, *, corpus_id: int, document_id: int, job_id: int) -> None:
         """文档重传回调（由 01 的 doc_update_job 完成后触发）。
 
         策略：整体作废该文档相关产物并全量重算。
-        - 当前 m05 样本为按文档聚合生成；重传后对该文档对应版本的样本整体重建。
-        - 不做增量失效回写、不做旧题复用（见 README §8.14 / §3.3）。
+        - 不做增量失效回写、不做旧题复用。
+        - m03 已重算产出新 generated_case；此处把受影响的最新版本整体重建为覆盖式快照：
+          删除旧版本中属于该文档（eiu→document）的 eval_case，再基于最新 generated_case 整体重快照。
         """
         self.db.update_job(job_id, phase="rebuild", progress=80, message="覆盖式整体重算中")
-        # 占位：删除旧版本中属于该文档的 case 并基于新 block 全量重算
         latest_versions = self.db.list_dataset_versions(corpus_id)
         if latest_versions:
             version_id = latest_versions[0]["version_id"]
-            # 简化：整体重建该版本全部 case（占位实现，待 m03 接入细化到文档级）
-            blocks = self.db.list_blocks(corpus_id=corpus_id)
-            new_count = 0
-            for idx, block in enumerate(blocks, start=1):
-                text = (block.get("block_text") or "").strip()
-                if len(text) < 20:
-                    continue
-                self.db.save_eval_case(
-                    version_id=version_id,
-                    case_uid=f"case_{version_id:04d}_r{idx:04d}",
-                    question=text,
-                    type="fact_recall",
-                    scope="single_document",
-                    difficulty="L2",
-                    gold_answer=text,
-                    evidence=[{"block_id": block.get("block_id")}],
-                    eiu_ids=[block.get("block_id")],
-                    content_priority="P1",
-                    source="native",
-                )
-                new_count += 1
-            self.db.update_dataset_version(version_id, case_count=new_count)
+            # 覆盖式：先全量作废该版本下的快照样本，再基于最新 m03/m04 结果整体重快照
+            self._rebuild_version_snapshot(version_id=version_id, corpus_id=corpus_id)
         self.db.update_job(job_id, status="done", phase="rebuild", progress=100, message="已更新完成", finished=True)
+
+    def _rebuild_version_snapshot(self, *, version_id: int, corpus_id: int) -> int:
+        """覆盖式重建：清空该版本 eval_case 快照，基于最新 generated_case 重新整体快照。"""
+        # 清空旧快照
+        old = self.db.get_eval_cases(version_id, include_retired=True, limit=100000)
+        for c in old:
+            self.db.retire_eval_case(c["case_id"])
+        # 整体重快照
+        new_count = self._snapshot_cases(version_id=version_id, corpus_id=corpus_id)
+        self.db.update_dataset_version(version_id, case_count=new_count)
+        return new_count
+
+    def _get_eiu(self, eiu_id: int) -> dict | None:
+        return self.db.get_eiu(eiu_id)
