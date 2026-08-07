@@ -47,8 +47,13 @@ ANSWER_KEYS: list[str] = [
     "is_unanswerable",
 ]
 
-# 上下文窗口：每个 Block 前后各取 N 个相邻块（README §2.1 第 2 步）
+# 动态上下文筛选（README §2.1 第 2 步）：
+# - CONTEXT_WINDOW：位置兜底窗口，源块前后各取 N 个相邻块（术语延续性）
+# - SEMANTIC_TOP_K：语义召回数，以 EIU 内容为 query 检索最相关块
+# - MAX_CONTEXT_BLOCKS：预算上限，合并去重后截断到该块数（相关性优先）
 CONTEXT_WINDOW = 1
+SEMANTIC_TOP_K = 3
+MAX_CONTEXT_BLOCKS = 5
 
 
 # ---------------------------------------------------------------------------

@@ -15,6 +15,9 @@ from pathlib import Path
 
 from modules.m04_quality_governance.services.pipeline import PipelineService
 from modules.m04_quality_governance.services.prompts import CHECK_TYPE_DESCRIPTIONS
+from modules.shared.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 
 def build_report(corpus_id: int) -> dict:
@@ -80,7 +83,7 @@ def main() -> None:
 
     if args.out:
         Path(args.out).write_text(content, encoding="utf-8")
-        print(f"已写入: {args.out}")
+        logger.info("质量报告已写入: %s", args.out)
     else:
         print(content)
 

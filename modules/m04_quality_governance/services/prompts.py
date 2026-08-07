@@ -12,7 +12,6 @@ README §2.1 的 5 项基础检查（含问题相关性）：
 from __future__ import annotations
 
 import json
-from typing import Any
 
 # 5 项检查的固定顺序（README §2.1 表格顺序）
 CHECK_TYPES: list[str] = [

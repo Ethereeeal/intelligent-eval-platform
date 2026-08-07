@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from collections import Counter
 import math
 import re
+from collections import Counter
+from dataclasses import dataclass
 
 
 @dataclass

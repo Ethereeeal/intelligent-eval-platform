@@ -63,4 +63,4 @@ def retry_case_quality_check(case_id: int):
     try:
         return pipeline.retry_check(case_id)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
+        raise HTTPException(status_code=404, detail=str(exc)) from exc

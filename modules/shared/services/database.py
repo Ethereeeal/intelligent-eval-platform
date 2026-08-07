@@ -4,7 +4,19 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 
-from sqlalchemy import BigInteger, Boolean, Float, JSON, DateTime, Integer, String, Text, create_engine
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    DateTime,
+    Float,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    create_engine,
+    text,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from modules.shared.core.config import settings
@@ -55,7 +67,9 @@ class DocumentRow(Base):
     file_name: Mapped[str] = mapped_column(String(255), nullable=False)
     file_type: Mapped[str] = mapped_column(String(64), nullable=False)
     file_size: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    file_hash: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    # 唯一约束改为 (corpus_id, file_hash)：同一语料库内不允许重复，
+    # 但允许相同文件存在于不同语料库（每个 corpus 各自一份、从头生成）
+    file_hash: Mapped[str] = mapped_column(String(128), nullable=False)
     minio_path: Mapped[str] = mapped_column(String(512), nullable=False)
     upload_user: Mapped[str | None] = mapped_column(String(128), nullable=True)
     document_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -64,6 +78,10 @@ class DocumentRow(Base):
     parse_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(64), nullable=False, default="uploaded")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("corpus_id", "file_hash", name="uq_corpus_file_hash"),
+    )
 
 
 class BlockRow(Base):
@@ -258,8 +276,32 @@ class DatabaseService:
             if "statement_norm" not in cols:
                 with engine.begin() as conn:
                     conn.execute(
-                        "ALTER TABLE generated_case ADD COLUMN statement_norm VARCHAR(512)"
+                        text(
+                            "ALTER TABLE generated_case ADD COLUMN statement_norm VARCHAR(512)"
+                        )
                     )
+        # document.file_hash：全局唯一 → (corpus_id, file_hash) 复合唯一
+        # （每个语料库内不重复，但允许相同文件存在于不同语料库各自一份）
+        if "document" in inspector.get_table_names():
+            index_names = {ix["name"] for ix in inspector.get_indexes("document")}
+            if "file_hash" in index_names and "uq_corpus_file_hash" not in index_names:
+                with engine.begin() as conn:
+                    if engine.dialect.name == "mysql":
+                        conn.execute(text("ALTER TABLE document DROP INDEX file_hash"))
+                        conn.execute(
+                            text(
+                                "ALTER TABLE document ADD UNIQUE KEY "
+                                "uq_corpus_file_hash (corpus_id, file_hash)"
+                            )
+                        )
+                    else:
+                        conn.execute(text("DROP INDEX file_hash ON document"))
+                        conn.execute(
+                            text(
+                                "CREATE UNIQUE INDEX uq_corpus_file_hash "
+                                "ON document (corpus_id, file_hash)"
+                            )
+                        )
 
     def save_document(
         self,

@@ -17,4 +17,5 @@ class StorageService:
         target_dir.mkdir(parents=True, exist_ok=True)
         target_path = target_dir / file_name
         target_path.write_bytes(content)
-        return StorageResult(object_path=str(target_path), etag=f"size-{len(content)}")
+        # 返回绝对路径：解析器按路径打开文件，相对路径在容器工作目录变动时会找不到
+        return StorageResult(object_path=str(target_path.resolve()), etag=f"size-{len(content)}")

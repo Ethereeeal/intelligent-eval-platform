@@ -58,7 +58,7 @@ class FaissIndexService:
             return []
         if self._index is None:
             scored = [self._dot(vector, item.vector) for item in self._items]
-            ranked = sorted(zip(self._items, scored), key=lambda pair: pair[1], reverse=True)[:top_k]
+            ranked = sorted(zip(self._items, scored, strict=True), key=lambda pair: pair[1], reverse=True)[:top_k]
             return [
                 {"block_id": item.block_id, "score": float(score), "metadata": item.metadata}
                 for item, score in ranked
@@ -66,7 +66,7 @@ class FaissIndexService:
         query = np.asarray([vector], dtype="float32")
         scores, indices = self._index.search(query, top_k)
         results: list[dict[str, Any]] = []
-        for score, index in zip(scores[0], indices[0]):
+        for score, index in zip(scores[0], indices[0], strict=True):
             if index < 0 or index >= len(self._items):
                 continue
             item = self._items[index]

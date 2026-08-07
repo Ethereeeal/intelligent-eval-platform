@@ -13,9 +13,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from modules.shared.core.config import settings
-from modules.shared.services.database import EIU_TYPES, PRIORITY_WEIGHT, DatabaseService
 from modules.m02_eiu_coverage.services.llm_client import LLMClient, LLMError
+from modules.shared.services.database import EIU_TYPES, PRIORITY_WEIGHT, DatabaseService
 
 _PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "eiu_extraction.txt"
 _STATEMENT_MAX = 200  # 验收 D4：statement ≤ 200 字

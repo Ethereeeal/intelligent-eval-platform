@@ -13,7 +13,10 @@ from __future__ import annotations
 import argparse
 import json
 
+from modules.shared.core.logging_config import get_logger
 from modules.shared.services.database import DatabaseService
+
+logger = get_logger(__name__)
 
 
 def export_json(cases: list[dict]) -> str:
@@ -68,7 +71,7 @@ def main() -> None:
     content = export_markdown(cases) if args.format == "md" else export_json(cases)
     with open(args.out, "w", encoding="utf-8") as handle:
         handle.write(content)
-    print(f"已导出 {len(cases)} 条评测样本 -> {args.out}")
+    logger.info("已导出 %d 条评测样本 -> %s", len(cases), args.out)
 
 
 if __name__ == "__main__":

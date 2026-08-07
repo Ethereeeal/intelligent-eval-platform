@@ -1,6 +1,5 @@
 """Chat data models (Demo placeholder)."""
 from dataclasses import dataclass
-from datetime import datetime
 
 
 @dataclass

@@ -13,7 +13,10 @@ from typing import Any
 
 from modules.m03_generation.services.generator import CaseGenerator
 from modules.m03_generation.services.variation import VariationService
+from modules.shared.core.logging_config import get_logger
 from modules.shared.services.database import DatabaseService, normalize_statement
+
+logger = get_logger(__name__)
 
 
 class PipelineService:
@@ -406,6 +409,9 @@ class PipelineService:
                         v["case_id"] for v in variants
                     )
             except Exception as exc:  # 单个 EIU 失败不阻断批量流程
+                logger.warning(
+                    "EIU 批量生成中断于 eiu_id=%s: %s", eiu.get("eiu_id"), exc
+                )
                 result["error"] = str(exc)
                 break
         return result

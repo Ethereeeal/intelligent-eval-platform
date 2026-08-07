@@ -26,7 +26,8 @@ from typing import Any
 
 from modules.m03_generation.services.generator import CaseGenerator
 from modules.m03_generation.services.prompts import DEFAULT_ANGLES
-from modules.m04_quality_governance.schemas import HARD_CHECKS, SOFT_CHECKS
+from modules.m04_quality_governance.models import QualityReport
+from modules.m04_quality_governance.schemas import HARD_CHECKS
 from modules.m04_quality_governance.services.prompts import CHECK_TYPES
 from modules.m04_quality_governance.services.quality_checker import QualityChecker
 from modules.shared.services.database import DatabaseService
@@ -191,7 +192,6 @@ class PipelineService:
             return report
 
         hard_failed = [c for c in report.checks if c.check_type in HARD_CHECKS and not c.passed]
-        soft_failed = [c for c in report.checks if c.check_type in SOFT_CHECKS and not c.passed]
 
         # 仅 soft 失败：不自动重生成（判断信息量与生成时一致，重生成无效）
         if not hard_failed:

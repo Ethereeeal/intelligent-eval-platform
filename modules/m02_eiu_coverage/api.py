@@ -15,7 +15,6 @@ import threading
 
 from fastapi import APIRouter, HTTPException, Query
 
-from modules.shared.services.database import EIU_TYPES, PRIORITY_WEIGHT, DatabaseService
 from modules.m02_eiu_coverage.schemas import (
     CoverageReport,
     CoverageReportOut,
@@ -33,6 +32,7 @@ from modules.m02_eiu_coverage.services.coverage import (
     save_coverage_report,
 )
 from modules.m02_eiu_coverage.services.eiu_extractor import EiuExtractorService
+from modules.shared.services.database import EIU_TYPES, PRIORITY_WEIGHT, DatabaseService
 
 # 绑定语料库：/api/corpus/{corpus_id}/eiu
 corpus_eiu_router = APIRouter(prefix="/api/corpus/{corpus_id}/eiu", tags=["eiu"])
@@ -140,7 +140,7 @@ def get_coverage(corpus_id: int) -> CoverageReport:
 def persist_coverage(corpus_id: int) -> CoverageReportOut:
     """计算覆盖率并落库为 coverage_report，返回带 report_id 的报告（供 m05 冻结外键引用）。"""
     _ensure_corpus(corpus_id)
-    report_id = save_coverage_report(corpus_id)
+    save_coverage_report(corpus_id)
     row = database.get_latest_coverage_report(corpus_id)
     return CoverageReportOut(**row)
 

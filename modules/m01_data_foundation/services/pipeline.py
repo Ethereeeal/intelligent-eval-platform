@@ -6,12 +6,12 @@ from pathlib import Path
 
 import numpy as np
 
-from modules.shared.core.config import settings
-from modules.shared.services.database import DatabaseService
-from modules.m01_data_foundation.services.indexer import FaissIndexService, IndexedItem
 from modules.m01_data_foundation.services.embedding import EmbeddingService
+from modules.m01_data_foundation.services.indexer import FaissIndexService, IndexedItem
 from modules.m01_data_foundation.services.parser import DocumentParser
 from modules.m01_data_foundation.services.storage import StorageService
+from modules.shared.core.config import settings
+from modules.shared.services.database import DatabaseService
 
 
 class PipelineService:
@@ -82,7 +82,13 @@ class PipelineService:
             parse_status="pending",
         )
         try:
-            blocks = self.parser.parse_document(Path(minio_path), suffix)
+            parse_path = Path(minio_path)
+            if not parse_path.exists():
+                # 兜底：minio_path 解析不到时按 raw_dir 重建绝对路径
+                candidate = settings.raw_dir.resolve() / Path(minio_path).name
+                if candidate.exists():
+                    parse_path = candidate
+            blocks = self.parser.parse_document(parse_path, suffix)
             indexed = self.embed_blocks(blocks)
             block_ids = self.database.save_blocks(document_id=document_id, blocks=indexed)
             self.indexer.add(self._to_indexed(indexed, block_ids, document_id))
@@ -164,7 +170,9 @@ class PipelineService:
     def embed_blocks(self, blocks: list) -> list[dict]:
         vectors = self.embedding.embed_texts([block.block_text for block in blocks])
         result: list[dict] = []
-        for block, vector in zip(blocks, vectors):
+        for block, vector in zip(blocks, vectors, strict=True):
+            # 强制转为普通 list，避免 numpy ndarray 落入 JSON 列导致序列化失败
+            vec_list = np.asarray(vector, dtype="float32").tolist()
             result.append(
                 {
                     "section_path": block.section_path,
@@ -175,14 +183,14 @@ class PipelineService:
                     "start_offset": block.start_offset,
                     "end_offset": block.end_offset,
                     "metadata_json": block.metadata_json,
-                    "embedding_vector": vector.tolist() if hasattr(vector, "tolist") else vector,
+                    "embedding_vector": vec_list,
                 }
             )
         return result
 
     def _to_indexed(self, indexed: list[dict], block_ids: list[int], document_id: int) -> list[IndexedItem]:
         items: list[IndexedItem] = []
-        for block_id, block in zip(block_ids, indexed):
+        for block_id, block in zip(block_ids, indexed, strict=True):
             items.append(
                 IndexedItem(
                     block_id=block_id,
@@ -205,7 +213,7 @@ class PipelineService:
                     "block_id": item.block_id,
                     "document_id": item.document_id,
                     "section_path": item.section_path,
-                    "vector": item.vector,
+                    "vector": np.asarray(item.vector, dtype="float32").tolist(),
                     "source_text": item.source_text,
                 }
                 for item in self.indexer._items

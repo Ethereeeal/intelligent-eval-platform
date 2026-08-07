@@ -1,26 +1,49 @@
 [project]
-name = "qa-generation-platform"
+name = "intelligent-eval-platform"
 version = "0.2.0"
-description = "问答生成平台 — Demo backend"
+description = "智能评测平台后端（EvalForge）"
 requires-python = ">=3.10"
-dependencies = [
-	"fastapi>=0.115.0",
-	"uvicorn[standard]>=0.30.0",
-	"pydantic>=2.8.0",
-	"python-dotenv>=1.0.0",
-	"sqlalchemy>=2.0.0",
-	"pymysql>=1.1.1",
-	"minio>=7.2.0",
-	"faiss-cpu>=1.8.0",
-	"numpy>=1.26.0",
-	"sentence-transformers>=3.0.0",
-	"openai>=1.30.0",
-	"requests>=2.31.0"
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["modules"]
+exclude = ["**/__pycache__/**", "**/.venv/**", "**/migrations/**"]
+
+[tool.ruff.lint]
+# 参考阿里巴巴 Java 开发手册精神，对 Python 工程做可控约束：
+# - 禁止裸 except (E722)
+# - 禁止宽泛捕获 Exception 后静默吞掉 (BLE001, 允许显式 # noqa)
+# - 禁止 print 输出日志 (T201)
+# - 禁止 exec/eval 误用 (S102)
+# - 命名约定开启 (N)
+select = [
+    "E",   # pycodestyle 错误
+    "F",   # pyflakes（未定义/未使用）
+    "W",   # pycodestyle 警告
+    "I",   # isort import 顺序
+    "N",   # pep8-naming 命名约定
+    "BLE", # blind-except / 宽泛异常
+    "T20", # print 语句（日志规约：禁止 print 输出日志）
+    "S102",# 禁止 exec
+    "B",   # bugbear 常见 bug 模式
+]
+ignore = [
+    "E501",   # 行长度由 formatter 处理
+    "N803",   # 函数参数名允许小写（兼容第三方返回结构）
+    "N806",   # 模块级变量允许（如数据库表常量）
+    "BLE001", # 允许在顶层任务入口捕获 Exception，但必须记录日志
 ]
 
-[build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.build_meta"
+[tool.ruff.lint.per-file-ignores]
+# 导出脚本需将结果内容打印到 stdout（属正常输出，非日志），仅允许该处 print
+"**/scripts/export_*.py" = ["T201"]
+# FastAPI 路由参数默认值（File/Query 等）是官方推荐写法，B008 在此为误报
+"**/api.py" = ["B008"]
 
-[tool.setuptools.packages.find]
-include = ["modules*"]
+[tool.ruff.lint.isort]
+known-first-party = ["modules"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

@@ -4,7 +4,6 @@ import os
 from functools import lru_cache
 from typing import List, Tuple
 
-
 # 本地模型目录：由宿主机 ./models 挂载进容器（使用者手动下载 BGE 模型）。
 # 优先从本地目录加载，避免运行时联网依赖 HuggingFace / hf-mirror。
 _RERANKER_MODEL_ID = "BAAI/bge-reranker-v2-m3"
