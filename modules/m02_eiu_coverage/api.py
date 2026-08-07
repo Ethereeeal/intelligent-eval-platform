@@ -52,15 +52,18 @@ def _ensure_corpus(corpus_id: int) -> None:
 # 异步抽取
 # ----------------------------------------------------------------------
 @corpus_eiu_router.post("/extract", response_model=EiuExtractResponse, status_code=202)
-def trigger_eiu_extract(corpus_id: int) -> EiuExtractResponse:
+def trigger_eiu_extract(
+    corpus_id: int,
+    document_id: int | None = Query(default=None, description="指定文档时仅抽取该文档（单文档隔离），否则全库抽取"),
+) -> EiuExtractResponse:
     _ensure_corpus(corpus_id)
 
-    job_id = database.save_job(corpus_id=corpus_id, document_id=0, job_type="eiu_extract")
+    job_id = database.save_job(corpus_id=corpus_id, document_id=document_id or 0, job_type="eiu_extract")
     database.update_job(
         job_id, status="running", phase="queued", progress=0, message="任务已创建，准备抽取"
     )
 
-    total = _count_paragraph_blocks(corpus_id)
+    total = _count_paragraph_blocks(corpus_id, document_id=document_id)
     if total == 0:
         # 验收 F11：无 Block 时不报错，返回"无可处理的段落"
         database.update_job(
@@ -72,11 +75,13 @@ def trigger_eiu_extract(corpus_id: int) -> EiuExtractResponse:
         )
 
     database.update_job(job_id, progress=0, message=f"开始 EIU 抽取，共 {total} 个段落 Block")
-    thread = threading.Thread(
-        target=extractor_service.extract_corpus,
-        kwargs={"corpus_id": corpus_id, "job_id": job_id},
-        daemon=True,
+    target = extractor_service.extract_document if document_id is not None else extractor_service.extract_corpus
+    thread_kwargs = (
+        {"corpus_id": corpus_id, "document_id": document_id, "job_id": job_id}
+        if document_id is not None
+        else {"corpus_id": corpus_id, "job_id": job_id}
     )
+    thread = threading.Thread(target=target, kwargs=thread_kwargs, daemon=True)
     thread.start()
     return EiuExtractResponse(
         job_id=job_id,
@@ -86,9 +91,12 @@ def trigger_eiu_extract(corpus_id: int) -> EiuExtractResponse:
     )
 
 
-def _count_paragraph_blocks(corpus_id: int) -> int:
+def _count_paragraph_blocks(corpus_id: int, document_id: int | None = None) -> int:
     total = 0
-    for document in database.list_documents(corpus_id):
+    documents = database.list_documents(corpus_id)
+    if document_id is not None:
+        documents = [d for d in documents if d["document_id"] == document_id]
+    for document in documents:
         total += sum(
             1
             for block in database.get_document_blocks(document["document_id"])

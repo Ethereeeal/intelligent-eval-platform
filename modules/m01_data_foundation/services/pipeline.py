@@ -66,7 +66,7 @@ class PipelineService:
         minio_path = stored.object_path
 
         file_hash = hashlib.sha256(content).hexdigest()
-        existing = self.database.find_by_hash(file_hash)
+        existing = self.database.find_by_hash(file_hash, corpus_id=corpus_id)
         if existing is not None:
             return {"document_id": existing, "duplicate": True, "blocks": 0}
 
@@ -175,7 +175,7 @@ class PipelineService:
                     "start_offset": block.start_offset,
                     "end_offset": block.end_offset,
                     "metadata_json": block.metadata_json,
-                    "embedding_vector": vector,
+                    "embedding_vector": vector.tolist() if hasattr(vector, "tolist") else vector,
                 }
             )
         return result

@@ -13,7 +13,7 @@ from typing import Any
 
 from modules.m03_generation.services.generator import CaseGenerator
 from modules.m03_generation.services.variation import VariationService
-from modules.shared.services.database import DatabaseService
+from modules.shared.services.database import DatabaseService, normalize_statement
 
 
 class PipelineService:
@@ -78,6 +78,107 @@ class PipelineService:
             "already_covered": len(covered),
             "generated": sum(1 for r in results if r["error"] is None),
             "failed": sum(1 for r in results if r["error"] is not None),
+            "results": results,
+        }
+
+    # ------------------------------------------------------------------
+    # 单文档生成（上传链路调用：仅抽取当前文档 EIU、单文档隔离、不重抽其他文档）
+    # ------------------------------------------------------------------
+    def generate_cases_for_document(
+        self,
+        *,
+        corpus_id: int,
+        document_id: int,
+        angles: list[str] | None = None,
+        include_variations: bool = False,
+        variation_count: int = 2,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """为单个文档下未覆盖 EIU 生成题目+答案，单文档隔离。
+
+        隔离语义（与 generate_cases_for_corpus 相比）：
+        - 仅读取该文档的 EIU（list_eius 按 document_id 过滤）；
+        - 重抽前删除该文档已生成问答对，不触碰其他文档；
+        - 已覆盖 EIU 判定也限定在该文档内，不会重复生成。
+        """
+        eius = self.database.list_eius(
+            corpus_id, questionable=True, document_id=document_id
+        )
+        covered = self.database.list_covered_eiu_ids(
+            corpus_id, document_id=document_id
+        )
+        pending = [eiu for eiu in eius if eiu["eiu_id"] not in covered]
+
+        if dry_run:
+            return {
+                "corpus_id": corpus_id,
+                "document_id": document_id,
+                "total_questionable_eiu": len(eius),
+                "already_covered": len(covered),
+                "generated": 0,
+                "failed": 0,
+                "results": [],
+                "pending_eius": [
+                    {
+                        "eiu_id": eiu["eiu_id"],
+                        "eiu_type": eiu["eiu_type"],
+                        "content_priority": eiu["content_priority"],
+                        "statement": eiu["statement"],
+                    }
+                    for eiu in pending
+                ],
+            }
+
+        # 单文档隔离：重抽前先清掉该文档旧问答对，避免重复
+        self.database.delete_generated_cases_by_document(
+            corpus_id=corpus_id, document_id=document_id
+        )
+
+        results: list[dict[str, Any]] = []
+        reused_total = 0
+        for eiu in pending:
+            # 方案 B：重合内容复用旧库 —— 先按归一化 statement 跨库精确匹配
+            statement_norm = normalize_statement(eiu.get("statement", ""))
+            hit = (
+                self.database.find_cases_by_statement(
+                    statement_norm, exclude_corpus_id=corpus_id
+                )
+                if statement_norm
+                else []
+            )
+            if hit:
+                reused = self._reuse_case_for_eiu(
+                    eiu, hit[0], angles=angles or ["primary"]
+                )
+                reused_total += len(reused)
+                results.append(
+                    {
+                        "eiu_id": eiu["eiu_id"],
+                        "eiu_type": eiu["eiu_type"],
+                        "statement": eiu["statement"],
+                        "case_ids": [c["case_id"] for c in reused],
+                        "reused": True,
+                        "error": None,
+                    }
+                )
+                continue
+
+            result = self._generate_for_eiu_with_angles(
+                eiu,
+                angles=angles,
+                include_variations=include_variations,
+                variation_count=variation_count,
+            )
+            results.append(result)
+
+        return {
+            "corpus_id": corpus_id,
+            "document_id": document_id,
+            "total_questionable_eiu": len(eius),
+            "already_covered": len(covered),
+            "generated": sum(1 for r in results if r.get("error") is None and not r.get("reused")),
+            "reused": reused_total,
+            "failed": sum(1 for r in results if r.get("error") is not None),
             "results": results,
         }
 
@@ -238,6 +339,40 @@ class PipelineService:
     # ------------------------------------------------------------------
     # 内部工具
     # ------------------------------------------------------------------
+    def _reuse_case_for_eiu(
+        self,
+        eiu: dict[str, Any],
+        old_case: dict[str, Any],
+        *,
+        angles: list[str],
+    ) -> list[dict[str, Any]]:
+        """方案 B 复用：把历史问答对复制落库到当前 eiu/corpus/document。
+
+        跳过 LLM 重生成，仅替换归属维度（corpus/document/eiu/intent_id），
+        内容（question/answer/evidence/difficulty 等）原样复用。
+        """
+        reused: list[dict[str, Any]] = []
+        for angle in angles:
+            saved = self.database.save_generated_case(
+                intent_id=f"intent_{eiu['eiu_id']}_{angle}",
+                eiu_id=eiu["eiu_id"],
+                corpus_id=eiu["corpus_id"],
+                document_id=eiu["document_id"],
+                question=old_case.get("question") or "",
+                question_type=old_case.get("question_type") or "rule",
+                difficulty=old_case.get("difficulty") or "L2",
+                scope_type=old_case.get("scope_type") or "single_segment",
+                gold_answer=old_case.get("gold_answer") or "",
+                must_have_points=old_case.get("must_have_points") or [],
+                acceptable_answers=old_case.get("acceptable_answers") or [],
+                evidence=old_case.get("evidence") or [],
+                content_priority=eiu.get("content_priority", "P2"),
+                review_status=old_case.get("review_status") or "candidate",
+                statement_norm=old_case.get("statement_norm") or "",
+            )
+            reused.append(saved)
+        return reused
+
     def _generate_for_eiu_with_angles(
         self,
         eiu: dict[str, Any],
@@ -260,6 +395,7 @@ class PipelineService:
             try:
                 case = self.generator.generate_for_eiu(eiu, angle=angle)
                 saved = self.generator.save_case(case)
+                # statement_norm 已在 generator.save_case 内随 GeneratedCase 落库
                 result["case_ids"].append(saved["case_id"])
 
                 if include_variations:

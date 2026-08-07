@@ -293,8 +293,23 @@ class EiuExtractorService:
             )
             return {"job_id": job_id, "corpus_id": corpus_id, "status": "failed", "message": str(exc)}
 
-    def _run(self, corpus_id: int, job_id: int) -> dict:
+    def extract_document(self, corpus_id: int, document_id: int, job_id: int) -> dict:
+        """仅对单个文档的段落 Block 执行 EIU 抽取（单文档隔离，不清全库）。
+
+        仅删除该文档自身的旧 EIU，不影响其他文档已抽取的知识点。
+        """
+        try:
+            return self._run(corpus_id, job_id, document_id=document_id)
+        except Exception as exc:  # noqa: BLE001
+            self.database.update_job(
+                job_id, status="failed", phase="extracting", message=f"EIU 抽取失败: {exc}"
+            )
+            return {"job_id": job_id, "corpus_id": corpus_id, "status": "failed", "message": str(exc)}
+
+    def _run(self, corpus_id: int, job_id: int, document_id: int | None = None) -> dict:
         documents = self.database.list_documents(corpus_id)
+        if document_id is not None:
+            documents = [d for d in documents if d["document_id"] == document_id]
         document_blocks: list[list[dict]] = []
         for document in documents:
             document_blocks.append(self.database.get_document_blocks(document["document_id"]))
@@ -313,8 +328,11 @@ class EiuExtractorService:
             job_id, status="running", phase="extracting", progress=0,
             message=f"开始 EIU 抽取，共 {total} 个段落 Block",
         )
-        # 覆盖式全量重算：清空旧 EIU
-        self.database.delete_eius_by_corpus(corpus_id)
+        # 单文档模式：仅清空该文档旧 EIU；全库模式：清空整个语料库旧 EIU
+        if document_id is not None:
+            self.database.delete_eius_by_document(corpus_id=corpus_id, document_id=document_id)
+        else:
+            self.database.delete_eius_by_corpus(corpus_id)
 
         document_map = {document["document_id"]: document for document in documents}
         neighbors = self._build_neighbors(document_blocks)
@@ -364,24 +382,74 @@ class EiuExtractorService:
         return neighbors
 
     def _extract_block(self, block: dict, document: dict, context: dict[str, str]) -> list[dict]:
-        """单 Block 抽取。返回规范化后的 EIU 列表（不含 block_id 由 save_eius 校验时补充）。"""
+        """单 Block 抽取（混合策略：规则写死 + LLM 仅处理复杂句）。
+
+        写死项（不再让 LLM 自由裁量）：
+          - #2 EIU 类型判定：由 _classify 规则映射
+          - #3 优先级 P0/P1/P2：由 _classify 类型→优先级映射
+          - #5 constraints：由 _constraints_for 正则预抽
+          - #4 粗筛：is_skippable 前置拦截，减少送 LLM 的 Block 数
+        保留 LLM 项：
+          - #1 拆分：规则先拆，规则无法归类的复杂句才交 LLM 进一步拆分
+          - #4 语义排除（证据残缺不可出题）：仅对规则无法归类的 Block 用 LLM 判定
+
+        策略：先跑确定性规则抽取。若规则已能归类（绝大多数监管条款），直接采用、
+        跳过 LLM；仅当规则无法归类（返回空）时，才调用 LLM 处理复杂句，且对 LLM
+        产出的每条 EIU 仍用规则重算 type/priority/constraints（保证写死）。
+        """
         text = block["block_text"]
-        if is_skippable(text):
+        if is_skippable(text):                       # #4 粗筛写死，前置拦截
             return []
 
+        # 1) 规则先抽（#2/#3/#5 写死在此完成）
+        rule_items = deterministic_extract(text)
+        for item in rule_items:
+            item["block_id"] = block["block_id"]
+            item["extraction_model"] = "hybrid-rule"
+            item["extraction_confidence"] = 0.9
+
+        if rule_items:
+            # 规则能归类 → 直接采用，省掉本次 LLM 调用
+            return rule_items
+
+        # 2) 规则无法归类（复杂/语义句）→ 交给 LLM 做 #1 拆分与 #4 语义排除
         if self.llm.use_offline:
-            items = deterministic_extract(text)
-            for item in items:
-                item["block_id"] = block["block_id"]
-        else:
+            return []  # 离线且规则无法归类，保守跳过，不杜撰
+
+        try:
             user_prompt = self._build_user_prompt(block, document, context)
             raw_items = self.llm.extract_json(self.system_prompt, user_prompt)
-            items = []
-            for item in raw_items:
-                normalized = normalize_item(item, block["block_id"], self.llm.model)
-                if normalized is not None:
-                    items.append(normalized)
+        except LLMError:
+            return []
 
+        items: list[dict] = []
+        seen: set[str] = set()
+        for item in raw_items:
+            statement = _clean_statement(str(item.get("statement", "")))
+            if not statement or statement in seen:
+                continue
+            seen.add(statement)
+            # #2/#3/#5 写死：用规则对 LLM 拆分出的语句重新归类，覆盖 LLM 自由裁量
+            classification = _classify(statement)
+            if classification is None:
+                # 连规则都无法归类 → 视为 LLM 过度拆分，跳过该条（不杜撰类型）
+                continue
+            eiu_type, priority = classification
+            normalized = {
+                "statement": statement[:_STATEMENT_MAX],
+                "eiu_type": eiu_type,
+                "content_priority": priority,
+                "constraints": _constraints_for(statement),
+                "evidence_blocks": [block["block_id"]],
+                "is_questionable": bool(item.get("is_questionable", True)),
+                "exclusion_reason": (
+                    None if item.get("is_questionable", True)
+                    else str(item.get("exclusion_reason") or "语义不可出题")[:128]
+                ),
+                "extraction_model": "hybrid-llm",
+                "extraction_confidence": 0.7,
+            }
+            items.append(normalized)
         return items
 
     @staticmethod

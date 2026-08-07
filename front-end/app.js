@@ -17,7 +17,9 @@
   // 后端基础地址（demo 后端运行在 8000 端口；如需跨机访问可改为对应 IP）
   const API_BASE = (location.port === "8000") ? "" : "http://localhost:8000";
   // 默认载入的语料库（corpus）。demo 主数据为 corpus_id=2；可在控制台 window.__CORPUS_ID 覆盖
-  const CORPUS_ID = window.__CORPUS_ID || 2;
+  // activeCorpusId 为可变当前语料库：每次上传会新建独立 corpus 并切换过去，保证不同上传隔离、不混
+  let activeCorpusId = window.__CORPUS_ID || 2;
+  const CORPUS_ID = activeCorpusId;
 
   // DOCS 由 loadData() 填充；这里先声明为可变对象，保证其余逻辑可直接读写
   let DOCS = {};
@@ -159,9 +161,9 @@
   async function loadData() {
     try {
       const [docs, eiuResp, cases] = await Promise.all([
-        apiGet(`/api/documents?corpus_id=${CORPUS_ID}`),
-        apiGet(`/api/corpus/${CORPUS_ID}/eiu`).catch(() => ({ total: 0, items: [] })),
-        apiGet(`/api/corpus/${CORPUS_ID}/cases`).catch(() => [])
+        apiGet(`/api/documents?corpus_id=${activeCorpusId}`),
+        apiGet(`/api/corpus/${activeCorpusId}/eiu`).catch(() => ({ total: 0, items: [] })),
+        apiGet(`/api/corpus/${activeCorpusId}/cases`).catch(() => [])
       ]);
       const eius = (eiuResp && eiuResp.items) || [];
       const eiuByDoc = {};
@@ -1020,7 +1022,6 @@
       <div class="qa-cell qa-src-cell" data-c="src"><span title="${escapeHTML(q.src || "（无）")}">${escapeHTML(q.src || "（无）")}</span></div>
       <div class="qa-cell qa-type-cell"><span class="qa-badge ${q.type}">${typeLabel(q.type)}</span></div>
       <span class="ds-actions">
-        <button class="btn ghost sm" data-act="qa-edit" title="编辑"><i data-lucide="pencil"></i></button>
         <button class="btn ghost sm" data-act="qa-del" title="删除"><i data-lucide="trash-2"></i></button>
       </span>
     </div>`;
@@ -1122,27 +1123,19 @@
     $$("#qaContent .col-filter").forEach(f => {
       f.onclick = (e) => { e.stopPropagation(); openColFilter(f.dataset.filter, f); };
     });
-    // 单元格双击编辑（仿 Excel）
+    // 单击显示单元格全文
     $$("#qaContent .qa-row .qa-cell[data-c]").forEach(cell => {
-      cell.addEventListener("dblclick", () => startCellEdit(cell));
-      // 单击显示单元格全文（延时以区分双击编辑）
       cell.addEventListener("click", () => {
         if (cell.dataset._editing) return;
         const t = setTimeout(() => showCellFull(cell), 220);
-        cell.addEventListener("dblclick", () => clearTimeout(t), { once: true });
+        cell.addEventListener("click", () => clearTimeout(t), { once: true });
       });
     });
     // 列宽拖拽调整
     bindQaColResize();
     $$("#qaContent .qa-row").forEach(row => {
       const id = row.dataset.id;
-      const edit = row.querySelector("[data-act='qa-edit']"), del = row.querySelector("[data-act='qa-del']");
-      if (edit) edit.onclick = () => {
-        const d = DOCS[findDocOfQa(id)]; const q = d.qa.find(x => x.id === id);
-        const nq = prompt("编辑问题", q.q); if (nq == null) return;
-        const na = prompt("编辑答案", q.a); if (na == null) return;
-        q.q = nq; q.a = na; showLib("qa");
-      };
+      const del = row.querySelector("[data-act='qa-del']");
       if (del) del.onclick = () => {
         const d = DOCS[findDocOfQa(id)];
         if (!confirm("删除该问答对？")) return;
@@ -1283,11 +1276,10 @@
   // 在指定容器内绑定问答对单元格交互（点击显示全文 + 双击编辑），供主视图与全屏共用
   function bindQaCellInteractions(scope) {
     scope.querySelectorAll(".qa-row .qa-cell[data-c]").forEach(cell => {
-      cell.addEventListener("dblclick", () => startCellEdit(cell));
       cell.addEventListener("click", () => {
         if (cell.dataset._editing) return;
         const t = setTimeout(() => showCellFull(cell), 220);
-        cell.addEventListener("dblclick", () => clearTimeout(t), { once: true });
+        cell.addEventListener("click", () => clearTimeout(t), { once: true });
       });
     });
   }
@@ -1390,26 +1382,6 @@
         document.addEventListener("mouseup", up);
       };
     });
-  }
-
-  // 单元格行内编辑
-  function startCellEdit(cell) {
-    const row = cell.closest(".qa-row"); const id = row.dataset.id;
-    const d = DOCS[findDocOfQa(id)]; const q = d.qa.find(x => x.id === id);
-    const field = cell.dataset.c; const span = cell.querySelector("span");
-    const cur = field === "review" ? q.review : (q[field] || "");
-    const input = document.createElement("input");
-    input.className = "cell-edit-input";
-    input.value = cur;
-    const write = () => {
-      let v = input.value.trim();
-      if (field === "review") { if (!["已通过", "已驳回", "待审核"].includes(v)) v = "待审核"; }
-      if (field === "diff") { if (!["简单", "中等", "难"].includes(v)) v = "简单"; }
-      q[field] = v; showLib("qa");
-    };
-    input.addEventListener("blur", write);
-    input.addEventListener("keydown", e => { if (e.key === "Enter") { input.blur(); } else if (e.key === "Escape") { input.value = cur; input.blur(); } });
-    cell.innerHTML = ""; cell.appendChild(input); input.focus(); input.select();
   }
 
   // 列筛选弹层
@@ -1755,27 +1727,6 @@
     return node;
   }
 
-  function readFileText(file) {
-    return new Promise(res => {
-      const r = new FileReader();
-      r.onload = () => res(r.result || "");
-      r.onerror = () => res("");
-      r.readAsText(file);
-    });
-  }
-  // 从文档文本自动抽取知识点：按句切分 + 类型识别（规则/约束、流程、定义）
-  function extractEIU(text) {
-    const segs = (text || "").split(/[。；;！!?？\n]+/).map(s => s.trim())
-      .filter(s => s.length >= 6 && /[一-龥A-Za-z0-9]/.test(s));
-    return segs.slice(0, 40).map((s, i) => {
-      const n = (i + 1).toString().padStart(3, "0");
-      let type = "定义";
-      if (/不得|必须|应当|应|上限|下限|比例|阈值|限制|不超过|超过|禁止/.test(s)) type = "规则/约束";
-      else if (/流程|步骤|先|后|提交|审批|办理|操作/.test(s)) type = "流程";
-      else if (/是指|称作|即|定义|称为|包括/.test(s)) type = "定义";
-      return { id: "KP-U" + n, stmt: s + (s.endsWith("。") ? "" : "。"), type, prio: "必须覆盖", state: "待补充", ev: "上传文档 · 自动抽取" };
-    });
-  }
   function downloadEIU(docId) {
     const d = DOCS[docId]; if (!d) return;
     const rows = d.kp || [];
@@ -1793,17 +1744,19 @@
     URL.revokeObjectURL(url);
     toast(`已导出「${d.name}」的 ${rows.length} 条知识点（CSV）`);
   }
-  function handleUpload(file) {
+
+  // 上传文档到后端真实链路：上传 → 入库/解析分块 → 触发 EIU 知识点抽取 → 轮询进度 → 刷新文档库
+  async function handleUpload(file) {
     const id = "u" + Date.now().toString(36) + Math.floor(Math.random() * 1000);
-    const ext = (file.name.split(".").pop() || "").toUpperCase();
-    const typeMap = { PDF: "PDF", DOCX: "DOCX", DOC: "DOC", TXT: "TXT", MD: "MD" };
-    const type = typeMap[ext] || ext || "FILE";
+    const ext = (file.name.split(".").pop() || "").toLowerCase();
+    const typeMap = { pdf: "PDF", docx: "DOCX", doc: "DOC", txt: "TXT", md: "MD" };
+    const type = typeMap[ext] || ext.toUpperCase() || "FILE";
     const kb = file.size / 1024;
     const size = kb >= 1024 ? (kb / 1024).toFixed(1) + " MB" : Math.max(1, Math.round(kb)) + " KB";
     const targetFolder = state._uploadTarget || "本地上传";
     state._uploadTarget = null;
 
-    DOCS[id] = { name: file.name, type, size, status: "解析中 0%", ver: "v1", updated: "刚刚",
+    DOCS[id] = { name: file.name, type, size, status: "上传中…", ver: "v1", updated: "刚刚",
       preview: [], versions: [{ tag: "v1", note: `首次入库（上传至「${targetFolder}」）`, time: "刚刚" }], kp: [], qa: [], review: [], parseProgress: 0 };
     const folder = findOrCreateFolder(targetFolder);
     folder.children.push({ name: file.name, doc: id });
@@ -1814,26 +1767,118 @@
     const tr = $(`#docTree .tree-row[data-doc="${id}"]`);
     if (tr) { $$("#docTree .tree-row.active").forEach(x => x.classList.remove("active")); tr.classList.add("active"); }
 
-    // 模拟进度条
-    DOCS[id].parseProgress = 0;
-    const progIv = setInterval(() => {
-      DOCS[id].parseProgress = Math.min(100, (DOCS[id].parseProgress || 0) + 18 + Math.random() * 12);
-      DOCS[id].status = `解析中 ${Math.round(DOCS[id].parseProgress)}%`;
-      if (state.view === "doclib" && state.sel.doc === id) renderDocProgress(id);
-      if (DOCS[id].parseProgress >= 100) clearInterval(progIv);
-    }, 150);
+    try {
+      // 0) 每次上传都新建一个独立语料库（corpus），保证不同上传之间完全隔离、不混在一起
+      const ts = new Date();
+      const pad = (n) => String(n).padStart(2, "0");
+      const tsStr = `${ts.getFullYear()}${pad(ts.getMonth() + 1)}${pad(ts.getDate())}_${pad(ts.getHours())}${pad(ts.getMinutes())}${pad(ts.getSeconds())}`;
+      const corpusName = `上传_${tsStr}_${file.name}`;
+      let corpusId = CORPUS_ID;
+      try {
+        const cRes = await fetch(API_BASE + "/api/corpus", {
+          method: "POST", headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: corpusName, description: `单次上传自动创建（${file.name}）`, created_by: "web" })
+        });
+        if (cRes.ok) { const cJson = await cRes.json(); corpusId = cJson.corpus_id; }
+        activeCorpusId = corpusId;
+      } catch (e) { /* 建库失败则回退到默认 corpus */ }
 
-    readFileText(file).then(text => {
-      clearInterval(progIv);
-      DOCS[id].parseProgress = 100;
-      const eius = extractEIU(text);
-      DOCS[id].kp = eius;
-      DOCS[id].preview = text.split(/\n+/).map(s => s.trim()).filter(Boolean).slice(0, 4);
-      DOCS[id].status = eius.length ? `已解析（知识点 ${eius.length} 条）` : "已解析（未识别到可抽取知识点）";
+      // 1) 上传到后端（使用本次新建的 corpus_id）
+      const fd = new FormData();
+      fd.append("corpus_id", String(corpusId));
+      fd.append("file", file);
+      fd.append("upload_user", "web");
+      fd.append("document_version", "v1");
+      DOCS[id].status = "上传中…";
       renderLibContent("doc", id);
-      toast(`已上传「${file.name}」并自动抽取 ${eius.length} 条知识点`);
+      const up = await fetch(API_BASE + "/api/documents/upload", { method: "POST", body: fd });
+      if (!up.ok) throw new Error("上传失败：" + up.status);
+      const upRes = await up.json();
+      // 完全禁止重复上传：内容已存在则拦截，不上传、不抽取、提示已存在
+      if (upRes.duplicate) {
+        delete DOCS[id];
+        renderLib("doc");
+        toast(`「${file.name}」已存在，未重复上传`);
+        icons();
+        return;
+      }
+      const docId = upRes.document_id;
+      DOCS[id].status = "已入库，解析中…";
+      DOCS[id].parseProgress = 30;
+      renderLibContent("doc", id);
+
+      // 2) 触发 EIU 知识点抽取（仅当前文档，单文档隔离，不重抽其他文档）
+      const ex = await fetch(API_BASE + `/api/corpus/${corpusId}/eiu/extract?document_id=${docId}`, { method: "POST" });
+      let jobId = null;
+      if (ex.ok) { const exRes = await ex.json(); jobId = exRes.job_id; }
+
+      // 3) 轮询抽取进度
+      if (jobId != null) {
+        const poll = setInterval(async () => {
+          try {
+            const jr = await fetch(API_BASE + `/api/jobs/${jobId}`);
+            if (!jr.ok) return;
+            const job = await jr.json();
+            const pg = job.progress || 0;
+            DOCS[id].parseProgress = Math.max(30, Math.min(99, pg));
+            DOCS[id].status = `知识点抽取中 ${Math.round(pg)}%`;
+            if (state.view === "doclib" && state.sel.doc === id) renderDocProgress(id);
+            if (job.finished || job.status === "completed" || job.status === "failed") {
+              clearInterval(poll);
+              await loadData();                    // 重新拉取后端最新文档/知识点（覆盖临时文档）
+              const realId = "doc" + docId;
+              state.sel.doc = realId;
+              renderLib("doc");
+              renderLibContent("doc", realId);
+              const tr2 = $(`#docTree .tree-row[data-doc="${realId}"]`);
+              if (tr2) { $$("#docTree .tree-row.active").forEach(x => x.classList.remove("active")); tr2.classList.add("active"); }
+              if (job.status === "failed") {
+                toast(`「${file.name}」入库成功，但知识点抽取失败`);
+                icons();
+                return;
+              }
+              // 4) 单文档问答对生成：仅当前文档，不混库、不重抽其他文档
+              toast(`「${file.name}」知识点已抽取，正在生成问答对…`);
+              try {
+                const gq = await fetch(
+                  API_BASE + `/api/corpus/${corpusId}/cases/generate?document_id=${docId}`,
+                  { method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ angles: ["primary"], include_variations: false, dry_run: false }) }
+                );
+                if (gq.ok) {
+                  const gqr = await gq.json().catch(() => null);
+                  await loadData();
+                  if (gqr && typeof gqr.reused === "number" && gqr.reused > 0) {
+                    toast(`「${file.name}」复用旧库问答对 ${gqr.reused} 道、新生成 ${gqr.generated || 0} 道`);
+                  } else {
+                    toast(`「${file.name}」已自动解析知识点并生成问答对`);
+                  }
+                }
+              } catch (e) { /* 问答对生成失败不影响知识点结果 */ }
+              await loadData();
+              state.sel.doc = realId;
+              renderLib("doc");
+              renderLibContent("doc", realId);
+              icons();
+            }
+          } catch (e) { /* 忽略单次轮询错误 */ }
+        }, 1500);
+      } else {
+        await loadData();
+        const realId = "doc" + docId;
+        state.sel.doc = realId;
+        renderLib("doc");
+        renderLibContent("doc", realId);
+        toast(`「${file.name}」已上传入库（未触发知识点抽取）`);
+        icons();
+      }
+    } catch (e) {
+      DOCS[id].status = "上传失败：" + (e.message || e);
+      DOCS[id].parseProgress = 0;
+      renderLibContent("doc", id);
+      toast("上传失败：" + (e.message || e));
       icons();
-    });
+    }
   }
 
   function renderDocProgress(docId) {

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -24,6 +25,22 @@ EIU_TYPES = {
 
 # 优先级 → 权重（M02 SPEC 4.3）
 PRIORITY_WEIGHT = {"P0": 5, "P1": 3, "P2": 1}
+
+# 编号前缀（如 "1." "（二）" "3.2"），用于 statement 归一化
+_STATEMENT_NUM_PREFIX = re.compile(r"^\s*(?:\(?[0-9０-９]+\)?[\.\、]\s*)+")
+
+
+def normalize_statement(text: str) -> str:
+    """将 EIU statement 归一化为复用匹配键。
+
+    去除编号前缀、结尾标点、空白，并统一为小写，使不同 corpus 中
+    语义相同的陈述可以精确匹配（方案 B 跨库复用）。
+    """
+    if not text:
+        return ""
+    text = _STATEMENT_NUM_PREFIX.sub("", text.strip()).strip()
+    text = re.sub(r"[。；;，,、\s]+$", "", text).strip()
+    return text.lower()
 
 
 class Base(DeclarativeBase):
@@ -232,6 +249,17 @@ class DatabaseResult:
 class DatabaseService:
     def create_all(self) -> None:
         Base.metadata.create_all(bind=engine)
+        # SQLite 不支持 create_all 自动加列：为已存在的表补 statement_norm 列
+        from sqlalchemy import inspect
+
+        inspector = inspect(engine)
+        if "generated_case" in inspector.get_table_names():
+            cols = {c["name"] for c in inspector.get_columns("generated_case")}
+            if "statement_norm" not in cols:
+                with engine.begin() as conn:
+                    conn.execute(
+                        "ALTER TABLE generated_case ADD COLUMN statement_norm VARCHAR(512)"
+                    )
 
     def save_document(
         self,
@@ -264,10 +292,18 @@ class DatabaseService:
             session.refresh(row)
             return row.document_id
 
-    def find_by_hash(self, file_hash: str) -> int | None:
-        """Return existing document_id for the given hash, or None."""
+    def find_by_hash(self, file_hash: str, *, corpus_id: int | None = None) -> int | None:
+        """Return existing document_id for the given hash within a corpus.
+
+        不传 corpus_id 时全局查找（兼容旧调用）；传入时仅在该语料库内查找，
+        实现「同一 corpus_id 内不允许重复上传」，同时允许同一文件进入
+        不同 corpus_id 做独立（从头）生成——互不串味。
+        """
         with SessionLocal() as session:
-            row = session.query(DocumentRow).filter(DocumentRow.file_hash == file_hash).first()
+            query = session.query(DocumentRow).filter(DocumentRow.file_hash == file_hash)
+            if corpus_id is not None:
+                query = query.filter(DocumentRow.corpus_id == corpus_id)
+            row = query.first()
             return row.document_id if row else None
 
     def save_blocks(self, *, document_id: int, blocks: list[dict]) -> list[int]:
@@ -602,6 +638,25 @@ class DatabaseService:
         """全量重抽前清空该语料库的旧 EIU（覆盖式重算）。返回删除条数。"""
         with SessionLocal() as session:
             result = session.query(EiuRow).filter(EiuRow.corpus_id == corpus_id).delete()
+            session.commit()
+            return int(result)
+
+    def delete_eius_by_document(self, *, corpus_id: int, document_id: int) -> int:
+        """单文档重抽前仅清空该文档的旧 EIU（按文档隔离，不影响其他文档）。返回删除条数。"""
+        with SessionLocal() as session:
+            block_ids = [
+                row.block_id
+                for row in session.query(BlockRow.block_id)
+                .filter(BlockRow.document_id == document_id)
+                .all()
+            ]
+            if not block_ids:
+                return 0
+            result = (
+                session.query(EiuRow)
+                .filter(EiuRow.corpus_id == corpus_id, EiuRow.block_id.in_(block_ids))
+                .delete()
+            )
             session.commit()
             return int(result)
 
@@ -1050,8 +1105,13 @@ class DatabaseService:
         evidence: list | None = None,
         content_priority: str = "P2",
         review_status: str = "candidate",
+        statement_norm: str | None = None,
     ) -> dict:
-        """保存一条 m03 生成的评测样本（corpus 语义）。"""
+        """保存一条 m03 生成的评测样本（corpus 语义）。
+
+        statement_norm: 源 EIU statement 的归一化值（方案 B 跨库复用匹配键）。
+        不传时留空（旧调用兼容）；调用方应在生成/复用落库时显式传入。
+        """
         with SessionLocal() as session:
             row = GeneratedCaseRow(
                 intent_id=intent_id,
@@ -1068,11 +1128,53 @@ class DatabaseService:
                 evidence=evidence,
                 content_priority=content_priority,
                 review_status=review_status,
+                statement_norm=statement_norm,
             )
             session.add(row)
             session.commit()
             session.refresh(row)
             return self._generated_case_to_dict(row)
+
+    def delete_generated_cases_by_document(
+        self, *, corpus_id: int, document_id: int
+    ) -> int:
+        """删除指定文档下的全部 m03 评测样本（问答对单文档隔离，重抽前清理）。
+
+        与 delete_generated_cases_by_corpus 区别：仅清理单文档维度，
+        不影响同 corpus 其他文档已生成的问答对。
+        """
+        with SessionLocal() as session:
+            rows = (
+                session.query(GeneratedCaseRow)
+                .filter_by(corpus_id=corpus_id, document_id=document_id)
+                .all()
+            )
+            for row in rows:
+                session.delete(row)
+            session.commit()
+            return len(rows)
+
+    def find_cases_by_statement(
+        self, statement_norm: str, *, exclude_corpus_id: int | None = None
+    ) -> list[dict]:
+        """跨语料库精确匹配：按归一化 statement 查找已有问答对（方案 B 复用）。
+
+        用于"重合内容复用旧库"——不同 corpus 中出现相同 EIU 陈述时，
+        直接复用历史生成的规范问答对，跳过 LLM 重生成。
+        exclude_corpus_id 用于避免命中本库自身（重抽场景）。
+        """
+        if not statement_norm:
+            return []
+        with SessionLocal() as session:
+            query = session.query(GeneratedCaseRow).filter_by(
+                statement_norm=statement_norm
+            )
+            if exclude_corpus_id is not None:
+                query = query.filter(
+                    GeneratedCaseRow.corpus_id != exclude_corpus_id
+                )
+            row = query.order_by(GeneratedCaseRow.case_id.desc()).first()
+            return [self._generated_case_to_dict(row)] if row else []
 
     def list_generated_cases(
         self,
@@ -1156,16 +1258,24 @@ class DatabaseService:
         updated = self.update_generated_case(case_id, review_status="retired")
         return updated is not None
 
-    def list_covered_eiu_ids(self, corpus_id: int) -> set[int]:
-        """该语料库下已生成评测样本的 EIU id 集合（批量生成跳过已覆盖项）。"""
+    def list_covered_eiu_ids(
+        self, corpus_id: int, *, document_id: int | None = None
+    ) -> set[int]:
+        """该语料库（或指定文档）下已生成评测样本的 EIU id 集合。
+
+        传入 document_id 时仅返回该文档维度的已覆盖 EIU，
+        实现单文档问答对隔离——重抽某文档不会误判其他文档已覆盖项。
+        """
         with SessionLocal() as session:
-            rows = (
+            query = (
                 session.query(GeneratedCaseRow.eiu_id)
                 .filter(GeneratedCaseRow.corpus_id == corpus_id)
                 .filter(GeneratedCaseRow.eiu_id.isnot(None))
                 .filter(GeneratedCaseRow.review_status != "retired")
-                .all()
             )
+            if document_id is not None:
+                query = query.filter(GeneratedCaseRow.document_id == document_id)
+            rows = query.all()
             return {row[0] for row in rows}
 
     # ------------------------------------------------------------------
@@ -1253,6 +1363,7 @@ class DatabaseService:
             "content_priority": row.content_priority,
             "review_status": row.review_status,
             "review_tag": row.review_tag,
+            "statement_norm": row.statement_norm,
             "created_at": row.created_at.isoformat() if row.created_at else None,
             "updated_at": row.updated_at.isoformat() if row.updated_at else None,
         }
@@ -1282,6 +1393,10 @@ class GeneratedCaseRow(Base):
     )
     # m04 质量门禁失败标签：answer_coverage / generation_issue
     review_tag: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # 方案 B 复用匹配键：源 EIU statement 归一化值（跨语料库精确匹配）
+    statement_norm: Mapped[str | None] = mapped_column(
+        String(512), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow

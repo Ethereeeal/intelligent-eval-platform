@@ -75,5 +75,8 @@ services:
 
 volumes:
   mysql_data:
+    driver: local
   minio_data:
+    driver: local
   backend_storage:
+    driver: local

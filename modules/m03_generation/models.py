@@ -59,3 +59,4 @@ class GeneratedCase:
     content_priority: str = "P2"
     review_status: str = "candidate"
     is_unanswerable: bool = False
+    statement_norm: str | None = None  # 方案 B 跨库复用匹配键

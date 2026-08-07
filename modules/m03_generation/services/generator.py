@@ -20,7 +20,7 @@ from modules.m03_generation.services.prompts import (
     EIU_TYPE_TO_QUESTION_TYPE,
     build_qa_prompt,
 )
-from modules.shared.services.database import DatabaseService
+from modules.shared.services.database import DatabaseService, normalize_statement
 
 
 class CaseGenerator:
@@ -77,12 +77,13 @@ class CaseGenerator:
                 f"{raw.get('gold_answer', '原文证据不足')}"
             )
 
-        # 4. 难度初判 + 单段题复查（README §5.1：L3 需跨段多跳，单段题降级）
-        difficulty = self._validate_difficulty(raw.get("difficulty", "L2"), single_segment=True)
+        # 4. 难度写死（#8）：由 EIU 类型/优先级规则映射，不依赖 LLM 自由裁量
+        #    单段题不做 L3（README §5.1：L3 需跨段多跳），统一 ≤ L2
+        difficulty = self._rule_difficulty(eiu.get("eiu_type", "rule"), eiu.get("content_priority", "P2"))
 
-        # 5. 证据绑定（FR-QG-003）
+        # 5. 证据绑定写死（#9）：直接绑定生成该 EIU 的源 Block，不依赖 LLM 定位
         evidence = self._build_evidence_bindings(
-            raw_evidence=raw.get("evidence_bindings", []),
+            raw_evidence=[],  # 不再采用 LLM 给出的证据定位，改用源 Block 兜底（确定性）
             block=block,
             document=document,
             fallback_points=raw.get("must_have_points", [eiu["statement"]]),
@@ -102,6 +103,7 @@ class CaseGenerator:
             acceptable_answers=raw.get("acceptable_answers") or [],
             evidence=evidence,
             content_priority=eiu.get("content_priority", "P2"),
+            statement_norm=normalize_statement(eiu.get("statement", "")),
         )
         if not case.question:
             raise ValueError(f"EIU {eiu['eiu_id']} 生成结果缺少 question 字段")
@@ -124,6 +126,7 @@ class CaseGenerator:
             evidence=case.evidence,
             content_priority=case.content_priority,
             review_status=case.review_status,
+            statement_norm=case.statement_norm,
         )
 
     # ------------------------------------------------------------------
@@ -249,6 +252,21 @@ class CaseGenerator:
     # ------------------------------------------------------------------
     # 难度初判（FR-DIFF-001 / 002 / 005）
     # ------------------------------------------------------------------
+    @staticmethod
+    def _rule_difficulty(eiu_type: str, priority: str) -> str:
+        """难度写死（#8）：由 EIU 类型/优先级规则映射，确定性、不依赖 LLM。
+
+        规则：
+          - P0（监管红线/禁止/例外）→ L2（高价值，必覆盖）
+          - 其余类型按语义：threshold/definition/rule/prohibition/exception → L2；
+            metric/date/process/change/formula → L1
+          - 单段题不做 L3（README §5.1：L3 需跨段多跳），统一 ≤ L2
+        """
+        if priority == "P0":
+            return "L2"
+        high = {"threshold", "definition", "rule", "prohibition", "exception"}
+        return "L2" if eiu_type in high else "L1"
+
     @staticmethod
     def _validate_difficulty(difficulty: str, *, single_segment: bool) -> str:
         level = str(difficulty or "L2").strip().upper()

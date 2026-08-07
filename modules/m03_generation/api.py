@@ -31,10 +31,24 @@ cases_router = APIRouter(prefix="/api/cases", tags=["cases"])
 # 批量生成：POST /api/corpus/{corpus_id}/cases/generate
 # ----------------------------------------------------------------------
 @generation_router.post("/{corpus_id}/cases/generate", response_model=GenerateCasesResponse)
-def generate_cases(corpus_id: int, payload: GenerateCasesRequest):
+def generate_cases(
+    corpus_id: int,
+    payload: GenerateCasesRequest,
+    document_id: int | None = Query(default=None, description="指定文档时仅生成该文档的问答对（单文档隔离）。"),
+):
     if pipeline_service.database.get_corpus(corpus_id) is None:
         raise HTTPException(status_code=404, detail="corpus not found")
     try:
+        if document_id is not None:
+            # 单文档隔离：仅抽取当前文档 EIU、不重抽其他文档、不重复生成
+            return pipeline_service.generate_cases_for_document(
+                corpus_id=corpus_id,
+                document_id=document_id,
+                angles=payload.angles,
+                include_variations=payload.include_variations,
+                variation_count=payload.variation_count,
+                dry_run=payload.dry_run,
+            )
         return pipeline_service.generate_cases_for_corpus(
             corpus_id,
             angles=payload.angles,
