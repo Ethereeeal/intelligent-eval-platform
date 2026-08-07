@@ -1,0 +1,102 @@
+[
+  {
+    "document_id": 20,
+    "corpus_id": 2,
+    "file_name": "附件1：上海银行综合产品池业务管理规程（2025年版）.docx",
+    "file_type": ".docx",
+    "file_size": 151743,
+    "parse_status": "failed",
+    "status": "uploaded",
+    "created_at": "2026-08-06T08:44:54"
+  },
+  {
+    "document_id": 19,
+    "corpus_id": 2,
+    "file_name": "附件1：上海银行法人账户透支业务操作规程（2025年版）.docx",
+    "file_type": ".docx",
+    "file_size": 160431,
+    "parse_status": "failed",
+    "status": "uploaded",
+    "created_at": "2026-08-06T08:44:54"
+  },
+  {
+    "document_id": 18,
+    "corpus_id": 2,
+    "file_name": "附件1：上海银行法人房产按揭贷款操作规程（2025年版）.docx",
+    "file_type": ".docx",
+    "file_size": 494285,
+    "parse_status": "failed",
+    "status": "uploaded",
+    "created_at": "2026-08-06T08:44:53"
+  },
+  {
+    "document_id": 17,
+    "corpus_id": 2,
+    "file_name": "附件1：上海银行单位结构性存款质押授信业务操作规程（2025年版）.docx",
+    "file_type": ".docx",
+    "file_size": 69144,
+    "parse_status": "completed",
+    "status": "uploaded",
+    "created_at": "2026-07-30T08:48:08"
+  },
+  {
+    "document_id": 16,
+    "corpus_id": 2,
+    "file_name": "附件1：上海银行项目前期固定资产贷款操作规程.docx",
+    "file_type": ".docx",
+    "file_size": 34970,
+    "parse_status": "completed",
+    "status": "uploaded",
+    "created_at": "2026-07-30T08:46:44"
+  },
+  {
+    "document_id": 14,
+    "corpus_id": 2,
+    "file_name": "附件1：上海银行流动资金循环贷款操作规程（2025年版）.docx",
+    "file_type": ".docx",
+    "file_size": 137073,
+    "parse_status": "completed",
+    "status": "uploaded",
+    "created_at": "2026-07-30T08:46:43"
+  },
+  {
+    "document_id": 12,
+    "corpus_id": 2,
+    "file_name": "附件1：上海银行单位人民币非融资性保函业务管理规程（2025年版）.docx",
+    "file_type": ".docx",
+    "file_size": 77242,
+    "parse_status": "completed",
+    "status": "uploaded",
+    "created_at": "2026-07-30T08:46:41"
+  },
+  {
+    "document_id": 11,
+    "corpus_id": 2,
+    "file_name": "附件1：上海银行公司客户封闭式非保本理财产品质押授信业务操作规程（2025年版）.docx",
+    "file_type": ".docx",
+    "file_size": 60100,
+    "parse_status": "completed",
+    "status": "uploaded",
+    "created_at": "2026-07-30T08:46:39"
+  },
+  {
+    "document_id": 10,
+    "corpus_id": 2,
+    "file_name": "附件1：上海银行中小企业无还本续贷业务操作规程（2026年版）.docx",
+    "file_type": ".docx",
+    "file_size": 27707,
+    "parse_status": "completed",
+    "status": "uploaded",
+    "created_at": "2026-07-30T08:46:38"
+  },
+  {
+    "document_id": 9,
+    "corpus_id": 2,
+    "file_name": "附件1：上海银行单位定期存单质押授信业务操作规程（2025年版）.docx",
+    "file_type": ".docx",
+    "file_size": 141100,
+    "parse_status": "completed",
+    "status": "uploaded",
+    "created_at": "2026-07-30T08:10:40"
+  }
+]
