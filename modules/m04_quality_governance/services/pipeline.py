@@ -52,10 +52,10 @@ class PipelineService:
     # ------------------------------------------------------------------
     # 全量校验（POST /api/corpus/{corpus_id}/quality-check）
     # ------------------------------------------------------------------
-    def run_quality_check(self, corpus_id: int) -> dict[str, Any]:
-        """对语料库全部样本执行一轮质量校验，返回汇总（README §2.3）。"""
-        cases = self.database.list_generated_cases(corpus_id)
-        summary = self._empty_summary(corpus_id)
+    def run_quality_check(self, document_id: int | None = None) -> dict[str, Any]:
+        """对全部样本执行一轮质量校验（可按文档过滤），返回汇总（README §2.3）。"""
+        cases = self.database.list_generated_cases(document_id=document_id)
+        summary = self._empty_summary()
         summary["total_cases"] = len(cases)
 
         for case in cases:
@@ -135,12 +135,12 @@ class PipelineService:
             "checks": checks,
         }
 
-    def get_results_summary(self, corpus_id: int) -> dict[str, Any]:
-        """按已落库结果生成汇总（GET /api/corpus/{corpus_id}/quality-check/results）。"""
-        cases = self.database.list_generated_cases(corpus_id)
-        checks = self.database.list_quality_checks_by_corpus(corpus_id)
+    def get_results_summary(self, document_id: int | None = None) -> dict[str, Any]:
+        """按已落库结果生成汇总（GET /api/quality-check/results）。"""
+        cases = self.database.list_generated_cases(document_id=document_id)
+        checks = self.database.list_quality_checks_by_document(document_id=document_id)
 
-        summary = self._empty_summary(corpus_id)
+        summary = self._empty_summary()
         summary["total_cases"] = len(cases)
 
         # 按 case 分组
@@ -285,9 +285,8 @@ class PipelineService:
         )
 
     @staticmethod
-    def _empty_summary(corpus_id: int) -> dict[str, Any]:
+    def _empty_summary() -> dict[str, Any]:
         return {
-            "corpus_id": corpus_id,
             "total_cases": 0,
             "passed": 0,
             "failed": 0,

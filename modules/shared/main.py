@@ -5,11 +5,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from modules.m01_data_foundation.api import (
-    corpus_router,
     documents_router,
     jobs_router,
 )
-from modules.m02_eiu_coverage.api import corpus_eiu_router, eiu_router
+from modules.m02_eiu_coverage.api import eiu_router
 from modules.m03_generation.api import (
     cases_router,
     generation_router,
@@ -46,9 +45,7 @@ app.add_middleware(
 )
 
 app.include_router(documents_router)
-app.include_router(corpus_router)
 app.include_router(jobs_router)
-app.include_router(corpus_eiu_router)
 app.include_router(eiu_router)
 app.include_router(generation_router)
 app.include_router(generation_eiu_router)

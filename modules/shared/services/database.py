@@ -63,24 +63,26 @@ class DocumentRow(Base):
     __tablename__ = "document"
 
     document_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    corpus_id: Mapped[int] = mapped_column(Integer, nullable=False)
     file_name: Mapped[str] = mapped_column(String(255), nullable=False)
     file_type: Mapped[str] = mapped_column(String(64), nullable=False)
     file_size: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    # 唯一约束改为 (corpus_id, file_hash)：同一语料库内不允许重复，
-    # 但允许相同文件存在于不同语料库（每个 corpus 各自一份、从头生成）
-    file_hash: Mapped[str] = mapped_column(String(128), nullable=False)
+    # 文件哈希全局唯一：同一文件全库不允许重复上传
+    file_hash: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
     minio_path: Mapped[str] = mapped_column(String(512), nullable=False)
     upload_user: Mapped[str | None] = mapped_column(String(128), nullable=True)
     document_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     authority_level: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    # 目录结构：相对根路径（如「合同/2024」），根目录为空；用于前端目录树重建
+    folder_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # 业务用途：basic=基础问题输入文档，gen=仅泛化输入文档
+    purpose: Mapped[str | None] = mapped_column(String(16), nullable=True)
     parse_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
     parse_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(64), nullable=False, default="uploaded")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (
-        UniqueConstraint("corpus_id", "file_hash", name="uq_corpus_file_hash"),
+        UniqueConstraint("file_hash", name="uq_file_hash"),
     )
 
 
@@ -110,8 +112,8 @@ class EiuRow(Base):
     __tablename__ = "eiu"
 
     eiu_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    corpus_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     block_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    document_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     statement: Mapped[str] = mapped_column(Text, nullable=False)
     eiu_type: Mapped[str] = mapped_column(String(32), nullable=False)
     content_priority: Mapped[str] = mapped_column(String(4), nullable=False)
@@ -130,7 +132,6 @@ class DocUpdateJobRow(Base):
     __tablename__ = "doc_update_job"
 
     job_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    corpus_id: Mapped[int] = mapped_column(Integer, nullable=False)
     document_id: Mapped[int] = mapped_column(Integer, nullable=False)
     job_type: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
@@ -139,18 +140,6 @@ class DocUpdateJobRow(Base):
     message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-
-
-class CorpusRow(Base):
-    __tablename__ = "corpus"
-
-    corpus_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(255), nullable=False)
-    description: Mapped[str | None] = mapped_column(Text, nullable=True)
-    domain: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    version: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class TaskJobRow(Base):
@@ -170,7 +159,6 @@ class ChatSessionRow(Base):
     __tablename__ = "chat_session"
 
     session_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    corpus_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True, index=True)
     created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
     title: Mapped[str] = mapped_column(String(255), default="新对话")
     status: Mapped[str] = mapped_column(String(32), default="active")
@@ -198,7 +186,6 @@ class DatasetVersionRow(Base):
     __tablename__ = "dataset_version"
 
     version_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    corpus_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     version_number: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
     case_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -238,7 +225,6 @@ class CoverageReportRow(Base):
     __tablename__ = "coverage_report"
 
     report_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    corpus_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     total_eiu: Mapped[int] = mapped_column(Integer, default=0)
     questionable_eiu: Mapped[int] = mapped_column(Integer, default=0)
     excluded_eiu: Mapped[int] = mapped_column(Integer, default=0)
@@ -280,33 +266,72 @@ class DatabaseService:
                             "ALTER TABLE generated_case ADD COLUMN statement_norm VARCHAR(512)"
                         )
                     )
-        # document.file_hash：全局唯一 → (corpus_id, file_hash) 复合唯一
-        # （每个语料库内不重复，但允许相同文件存在于不同语料库各自一份）
+        # document.file_hash：全库唯一（同一文件不允许重复上传）
         if "document" in inspector.get_table_names():
+            cols = {c["name"] for c in inspector.get_columns("document")}
             index_names = {ix["name"] for ix in inspector.get_indexes("document")}
-            if "file_hash" in index_names and "uq_corpus_file_hash" not in index_names:
+            # 先删依赖 corpus_id 的复合唯一索引（否则 DROP COLUMN 会失败）；再删列
+            if "uq_corpus_file_hash" in index_names:
+                try:
+                    with engine.begin() as conn:
+                        conn.execute(text("DROP INDEX IF EXISTS uq_corpus_file_hash"))
+                except Exception:
+                    pass
+            if "corpus_id" in cols:
+                try:
+                    with engine.begin() as conn:
+                        conn.execute(text("ALTER TABLE document DROP COLUMN corpus_id"))
+                except Exception:
+                    pass
+        # document.folder_path / purpose：目录结构与业务用途（基础/泛化）
+        if "document" in inspector.get_table_names():
+            cols = {c["name"] for c in inspector.get_columns("document")}
+            with engine.begin() as conn:
+                if "folder_path" not in cols:
+                    conn.execute(text("ALTER TABLE document ADD COLUMN folder_path VARCHAR(512) NULL"))
+                if "purpose" not in cols:
+                    conn.execute(text("ALTER TABLE document ADD COLUMN purpose VARCHAR(16) NULL"))
+        # eiu.document_id：冗余存储归属文件，使 EIU 可按文件目录组织（去掉 corpus 维度）
+        if "eiu" in inspector.get_table_names():
+            eiu_cols = {c["name"] for c in inspector.get_columns("eiu")}
+            with engine.begin() as conn:
+                if "document_id" not in eiu_cols:
+                    conn.execute(text("ALTER TABLE eiu ADD COLUMN document_id INTEGER NULL"))
+                # 回填历史 EIU：经 block_id -> document_id 反查（仅更新尚未回填的）
+                # 使用跨数据库兼容的子查询写法（MySQL JOIN UPDATE 在 SQLite 下不支持）
+                conn.execute(
+                    text(
+                        "UPDATE eiu SET document_id = ("
+                        "SELECT b.document_id FROM document_block b "
+                        "WHERE b.block_id = eiu.block_id) "
+                        "WHERE document_id IS NULL"
+                    )
+                )
+                if "corpus_id" in eiu_cols:
+                    try:
+                        conn.execute(text("ALTER TABLE eiu DROP COLUMN corpus_id"))
+                    except Exception:
+                        pass
+        # 删除 corpus 表及其在各表中的 corpus_id 列（彻底去 corpus 概念）
+        if "corpus" in inspector.get_table_names():
+            try:
                 with engine.begin() as conn:
-                    if engine.dialect.name == "mysql":
-                        conn.execute(text("ALTER TABLE document DROP INDEX file_hash"))
-                        conn.execute(
-                            text(
-                                "ALTER TABLE document ADD UNIQUE KEY "
-                                "uq_corpus_file_hash (corpus_id, file_hash)"
-                            )
-                        )
-                    else:
-                        conn.execute(text("DROP INDEX file_hash ON document"))
-                        conn.execute(
-                            text(
-                                "CREATE UNIQUE INDEX uq_corpus_file_hash "
-                                "ON document (corpus_id, file_hash)"
-                            )
-                        )
+                    conn.execute(text("DROP TABLE corpus"))
+            except Exception:
+                pass
+        for tbl in ("doc_update_job", "chat_session", "dataset_version", "coverage_report"):
+            if tbl in inspector.get_table_names():
+                tcols = {c["name"] for c in inspector.get_columns(tbl)}
+                if "corpus_id" in tcols:
+                    try:
+                        with engine.begin() as conn:
+                            conn.execute(text(f"ALTER TABLE {tbl} DROP COLUMN corpus_id"))
+                    except Exception:
+                        pass
 
     def save_document(
         self,
         *,
-        corpus_id: int,
         file_name: str,
         file_type: str,
         file_hash: str,
@@ -315,10 +340,11 @@ class DatabaseService:
         upload_user: str | None = None,
         document_version: str | None = None,
         parse_status: str | None = None,
+        folder_path: str | None = None,
+        purpose: str | None = None,
     ) -> int:
         with SessionLocal() as session:
             row = DocumentRow(
-                corpus_id=corpus_id,
                 file_name=file_name,
                 file_type=file_type,
                 file_size=file_size,
@@ -327,6 +353,8 @@ class DatabaseService:
                 upload_user=upload_user,
                 document_version=document_version,
                 parse_status=parse_status,
+                folder_path=folder_path,
+                purpose=purpose,
                 status="uploaded",
             )
             session.add(row)
@@ -334,18 +362,10 @@ class DatabaseService:
             session.refresh(row)
             return row.document_id
 
-    def find_by_hash(self, file_hash: str, *, corpus_id: int | None = None) -> int | None:
-        """Return existing document_id for the given hash within a corpus.
-
-        不传 corpus_id 时全局查找（兼容旧调用）；传入时仅在该语料库内查找，
-        实现「同一 corpus_id 内不允许重复上传」，同时允许同一文件进入
-        不同 corpus_id 做独立（从头）生成——互不串味。
-        """
+    def find_by_hash(self, file_hash: str) -> int | None:
+        """Return existing document_id for the given hash (全库唯一，同一文件不允许重复上传)."""
         with SessionLocal() as session:
-            query = session.query(DocumentRow).filter(DocumentRow.file_hash == file_hash)
-            if corpus_id is not None:
-                query = query.filter(DocumentRow.corpus_id == corpus_id)
-            row = query.first()
+            row = session.query(DocumentRow).filter(DocumentRow.file_hash == file_hash).first()
             return row.document_id if row else None
 
     def save_blocks(self, *, document_id: int, blocks: list[dict]) -> list[int]:
@@ -376,11 +396,9 @@ class DatabaseService:
             session.commit()
         return block_ids
 
-    def list_blocks(self, corpus_id: int | None = None) -> list[dict]:
+    def list_blocks(self) -> list[dict]:
         with SessionLocal() as session:
             query = session.query(BlockRow, DocumentRow).join(DocumentRow, BlockRow.document_id == DocumentRow.document_id)
-            if corpus_id is not None:
-                query = query.filter(DocumentRow.corpus_id == corpus_id)
             rows = query.all()
             return [
                 {
@@ -400,48 +418,6 @@ class DatabaseService:
             ]
 
     # ------------------------------------------------------------------
-    # corpus
-    # ------------------------------------------------------------------
-    def save_corpus(self, *, name: str, description: str | None = None, domain: str | None = None, created_by: str | None = None) -> int:
-        with SessionLocal() as session:
-            row = CorpusRow(name=name, description=description, domain=domain, created_by=created_by)
-            session.add(row)
-            session.commit()
-            session.refresh(row)
-            return row.corpus_id
-
-    def list_corpora(self) -> list[dict]:
-        with SessionLocal() as session:
-            rows = session.query(CorpusRow).order_by(CorpusRow.corpus_id.desc()).all()
-            return [
-                {
-                    "corpus_id": row.corpus_id,
-                    "name": row.name,
-                    "description": row.description,
-                    "domain": row.domain,
-                    "created_by": row.created_by,
-                    "created_at": row.created_at.isoformat() if row.created_at else None,
-                    "version": row.version,
-                }
-                for row in rows
-            ]
-
-    def get_corpus(self, corpus_id: int) -> dict | None:
-        with SessionLocal() as session:
-            row = session.get(CorpusRow, corpus_id)
-            if not row:
-                return None
-            return {
-                "corpus_id": row.corpus_id,
-                "name": row.name,
-                "description": row.description,
-                "domain": row.domain,
-                "created_by": row.created_by,
-                "created_at": row.created_at.isoformat() if row.created_at else None,
-                "version": row.version,
-            }
-
-    # ------------------------------------------------------------------
     # document
     # ------------------------------------------------------------------
     def get_document(self, document_id: int) -> dict | None:
@@ -451,7 +427,6 @@ class DatabaseService:
                 return None
             return {
                 "document_id": row.document_id,
-                "corpus_id": row.corpus_id,
                 "file_name": row.file_name,
                 "file_type": row.file_type,
                 "file_size": row.file_size,
@@ -463,6 +438,8 @@ class DatabaseService:
                 "parse_status": row.parse_status,
                 "parse_error": row.parse_error,
                 "status": row.status,
+                "folder_path": row.folder_path,
+                "purpose": row.purpose,
                 "created_at": row.created_at.isoformat() if row.created_at else None,
             }
 
@@ -471,21 +448,20 @@ class DatabaseService:
             row = session.get(DocumentRow, document_id)
             return row.document_id if row else None
 
-    def list_documents(self, corpus_id: int | None = None) -> list[dict]:
+    def list_documents(self) -> list[dict]:
         with SessionLocal() as session:
             query = session.query(DocumentRow)
-            if corpus_id is not None:
-                query = query.filter(DocumentRow.corpus_id == corpus_id)
             rows = query.order_by(DocumentRow.document_id.desc()).all()
             return [
                 {
                     "document_id": row.document_id,
-                    "corpus_id": row.corpus_id,
                     "file_name": row.file_name,
                     "file_type": row.file_type,
                     "file_size": row.file_size,
                     "parse_status": row.parse_status,
                     "status": row.status,
+                    "folder_path": row.folder_path,
+                    "purpose": row.purpose,
                     "created_at": row.created_at.isoformat() if row.created_at else None,
                 }
                 for row in rows
@@ -501,6 +477,8 @@ class DatabaseService:
         file_hash: str | None = None,
         minio_path: str | None = None,
         file_size: int | None = None,
+        folder_path: str | None = None,
+        purpose: str | None = None,
     ) -> None:
         with SessionLocal() as session:
             row = session.get(DocumentRow, document_id)
@@ -518,11 +496,33 @@ class DatabaseService:
                 row.minio_path = minio_path
             if file_size is not None:
                 row.file_size = file_size
+            if folder_path is not None:
+                row.folder_path = folder_path
+            if purpose is not None:
+                row.purpose = purpose
             session.commit()
 
     def delete_document_blocks(self, document_id: int) -> None:
         with SessionLocal() as session:
             session.query(BlockRow).filter(BlockRow.document_id == document_id).delete()
+            session.commit()
+
+    def delete_document(self, document_id: int) -> None:
+        """物理删除文档及其全部附属数据（解析块 + 知识点 EIU + 文档行）。
+
+        覆盖重算后清理旧文档用；问答对版本（m05 dataset_version）为独立表，
+        不在此处删除，因此不影响已冻结的版本快照。
+        """
+        existing = self.get_document(document_id)
+        if existing is None:
+            return
+        # 1) 先删该文档的知识点（依赖 block_id）
+        self.delete_eius_by_document(document_id=document_id)
+        # 2) 再删解析块
+        self.delete_document_blocks(document_id)
+        # 3) 最后删文档行
+        with SessionLocal() as session:
+            session.query(DocumentRow).filter(DocumentRow.document_id == document_id).delete()
             session.commit()
 
     def get_document_blocks(self, document_id: int) -> list[dict]:
@@ -552,10 +552,9 @@ class DatabaseService:
     # ------------------------------------------------------------------
     # doc_update_job
     # ------------------------------------------------------------------
-    def save_job(self, *, corpus_id: int, document_id: int, job_type: str) -> int:
+    def save_job(self, *, document_id: int, job_type: str) -> int:
         with SessionLocal() as session:
             row = DocUpdateJobRow(
-                corpus_id=corpus_id,
                 document_id=document_id,
                 job_type=job_type,
                 status="pending",
@@ -600,7 +599,6 @@ class DatabaseService:
                 return None
             return {
                 "job_id": row.job_id,
-                "corpus_id": row.corpus_id,
                 "document_id": row.document_id,
                 "job_type": row.job_type,
                 "status": row.status,
@@ -618,7 +616,6 @@ class DatabaseService:
     def _eiu_to_dict(eiu: EiuRow, block: BlockRow | None = None, document: DocumentRow | None = None) -> dict:
         return {
             "eiu_id": eiu.eiu_id,
-            "corpus_id": eiu.corpus_id,
             "block_id": eiu.block_id,
             "document_id": block.document_id if block else None,
             "document_name": document.file_name if document else None,
@@ -637,7 +634,7 @@ class DatabaseService:
             "created_at": eiu.created_at.isoformat() if eiu.created_at else None,
         }
 
-    def save_eius(self, *, corpus_id: int, items: list[dict]) -> list[int]:
+    def save_eius(self, *, items: list[dict]) -> list[int]:
         """批量写入 EIU。
 
         items 中每条必须含 block_id / statement / eiu_type / content_priority，
@@ -646,6 +643,16 @@ class DatabaseService:
         if not items:
             return []
         with SessionLocal() as session:
+            # 预查 block_id -> document_id 映射，写入冗余列便于按文件目录组织
+            block_ids = [it["block_id"] for it in items if it.get("block_id") is not None]
+            block_doc_map: dict[int, int] = {}
+            if block_ids:
+                mapping = (
+                    session.query(BlockRow.block_id, BlockRow.document_id)
+                    .filter(BlockRow.block_id.in_(block_ids))
+                    .all()
+                )
+                block_doc_map = {bid: did for bid, did in mapping}
             seen: set[tuple[int, str]] = set()
             rows: list[EiuRow] = []
             for item in items:
@@ -655,8 +662,8 @@ class DatabaseService:
                 seen.add(key)
                 priority = item.get("content_priority", "P2")
                 row = EiuRow(
-                    corpus_id=corpus_id,
                     block_id=item["block_id"],
+                    document_id=block_doc_map.get(item["block_id"]),
                     statement=item["statement"],
                     eiu_type=item.get("eiu_type", "rule"),
                     content_priority=priority,
@@ -676,14 +683,14 @@ class DatabaseService:
             session.commit()
         return ids
 
-    def delete_eius_by_corpus(self, corpus_id: int) -> int:
-        """全量重抽前清空该语料库的旧 EIU（覆盖式重算）。返回删除条数。"""
+    def delete_eius_all(self) -> int:
+        """全量重抽前清空所有旧 EIU（覆盖式重算）。返回删除条数。"""
         with SessionLocal() as session:
-            result = session.query(EiuRow).filter(EiuRow.corpus_id == corpus_id).delete()
+            result = session.query(EiuRow).delete()
             session.commit()
             return int(result)
 
-    def delete_eius_by_document(self, *, corpus_id: int, document_id: int) -> int:
+    def delete_eius_by_document(self, *, document_id: int) -> int:
         """单文档重抽前仅清空该文档的旧 EIU（按文档隔离，不影响其他文档）。返回删除条数。"""
         with SessionLocal() as session:
             block_ids = [
@@ -696,7 +703,7 @@ class DatabaseService:
                 return 0
             result = (
                 session.query(EiuRow)
-                .filter(EiuRow.corpus_id == corpus_id, EiuRow.block_id.in_(block_ids))
+                .filter(EiuRow.block_id.in_(block_ids))
                 .delete()
             )
             session.commit()
@@ -704,7 +711,6 @@ class DatabaseService:
 
     def list_eius(
         self,
-        corpus_id: int,
         *,
         eiu_type: list[str] | None = None,
         priority: list[str] | None = None,
@@ -718,7 +724,6 @@ class DatabaseService:
                 session.query(EiuRow, BlockRow, DocumentRow)
                 .join(BlockRow, EiuRow.block_id == BlockRow.block_id)
                 .join(DocumentRow, BlockRow.document_id == DocumentRow.document_id)
-                .filter(EiuRow.corpus_id == corpus_id)
             )
             if not include_blocked:
                 query = query.filter(EiuRow.review_status != "blocked")
@@ -731,7 +736,7 @@ class DatabaseService:
             if section:
                 query = query.filter(BlockRow.section_path.contains(section))
             if document_id is not None:
-                query = query.filter(DocumentRow.document_id == document_id)
+                query = query.filter(EiuRow.document_id == document_id)
             rows = query.order_by(EiuRow.eiu_id.asc()).all()
             return [self._eiu_to_dict(eiu, block, document) for eiu, block, document in rows]
 
@@ -805,7 +810,6 @@ class DatabaseService:
     def save_dataset_version(
         self,
         *,
-        corpus_id: int,
         version_number: str,
         status: str = "draft",
         case_count: int = 0,
@@ -815,7 +819,6 @@ class DatabaseService:
     ) -> int:
         with SessionLocal() as session:
             row = DatasetVersionRow(
-                corpus_id=corpus_id,
                 version_number=version_number,
                 status=status,
                 case_count=case_count,
@@ -828,18 +831,16 @@ class DatabaseService:
             session.refresh(row)
             return row.version_id
 
-    def list_dataset_versions(self, corpus_id: int) -> list[dict]:
+    def list_dataset_versions(self) -> list[dict]:
         with SessionLocal() as session:
             rows = (
                 session.query(DatasetVersionRow)
-                .filter(DatasetVersionRow.corpus_id == corpus_id)
                 .order_by(DatasetVersionRow.version_id.desc())
                 .all()
             )
             return [
                 {
                     "version_id": row.version_id,
-                    "corpus_id": row.corpus_id,
                     "version_number": row.version_number,
                     "status": row.status,
                     "case_count": row.case_count,
@@ -859,7 +860,6 @@ class DatabaseService:
                 return None
             return {
                 "version_id": row.version_id,
-                "corpus_id": row.corpus_id,
                 "version_number": row.version_number,
                 "status": row.status,
                 "case_count": row.case_count,
@@ -893,11 +893,10 @@ class DatabaseService:
                 row.frozen_at = datetime.utcnow()
             session.commit()
 
-    def get_latest_version_number(self, corpus_id: int) -> str | None:
+    def get_latest_version_number(self) -> str | None:
         with SessionLocal() as session:
             row = (
                 session.query(DatasetVersionRow)
-                .filter(DatasetVersionRow.corpus_id == corpus_id)
                 .order_by(DatasetVersionRow.version_id.desc())
                 .first()
             )
@@ -1057,7 +1056,6 @@ class DatabaseService:
     def save_coverage_report(
         self,
         *,
-        corpus_id: int,
         total_eiu: int = 0,
         questionable_eiu: int = 0,
         excluded_eiu: int = 0,
@@ -1073,7 +1071,6 @@ class DatabaseService:
     ) -> int:
         with SessionLocal() as session:
             row = CoverageReportRow(
-                corpus_id=corpus_id,
                 total_eiu=total_eiu,
                 questionable_eiu=questionable_eiu,
                 excluded_eiu=excluded_eiu,
@@ -1092,11 +1089,10 @@ class DatabaseService:
             session.refresh(row)
             return row.report_id
 
-    def get_latest_coverage_report(self, corpus_id: int) -> dict | None:
+    def get_latest_coverage_report(self) -> dict | None:
         with SessionLocal() as session:
             row = (
                 session.query(CoverageReportRow)
-                .filter(CoverageReportRow.corpus_id == corpus_id)
                 .order_by(CoverageReportRow.report_id.desc())
                 .first()
             )
@@ -1108,7 +1104,6 @@ class DatabaseService:
     def _coverage_report_to_dict(row: "CoverageReportRow") -> dict:
         return {
             "report_id": row.report_id,
-            "corpus_id": row.corpus_id,
             "total_eiu": row.total_eiu,
             "questionable_eiu": row.questionable_eiu,
             "excluded_eiu": row.excluded_eiu,
@@ -1135,7 +1130,6 @@ class DatabaseService:
         *,
         intent_id: str,
         eiu_id: int | None,
-        corpus_id: int,
         document_id: int | None,
         question: str,
         question_type: str,
@@ -1149,16 +1143,15 @@ class DatabaseService:
         review_status: str = "candidate",
         statement_norm: str | None = None,
     ) -> dict:
-        """保存一条 m03 生成的评测样本（corpus 语义）。
+        """保存一条 m03 生成的评测样本（按文档维度组织）。
 
-        statement_norm: 源 EIU statement 的归一化值（方案 B 跨库复用匹配键）。
+        statement_norm: 源 EIU statement 的归一化值（跨文件复用匹配键）。
         不传时留空（旧调用兼容）；调用方应在生成/复用落库时显式传入。
         """
         with SessionLocal() as session:
             row = GeneratedCaseRow(
                 intent_id=intent_id,
                 eiu_id=eiu_id,
-                corpus_id=corpus_id,
                 document_id=document_id,
                 question=question,
                 question_type=question_type,
@@ -1178,17 +1171,13 @@ class DatabaseService:
             return self._generated_case_to_dict(row)
 
     def delete_generated_cases_by_document(
-        self, *, corpus_id: int, document_id: int
+        self, *, document_id: int
     ) -> int:
-        """删除指定文档下的全部 m03 评测样本（问答对单文档隔离，重抽前清理）。
-
-        与 delete_generated_cases_by_corpus 区别：仅清理单文档维度，
-        不影响同 corpus 其他文档已生成的问答对。
-        """
+        """删除指定文档下的全部 m03 评测样本（问答对单文档隔离，重抽前清理）。"""
         with SessionLocal() as session:
             rows = (
                 session.query(GeneratedCaseRow)
-                .filter_by(corpus_id=corpus_id, document_id=document_id)
+                .filter_by(document_id=document_id)
                 .all()
             )
             for row in rows:
@@ -1197,41 +1186,38 @@ class DatabaseService:
             return len(rows)
 
     def find_cases_by_statement(
-        self, statement_norm: str, *, exclude_corpus_id: int | None = None
+        self, statement_norm: str
     ) -> list[dict]:
-        """跨语料库精确匹配：按归一化 statement 查找已有问答对（方案 B 复用）。
+        """跨文件精确匹配：按归一化 statement 查找已有问答对（复用）。
 
-        用于"重合内容复用旧库"——不同 corpus 中出现相同 EIU 陈述时，
+        用于"重合内容复用旧问答对"——不同文件中出现相同 EIU 陈述时，
         直接复用历史生成的规范问答对，跳过 LLM 重生成。
-        exclude_corpus_id 用于避免命中本库自身（重抽场景）。
         """
         if not statement_norm:
             return []
         with SessionLocal() as session:
-            query = session.query(GeneratedCaseRow).filter_by(
-                statement_norm=statement_norm
+            row = (
+                session.query(GeneratedCaseRow)
+                .filter_by(statement_norm=statement_norm)
+                .order_by(GeneratedCaseRow.case_id.desc())
+                .first()
             )
-            if exclude_corpus_id is not None:
-                query = query.filter(
-                    GeneratedCaseRow.corpus_id != exclude_corpus_id
-                )
-            row = query.order_by(GeneratedCaseRow.case_id.desc()).first()
             return [self._generated_case_to_dict(row)] if row else []
 
     def list_generated_cases(
         self,
-        corpus_id: int | None = None,
         *,
+        document_id: int | None = None,
         priority: str | None = None,
         question_type: str | None = None,
         difficulty: str | None = None,
         status: str | None = None,
     ) -> list[dict]:
-        """查询 m03 生成的评测样本；默认排除 retired。"""
+        """查询 m03 生成的评测样本；默认排除 retired。按 document（文件目录维度）过滤。"""
         with SessionLocal() as session:
             query = session.query(GeneratedCaseRow)
-            if corpus_id is not None:
-                query = query.filter(GeneratedCaseRow.corpus_id == corpus_id)
+            if document_id is not None:
+                query = query.filter(GeneratedCaseRow.document_id == document_id)
             if priority is not None:
                 query = query.filter(GeneratedCaseRow.content_priority == priority)
             if question_type is not None:
@@ -1301,9 +1287,9 @@ class DatabaseService:
         return updated is not None
 
     def list_covered_eiu_ids(
-        self, corpus_id: int, *, document_id: int | None = None
+        self, *, document_id: int | None = None
     ) -> set[int]:
-        """该语料库（或指定文档）下已生成评测样本的 EIU id 集合。
+        """已生成评测样本的 EIU id 集合（按文档维度）。
 
         传入 document_id 时仅返回该文档维度的已覆盖 EIU，
         实现单文档问答对隔离——重抽某文档不会误判其他文档已覆盖项。
@@ -1311,7 +1297,6 @@ class DatabaseService:
         with SessionLocal() as session:
             query = (
                 session.query(GeneratedCaseRow.eiu_id)
-                .filter(GeneratedCaseRow.corpus_id == corpus_id)
                 .filter(GeneratedCaseRow.eiu_id.isnot(None))
                 .filter(GeneratedCaseRow.review_status != "retired")
             )
@@ -1363,16 +1348,17 @@ class DatabaseService:
             )
             return [self._quality_check_to_dict(row) for row in rows]
 
-    def list_quality_checks_by_corpus(self, corpus_id: int) -> list[dict]:
-        """查询语料库下全部检查结果（join generated_case 按 corpus 过滤，跳过 retired）。"""
+    def list_quality_checks_by_document(self, document_id: int | None = None) -> list[dict]:
+        """查询全部/指定文档下检查结果（join generated_case 按 document 过滤，跳过 retired）。"""
         with SessionLocal() as session:
-            rows = (
+            query = (
                 session.query(QualityCheckRow)
                 .join(GeneratedCaseRow, QualityCheckRow.case_id == GeneratedCaseRow.case_id)
-                .filter(GeneratedCaseRow.corpus_id == corpus_id)
                 .filter(GeneratedCaseRow.review_status != "retired")
-                .all()
             )
+            if document_id is not None:
+                query = query.filter(GeneratedCaseRow.document_id == document_id)
+            rows = query.all()
             return [self._quality_check_to_dict(row) for row in rows]
 
     @staticmethod
@@ -1392,7 +1378,6 @@ class DatabaseService:
             "case_id": row.case_id,
             "intent_id": row.intent_id,
             "eiu_id": row.eiu_id,
-            "corpus_id": row.corpus_id,
             "document_id": row.document_id,
             "question": row.question,
             "question_type": row.question_type,
@@ -1412,14 +1397,13 @@ class DatabaseService:
 
 
 class GeneratedCaseRow(Base):
-    """m03 生成的评测样本（corpus 语义，独立于 m05 的 eval_case 表）。"""
+    """m03 生成的评测样本（按文档维度组织，独立于 m05 的 eval_case 表）。"""
 
     __tablename__ = "generated_case"
 
     case_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     intent_id: Mapped[str] = mapped_column(String(128), nullable=False)
     eiu_id: Mapped[int | None] = mapped_column(Integer, nullable=True)  # 用户上传路径可无 EIU
-    corpus_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
     document_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     question: Mapped[str] = mapped_column(Text, nullable=False)
     question_type: Mapped[str] = mapped_column(String(64), nullable=False)

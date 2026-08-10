@@ -5,7 +5,6 @@ from dataclasses import dataclass
 @dataclass
 class ChatSessionRecord:
     session_id: int
-    corpus_id: int | None
     title: str
     status: str  # "active" | "archived"
     created_at: str

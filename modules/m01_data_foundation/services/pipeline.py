@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -12,6 +13,8 @@ from modules.m01_data_foundation.services.parser import DocumentParser
 from modules.m01_data_foundation.services.storage import StorageService
 from modules.shared.core.config import settings
 from modules.shared.services.database import DatabaseService
+
+logger = logging.getLogger(__name__)
 
 
 class PipelineService:
@@ -32,16 +35,10 @@ class PipelineService:
         self.load_index()
 
     # ------------------------------------------------------------------
-    # 语料库
+    # 文档接入
     # ------------------------------------------------------------------
-    def create_corpus(self, *, name: str, description: str | None = None, domain: str | None = None, created_by: str | None = None) -> int:
-        return self.database.save_corpus(name=name, description=description, domain=domain, created_by=created_by)
-
     def list_corpora(self) -> list[dict]:
-        return self.database.list_corpora()
-
-    def get_corpus(self, corpus_id: int) -> dict | None:
-        return self.database.get_corpus(corpus_id)
+        return self.database.list_documents()
 
     # ------------------------------------------------------------------
     # 文档接入
@@ -53,9 +50,10 @@ class PipelineService:
         file_name: str,
         file_type: str,
         content: bytes,
-        corpus_id: int,
         upload_user: str | None = None,
         document_version: str | None = None,
+        folder_path: str | None = None,
+        purpose: str | None = None,
     ) -> dict:
         # file_type 可能是完整文件名或扩展名，统一从 file_name 取扩展名
         suffix = Path(file_name).suffix.lower() or Path(file_type or "").suffix.lower()
@@ -66,12 +64,11 @@ class PipelineService:
         minio_path = stored.object_path
 
         file_hash = hashlib.sha256(content).hexdigest()
-        existing = self.database.find_by_hash(file_hash, corpus_id=corpus_id)
+        existing = self.database.find_by_hash(file_hash)
         if existing is not None:
             return {"document_id": existing, "duplicate": True, "blocks": 0}
 
         document_id = self.database.save_document(
-            corpus_id=corpus_id,
             file_name=file_name,
             file_type=suffix,
             file_size=len(content),
@@ -79,6 +76,8 @@ class PipelineService:
             minio_path=minio_path,
             upload_user=upload_user,
             document_version=document_version,
+            folder_path=folder_path,
+            purpose=purpose,
             parse_status="pending",
         )
         try:
@@ -95,8 +94,15 @@ class PipelineService:
             self.database.update_document(document_id, parse_status="completed")
             self._save_index()
             return {"document_id": document_id, "duplicate": False, "blocks": len(block_ids)}
-        except Exception as exc:  # 解析失败：记录状态与错误，不丢文档
-            self.database.update_document(document_id, parse_status="failed", parse_error=str(exc))
+        except Exception as exc:  # 解析/入库失败：整体回滚，不在库里留下残句，避免重新上传误判
+            logger.warning("文档 %s 接入失败，执行回滚清理: %s", document_id, exc)
+            try:
+                self.indexer.remove_by_document(document_id)
+                self.database.delete_document(document_id)
+                self.storage.delete_raw_document(minio_path)
+                self._save_index()
+            except Exception as cleanup_exc:
+                logger.error("回滚清理失败 document=%s: %s", document_id, cleanup_exc)
             raise
 
     def reupload_document(
@@ -110,38 +116,45 @@ class PipelineService:
         existing = self.database.get_document(document_id)
         if existing is None:
             raise ValueError("document not found")
-        corpus_id = existing["corpus_id"]
         suffix = (Path(file_name).suffix if file_name else existing["file_type"]).lower()
         self._validate_file(suffix, content)
 
         new_hash = hashlib.sha256(content).hexdigest()
-        job_id = self.database.save_job(corpus_id=corpus_id, document_id=document_id, job_type="doc_update")
+        job_id = self.database.save_job(document_id=document_id, job_type="doc_update")
         self.database.update_job(job_id, status="running", phase="parsing", progress=10)
 
         if new_hash == existing["file_hash"]:
             self.database.update_job(job_id, status="completed", phase="unchanged", progress=100, message="内容未变化，无需重算", finished=True)
             return {"job_id": job_id, "document_id": document_id, "changed": False}
 
-        # 覆盖式全量重算（无版本）：旧文档整体作废，新文档走完整接入流程
-        self.database.update_document(document_id, status="superseded")
+        # 覆盖式全量重算：旧文档物理删除，新内容走完整接入流程重新解析、重新抽取。
+        # 文档本身不做版本留痕；问答对的最终版本管理由 m05 的 dataset_version（冻结版本）统一负责。
+        old_minio_path = existing.get("minio_path")
+        old_document_id = document_id
         stored = self.storage.save_raw_document(file_name or existing["file_name"], content)
         result = self.upload_document(
             minio_path=stored.object_path,
             file_name=file_name or existing["file_name"],
             file_type=suffix,
             content=content,
-            corpus_id=corpus_id,
             upload_user=upload_user,
         )
+        new_document_id = result["document_id"]
+        # 旧文档向量从内存索引移除，并物理删除旧文档（块 + 知识点 + 落盘文件）
+        self.indexer.remove_by_document(old_document_id)
+        self.database.delete_document(old_document_id)
+        self.storage.delete_raw_document(old_minio_path)
+        # 重写索引落盘，确保被删除的旧文档向量不再持久化（释放空间、避免脏数据）
+        self._save_index()
         self.database.update_job(
             job_id,
             status="completed",
             phase="done",
             progress=100,
-            message=f"已重算，新文档 ID={result['document_id']}",
+            message=f"已重算，新文档 ID={new_document_id}（旧文档已删除）",
             finished=True,
         )
-        return {"job_id": job_id, "document_id": result["document_id"], "changed": True}
+        return {"job_id": job_id, "document_id": new_document_id, "changed": True}
 
     # ------------------------------------------------------------------
     # 文档 / 块 / 任务 查询
@@ -149,14 +162,28 @@ class PipelineService:
     def get_document(self, document_id: int) -> dict | None:
         return self.database.get_document(document_id)
 
-    def list_documents(self, corpus_id: int | None = None) -> list[dict]:
-        return self.database.list_documents(corpus_id)
+    def list_documents(self) -> list[dict]:
+        return self.database.list_documents()
 
     def get_document_blocks(self, document_id: int) -> list[dict]:
         return self.database.get_document_blocks(document_id)
 
     def get_job(self, job_id: int) -> dict | None:
         return self.database.get_job(job_id)
+
+    def delete_document(self, document_id: int) -> None:
+        """彻底删除一个文档：向量索引移除 + 库表清理 + 落盘文件清理 + 索引落盘。
+
+        与 reupload 的回滚清理逻辑一致，但此处不创建新文档。
+        """
+        existing = self.database.get_document(document_id)
+        if existing is None:
+            return
+        minio_path = existing.get("minio_path")
+        self.indexer.remove_by_document(document_id)
+        self.database.delete_document(document_id)
+        self.storage.delete_raw_document(minio_path)
+        self._save_index()
 
     # ------------------------------------------------------------------
     # 内部工具

@@ -13,7 +13,6 @@ class EiuRecord:
     """可出题信息单元（m02 产出，m03 输入）。"""
 
     eiu_id: int
-    corpus_id: int
     document_id: int
     block_id: int
     statement: str
@@ -42,11 +41,10 @@ class BlockEvidence:
 
 @dataclass
 class GeneratedCase:
-    """一次 LLM 生成产出的完整评测样本。"""
+    """一次 LLM 生成产出的完整评测样本（按文档维度组织）。"""
 
     intent_id: str
     eiu_id: int | None
-    corpus_id: int
     document_id: int | None
     question: str
     question_type: str

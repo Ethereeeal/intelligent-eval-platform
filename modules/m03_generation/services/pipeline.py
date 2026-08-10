@@ -26,29 +26,27 @@ class PipelineService:
         self.variation = VariationService()
 
     # ------------------------------------------------------------------
-    # 批量生成（POST /api/corpus/{corpus_id}/cases/generate）
+    # 批量生成（POST /api/cases/generate，按 document_id 或全量）
     # ------------------------------------------------------------------
     def generate_cases_for_corpus(
         self,
-        corpus_id: int,
         *,
         angles: list[str] | None = None,
         include_variations: bool = False,
         variation_count: int = 2,
         dry_run: bool = False,
     ) -> dict[str, Any]:
-        """为语料库下所有未覆盖 EIU 生成题目+答案（跳过已覆盖项）。
+        """为全部未覆盖 EIU 生成题目+答案（跳过已覆盖项，按文件维度组织）。
 
         angles: 出题角度列表；每个角度对同一 EIU 生成一道题（不重复计覆盖率）。
         dry_run: 仅返回待生成清单，不调用 LLM / 不落库。
         """
-        eius = self.database.list_eius(corpus_id, questionable=True)
-        covered = self.database.list_covered_eiu_ids(corpus_id)
+        eius = self.database.list_eius(questionable=True)
+        covered = self.database.list_covered_eiu_ids()
         pending = [eiu for eiu in eius if eiu["eiu_id"] not in covered]
 
         if dry_run:
             return {
-                "corpus_id": corpus_id,
                 "total_questionable_eiu": len(eius),
                 "already_covered": len(covered),
                 "generated": 0,
@@ -76,7 +74,6 @@ class PipelineService:
             results.append(result)
 
         return {
-            "corpus_id": corpus_id,
             "total_questionable_eiu": len(eius),
             "already_covered": len(covered),
             "generated": sum(1 for r in results if r["error"] is None),
@@ -90,7 +87,6 @@ class PipelineService:
     def generate_cases_for_document(
         self,
         *,
-        corpus_id: int,
         document_id: int,
         angles: list[str] | None = None,
         include_variations: bool = False,
@@ -99,22 +95,21 @@ class PipelineService:
     ) -> dict[str, Any]:
         """为单个文档下未覆盖 EIU 生成题目+答案，单文档隔离。
 
-        隔离语义（与 generate_cases_for_corpus 相比）：
+        隔离语义：
         - 仅读取该文档的 EIU（list_eius 按 document_id 过滤）；
         - 重抽前删除该文档已生成问答对，不触碰其他文档；
         - 已覆盖 EIU 判定也限定在该文档内，不会重复生成。
         """
         eius = self.database.list_eius(
-            corpus_id, questionable=True, document_id=document_id
+            questionable=True, document_id=document_id
         )
         covered = self.database.list_covered_eiu_ids(
-            corpus_id, document_id=document_id
+            document_id=document_id
         )
         pending = [eiu for eiu in eius if eiu["eiu_id"] not in covered]
 
         if dry_run:
             return {
-                "corpus_id": corpus_id,
                 "document_id": document_id,
                 "total_questionable_eiu": len(eius),
                 "already_covered": len(covered),
@@ -134,18 +129,16 @@ class PipelineService:
 
         # 单文档隔离：重抽前先清掉该文档旧问答对，避免重复
         self.database.delete_generated_cases_by_document(
-            corpus_id=corpus_id, document_id=document_id
+            document_id=document_id
         )
 
         results: list[dict[str, Any]] = []
         reused_total = 0
         for eiu in pending:
-            # 方案 B：重合内容复用旧库 —— 先按归一化 statement 跨库精确匹配
+            # 重合内容复用 —— 先按归一化 statement 跨文件精确匹配
             statement_norm = normalize_statement(eiu.get("statement", ""))
             hit = (
-                self.database.find_cases_by_statement(
-                    statement_norm, exclude_corpus_id=corpus_id
-                )
+                self.database.find_cases_by_statement(statement_norm)
                 if statement_norm
                 else []
             )
@@ -175,7 +168,6 @@ class PipelineService:
             results.append(result)
 
         return {
-            "corpus_id": corpus_id,
             "document_id": document_id,
             "total_questionable_eiu": len(eius),
             "already_covered": len(covered),
@@ -213,7 +205,6 @@ class PipelineService:
     def generate_from_upload(
         self,
         *,
-        corpus_id: int,
         document_id: int | None,
         question: str,
         answer: str,
@@ -232,7 +223,6 @@ class PipelineService:
         seed = self.database.save_generated_case(
             intent_id=f"upload_{uuid.uuid4().hex[:12]}",
             eiu_id=None,
-            corpus_id=corpus_id,
             document_id=document_id,
             question=question,
             question_type=question_type,
@@ -287,15 +277,15 @@ class PipelineService:
     # ------------------------------------------------------------------
     def list_cases(
         self,
-        corpus_id: int,
         *,
+        document_id: int | None = None,
         priority: str | None = None,
         question_type: str | None = None,
         difficulty: str | None = None,
         status: str | None = None,
     ) -> list[dict]:
         return self.database.list_generated_cases(
-            corpus_id,
+            document_id=document_id,
             priority=priority,
             question_type=question_type,
             difficulty=difficulty,
@@ -328,7 +318,7 @@ class PipelineService:
         # 该 EIU 下是否还有其他存活题（list_generated_cases 默认排除 retired）
         remaining_eiu_ids = {
             c.get("eiu_id")
-            for c in self.database.list_generated_cases(case["corpus_id"])
+            for c in self.database.list_generated_cases(document_id=case.get("document_id"))
             if c.get("eiu_id") is not None
         }
         if eiu_id not in remaining_eiu_ids:
@@ -349,9 +339,9 @@ class PipelineService:
         *,
         angles: list[str],
     ) -> list[dict[str, Any]]:
-        """方案 B 复用：把历史问答对复制落库到当前 eiu/corpus/document。
+        """方案 B 复用：把历史问答对复制落库到当前 eiu/document。
 
-        跳过 LLM 重生成，仅替换归属维度（corpus/document/eiu/intent_id），
+        跳过 LLM 重生成，仅替换归属维度（document/eiu/intent_id），
         内容（question/answer/evidence/difficulty 等）原样复用。
         """
         reused: list[dict[str, Any]] = []
@@ -359,7 +349,6 @@ class PipelineService:
             saved = self.database.save_generated_case(
                 intent_id=f"intent_{eiu['eiu_id']}_{angle}",
                 eiu_id=eiu["eiu_id"],
-                corpus_id=eiu["corpus_id"],
                 document_id=eiu["document_id"],
                 question=old_case.get("question") or "",
                 question_type=old_case.get("question_type") or "rule",

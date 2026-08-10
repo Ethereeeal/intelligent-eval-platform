@@ -40,6 +40,20 @@ class FaissIndexService:
         for offset, item in enumerate(items):
             self._by_block[item.block_id] = base + offset
 
+    def remove_by_document(self, document_id: int) -> int:
+        """从内存索引中剔除某文档的全部向量条目（覆盖重算后物理删除旧文档用）。
+
+        FAISS 为增量索引不支持单条删除，本项目索引通过 state json 全量持久化，
+        故此处仅过滤内存条目，待调用方 _save_index 重写落盘即可真正移除。
+        返回被移除的条目数。
+        """
+        before = len(self._items)
+        self._items = [item for item in self._items if item.document_id != document_id]
+        removed = before - len(self._items)
+        # 重建块位置索引
+        self._by_block = {item.block_id: i for i, item in enumerate(self._items)}
+        return removed
+
     def neighbors_of(self, block_id: int, top_k: int = 5) -> list[dict[str, Any]]:
         """跨块出题配对用：返回某个块的 Top-K 语义近邻（排除自身）。
 

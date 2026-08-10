@@ -1,13 +1,15 @@
-"""M02 — EIU 抽取与覆盖规划 API（SPEC §7）。
+"""M02 — EIU 抽取与覆盖规划 API（SPEC §7，按文件维度，无 corpus）。
 
 路由：
-  POST   /api/corpus/{corpus_id}/eiu/extract  异步触发 EIU 抽取（返回 job_id）
-  GET    /api/corpus/{corpus_id}/eiu           EIU 清单（支持过滤）
-  GET    /api/corpus/{corpus_id}/eiu/coverage  覆盖率报告
-  GET    /api/corpus/{corpus_id}/eiu/gaps      未覆盖 EIU 清单
-  GET    /api/eiu/{eiu_id}                     EIU 详情（含原文上下文）
-  PUT    /api/eiu/{eiu_id}                     手动编辑 EIU
-  DELETE /api/eiu/{eiu_id}                     软删除（标记 blocked）
+  POST   /api/eiu/extract              异步触发 EIU 抽取（按 document_id 或全量，返回 job_id）
+  GET    /api/eiu                       全量 EIU 清单（支持过滤）
+  GET    /api/eiu/document/{id}         按文件列出 EIU
+  GET    /api/eiu/coverage              覆盖率报告（全量）
+  GET    /api/eiu/gaps                  未覆盖 EIU 清单（全量）
+  POST   /api/eiu/coverage              计算覆盖率并落库，返回带 report_id 的报告
+  GET    /api/eiu/{eiu_id}              EIU 详情（含原文上下文）
+  PUT    /api/eiu/{eiu_id}              手动编辑 EIU
+  DELETE /api/eiu/{eiu_id}              软删除（标记 blocked）
 """
 from __future__ import annotations
 
@@ -34,69 +36,23 @@ from modules.m02_eiu_coverage.services.coverage import (
 from modules.m02_eiu_coverage.services.eiu_extractor import EiuExtractorService
 from modules.shared.services.database import EIU_TYPES, PRIORITY_WEIGHT, DatabaseService
 
-# 绑定语料库：/api/corpus/{corpus_id}/eiu
-corpus_eiu_router = APIRouter(prefix="/api/corpus/{corpus_id}/eiu", tags=["eiu"])
-# 全局（不绑定语料库）：/api/eiu/...
+# 全局（按文件维度）：/api/eiu/...
 eiu_router = APIRouter(prefix="/api/eiu", tags=["eiu"])
 
 database = DatabaseService()
 extractor_service = EiuExtractorService()
 
 
-def _ensure_corpus(corpus_id: int) -> None:
-    if database.get_corpus(corpus_id) is None:
-        raise HTTPException(status_code=404, detail="corpus not found")
-
-
-# ----------------------------------------------------------------------
-# 异步抽取
-# ----------------------------------------------------------------------
-@corpus_eiu_router.post("/extract", response_model=EiuExtractResponse, status_code=202)
-def trigger_eiu_extract(
-    corpus_id: int,
-    document_id: int | None = Query(default=None, description="指定文档时仅抽取该文档（单文档隔离），否则全库抽取"),
-) -> EiuExtractResponse:
-    _ensure_corpus(corpus_id)
-
-    job_id = database.save_job(corpus_id=corpus_id, document_id=document_id or 0, job_type="eiu_extract")
-    database.update_job(
-        job_id, status="running", phase="queued", progress=0, message="任务已创建，准备抽取"
-    )
-
-    total = _count_paragraph_blocks(corpus_id, document_id=document_id)
-    if total == 0:
-        # 验收 F11：无 Block 时不报错，返回"无可处理的段落"
-        database.update_job(
-            job_id, status="completed", phase="done", progress=100,
-            message="无可处理的段落", finished=True,
-        )
-        return EiuExtractResponse(
-            job_id=job_id, corpus_id=corpus_id, status="completed", message="无可处理的段落"
-        )
-
-    database.update_job(job_id, progress=0, message=f"开始 EIU 抽取，共 {total} 个段落 Block")
-    target = extractor_service.extract_document if document_id is not None else extractor_service.extract_corpus
-    thread_kwargs = (
-        {"corpus_id": corpus_id, "document_id": document_id, "job_id": job_id}
-        if document_id is not None
-        else {"corpus_id": corpus_id, "job_id": job_id}
-    )
-    thread = threading.Thread(target=target, kwargs=thread_kwargs, daemon=True)
-    thread.start()
-    return EiuExtractResponse(
-        job_id=job_id,
-        corpus_id=corpus_id,
-        status="running",
-        message=f"开始 EIU 抽取，共 {total} 个段落 Block",
-    )
-
-
-def _count_paragraph_blocks(corpus_id: int, document_id: int | None = None) -> int:
-    total = 0
-    documents = database.list_documents(corpus_id)
+def _documents_scope(document_id: int | None) -> list[dict]:
+    documents = database.list_documents()
     if document_id is not None:
         documents = [d for d in documents if d["document_id"] == document_id]
-    for document in documents:
+    return documents
+
+
+def _count_paragraph_blocks(document_id: int | None = None) -> int:
+    total = 0
+    for document in _documents_scope(document_id):
         total += sum(
             1
             for block in database.get_document_blocks(document["document_id"])
@@ -106,50 +62,100 @@ def _count_paragraph_blocks(corpus_id: int, document_id: int | None = None) -> i
 
 
 # ----------------------------------------------------------------------
+# 异步抽取（按文件维度）
+# ----------------------------------------------------------------------
+@eiu_router.post("/extract", response_model=EiuExtractResponse, status_code=202)
+def trigger_eiu_extract(
+    document_id: int | None = Query(default=None, description="指定文档时仅抽取该文档（单文档隔离），否则全量抽取"),
+) -> EiuExtractResponse:
+    job_id = database.save_job(document_id=document_id or 0, job_type="eiu_extract")
+    database.update_job(
+        job_id, status="running", phase="queued", progress=0, message="任务已创建，准备抽取"
+    )
+
+    total = _count_paragraph_blocks(document_id=document_id)
+    if total == 0:
+        database.update_job(
+            job_id, status="completed", phase="done", progress=100,
+            message="无可处理的段落", finished=True,
+        )
+        return EiuExtractResponse(
+            job_id=job_id, status="completed", message="无可处理的段落"
+        )
+
+    database.update_job(job_id, progress=0, message=f"开始 EIU 抽取，共 {total} 个段落 Block")
+    target = extractor_service.extract_document if document_id is not None else extractor_service.extract_corpus
+    thread_kwargs = (
+        {"document_id": document_id, "job_id": job_id}
+        if document_id is not None
+        else {"job_id": job_id}
+    )
+    thread = threading.Thread(target=target, kwargs=thread_kwargs, daemon=True)
+    thread.start()
+    return EiuExtractResponse(
+        job_id=job_id,
+        status="running",
+        message=f"开始 EIU 抽取，共 {total} 个段落 Block",
+    )
+
+
+# ----------------------------------------------------------------------
 # EIU 清单 / 覆盖率 / 未覆盖清单
 # ----------------------------------------------------------------------
-@corpus_eiu_router.get("", response_model=EiuListResponse)
-def list_eius(
-    corpus_id: int,
-    type: list[str] | None = Query(None, description="EIU 类型，可重复（?type=rule&type=threshold）"),
+@eiu_router.get("", response_model=EiuListResponse)
+def list_eius_all(
+    type: list[str] | None = Query(None, description="EIU 类型，可重复"),
     priority: list[str] | None = Query(None, description="优先级 P0/P1/P2，可重复"),
     questionable: bool | None = Query(None, description="是否可出题"),
     section: str | None = Query(None, description="按章节路径模糊过滤"),
     document_id: int | None = Query(None, description="按文档过滤"),
 ) -> EiuListResponse:
-    _ensure_corpus(corpus_id)
     items = database.list_eius(
-        corpus_id,
         eiu_type=type,
         priority=priority,
         questionable=questionable,
         section=section,
         document_id=document_id,
     )
-    return EiuListResponse(corpus_id=corpus_id, total=len(items), items=items)
+    return EiuListResponse(total=len(items), items=items)
 
 
-@corpus_eiu_router.get("/coverage", response_model=CoverageReport)
-def get_coverage(corpus_id: int) -> CoverageReport:
-    _ensure_corpus(corpus_id)
-    # M02 阶段无题目（covered 为空）；M03 接入后可传入 covered_eiu_ids
-    return CoverageReport(**compute_coverage(corpus_id))
+@eiu_router.get("/document/{document_id}", response_model=EiuListResponse)
+def list_eius_by_document(
+    document_id: int,
+    type: list[str] | None = Query(None, description="EIU 类型，可重复"),
+    priority: list[str] | None = Query(None, description="优先级 P0/P1/P2，可重复"),
+    questionable: bool | None = Query(None, description="是否可出题"),
+) -> EiuListResponse:
+    """按文件（document_id）列出其 EIU，用于「我的文件库」目录树组织，无需 corpus。"""
+    if database.find_document_by_id(document_id) is None:
+        raise HTTPException(status_code=404, detail="document not found")
+    items = database.list_eius(
+        eiu_type=type,
+        priority=priority,
+        questionable=questionable,
+        document_id=document_id,
+    )
+    return EiuListResponse(total=len(items), items=items)
 
 
-@corpus_eiu_router.post("/coverage", response_model=CoverageReportOut, status_code=201)
-def persist_coverage(corpus_id: int) -> CoverageReportOut:
+@eiu_router.get("/coverage", response_model=CoverageReport)
+def get_coverage() -> CoverageReport:
+    return CoverageReport(**compute_coverage())
+
+
+@eiu_router.post("/coverage", response_model=CoverageReportOut, status_code=201)
+def persist_coverage() -> CoverageReportOut:
     """计算覆盖率并落库为 coverage_report，返回带 report_id 的报告（供 m05 冻结外键引用）。"""
-    _ensure_corpus(corpus_id)
-    save_coverage_report(corpus_id)
-    row = database.get_latest_coverage_report(corpus_id)
+    save_coverage_report()
+    row = database.get_latest_coverage_report()
     return CoverageReportOut(**row)
 
 
-@corpus_eiu_router.get("/gaps", response_model=GapListResponse)
-def get_gaps(corpus_id: int) -> GapListResponse:
-    _ensure_corpus(corpus_id)
-    gaps = compute_gaps(corpus_id)
-    return GapListResponse(corpus_id=corpus_id, total=len(gaps), items=gaps)
+@eiu_router.get("/gaps", response_model=GapListResponse)
+def get_gaps() -> GapListResponse:
+    gaps = compute_gaps()
+    return GapListResponse(total=len(gaps), items=gaps)
 
 
 # ----------------------------------------------------------------------

@@ -55,7 +55,6 @@ class QualityCheckResultOut(BaseModel):
 class QualityCheckSummary(BaseModel):
     """校验结果汇总 API 响应（README §2.3 示例 JSON）。"""
 
-    corpus_id: int
     total_cases: int = Field(default=0, description="参与本轮校验的样本数")
     passed: int = 0
     failed: int = 0

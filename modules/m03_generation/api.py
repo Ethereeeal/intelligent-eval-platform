@@ -1,4 +1,4 @@
-"""m03 评测集生成：FastAPI 路由层（README §6 API 接口）。
+"""m03 评测集生成：FastAPI 路由层（按文件维度，无 corpus）。
 
 路由为薄壳：解析请求体 → 调 PipelineService → 转响应模型。
 业务逻辑全部在 services/pipeline.py。
@@ -21,28 +21,23 @@ from modules.m03_generation.services.pipeline import PipelineService
 
 pipeline_service = PipelineService()
 
-# 路由规划（避免与 m01 的 /api/corpus 基础 CRUD 冲突，均挂在更深路径）
-generation_router = APIRouter(prefix="/api/corpus", tags=["generation"])
+generation_router = APIRouter(prefix="/api/cases", tags=["generation"])
 eiu_router = APIRouter(prefix="/api/eiu", tags=["generation"])
 cases_router = APIRouter(prefix="/api/cases", tags=["cases"])
 
 
 # ----------------------------------------------------------------------
-# 批量生成：POST /api/corpus/{corpus_id}/cases/generate
+# 批量生成：POST /api/cases/generate（按 document_id 或全量）
 # ----------------------------------------------------------------------
-@generation_router.post("/{corpus_id}/cases/generate", response_model=GenerateCasesResponse)
+@generation_router.post("/generate", response_model=GenerateCasesResponse)
 def generate_cases(
-    corpus_id: int,
     payload: GenerateCasesRequest,
     document_id: int | None = Query(default=None, description="指定文档时仅生成该文档的问答对（单文档隔离）。"),
 ):
-    if pipeline_service.database.get_corpus(corpus_id) is None:
-        raise HTTPException(status_code=404, detail="corpus not found")
     try:
         if document_id is not None:
             # 单文档隔离：仅抽取当前文档 EIU、不重抽其他文档、不重复生成
             return pipeline_service.generate_cases_for_document(
-                corpus_id=corpus_id,
                 document_id=document_id,
                 angles=payload.angles,
                 include_variations=payload.include_variations,
@@ -50,7 +45,6 @@ def generate_cases(
                 dry_run=payload.dry_run,
             )
         return pipeline_service.generate_cases_for_corpus(
-            corpus_id,
             angles=payload.angles,
             include_variations=payload.include_variations,
             variation_count=payload.variation_count,
@@ -61,20 +55,17 @@ def generate_cases(
 
 
 # ----------------------------------------------------------------------
-# 评测样本列表：GET /api/corpus/{corpus_id}/cases
+# 评测样本列表：GET /api/cases（全量）
 # ----------------------------------------------------------------------
-@generation_router.get("/{corpus_id}/cases", response_model=list[CaseOut])
-def list_cases(
-    corpus_id: int,
+@cases_router.get("", response_model=list[CaseOut])
+def list_cases_all(
     priority: str | None = Query(None),
     type: str | None = Query(None, alias="question_type"),
     difficulty: str | None = Query(None),
     status: str | None = Query(None),
 ):
-    if pipeline_service.database.get_corpus(corpus_id) is None:
-        raise HTTPException(status_code=404, detail="corpus not found")
+    """返回全部问答对，前端按 document_id 聚合到「我的文件库」目录树。"""
     return pipeline_service.list_cases(
-        corpus_id,
         priority=priority,
         question_type=type,
         difficulty=difficulty,
@@ -100,13 +91,12 @@ def generate_case_for_eiu(eiu_id: int, payload: GenerateSingleCaseRequest):
 
 # ----------------------------------------------------------------------
 # 路径 2：用户上传问答对
-# POST /api/cases/generate-from-upload（需定义在 /{case_id} 之前）
+# POST /api/cases/generate-from-upload
 # ----------------------------------------------------------------------
 @cases_router.post("/generate-from-upload")
 def generate_from_upload(payload: UploadQAPairRequest):
     try:
         return pipeline_service.generate_from_upload(
-            corpus_id=payload.corpus_id,
             document_id=payload.document_id,
             question=payload.question,
             answer=payload.answer,
@@ -130,6 +120,29 @@ def get_case(case_id: int):
     if case is None:
         raise HTTPException(status_code=404, detail="case not found")
     return case
+
+
+# ----------------------------------------------------------------------
+# 按文档（文件目录维度）列出问答对 —— 不依赖 corpus
+# ----------------------------------------------------------------------
+@cases_router.get("/document/{document_id}", response_model=list[CaseOut])
+def list_cases_by_document(
+    document_id: int,
+    priority: str | None = Query(None),
+    type: str | None = Query(None, alias="question_type"),
+    difficulty: str | None = Query(None),
+    status: str | None = Query(None),
+):
+    """按文件（document_id）列出其问答对，用于「我的文件库」目录树组织，无需 corpus。"""
+    if pipeline_service.database.find_document_by_id(document_id) is None:
+        raise HTTPException(status_code=404, detail="document not found")
+    return pipeline_service.list_cases(
+        document_id=document_id,
+        priority=priority,
+        question_type=type,
+        difficulty=difficulty,
+        status=status,
+    )
 
 
 @cases_router.put("/{case_id}", response_model=CaseDetailOut)

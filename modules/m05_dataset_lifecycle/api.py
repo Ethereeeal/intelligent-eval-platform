@@ -14,17 +14,17 @@ _service = DatasetLifecycleService(DatabaseService())
 # ----------------------------------------------------------------------
 # 版本
 # ----------------------------------------------------------------------
-@router.post("/corpus/{corpus_id}/freeze")
-def freeze_version(corpus_id: int, created_by: str | None = None):
+@router.post("/freeze")
+def freeze_version(created_by: str | None = None):
     try:
-        return _service.freeze_version(corpus_id=corpus_id, created_by=created_by)
+        return _service.freeze_version(created_by=created_by)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-@router.get("/corpus/{corpus_id}/versions")
-def list_versions(corpus_id: int):
-    return _service.list_versions(corpus_id)
+@router.get("/versions")
+def list_versions():
+    return _service.list_versions()
 
 
 @router.get("/versions/{version_id}")
@@ -77,9 +77,9 @@ def case_stats(version_id: int):
 # ----------------------------------------------------------------------
 # 树形浏览
 # ----------------------------------------------------------------------
-@router.get("/corpus/{corpus_id}/tree")
-def tree(corpus_id: int):
-    return _service.tree(corpus_id)
+@router.get("/tree")
+def tree():
+    return _service.tree()
 
 
 # ----------------------------------------------------------------------

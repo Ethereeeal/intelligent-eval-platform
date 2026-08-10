@@ -50,59 +50,50 @@ class DatasetLifecycleService:
     # ------------------------------------------------------------------
     # 无问题判定（FR-DS-EMPTY）
     # ------------------------------------------------------------------
-    def _empty_reason(self, *, corpus_id: int) -> str | None:
+    def _empty_reason(self) -> str | None:
         """返回 None 表示可生成；否则返回"无问题"原因（不发布空集）。"""
-        eius = self.db.list_eius(corpus_id, include_blocked=False)
+        eius = self.db.list_eius(include_blocked=False)
         if not eius:
             return "EIU 总数 = 0：语料未抽到任何可出题单元（可能全部被排除或确无实质内容）"
         questionable = [e for e in eius if e.get("is_questionable")]
         if not questionable:
             return "全部 EIU 均标记为不可出题（is_questionable=false），无未处理文段"
         # 有可出题 EIU，再确认 m03 是否产出可纳入样本
-        cases = self._publishable_cases(corpus_id)
+        cases = self._publishable_cases()
         if not cases:
             return "有可出题 EIU，但尚无通过质量门禁的生成样本（请先跑 m03 生成 + m04 校验）"
         return None
 
-    def _publishable_cases(self, corpus_id: int) -> list[dict]:
+    def _publishable_cases(self) -> list[dict]:
         """取 m03 生成、且 m04 审核达到可发布态的 generated_case。"""
-        all_cases = self.db.list_generated_cases(corpus_id)
+        all_cases = self.db.list_generated_cases()
         return [c for c in all_cases if c.get("review_status") in PUBLISHABLE_STATUSES]
 
     # ------------------------------------------------------------------
     # 版本冻结
     # ------------------------------------------------------------------
-    def freeze_version(self, *, corpus_id: int, created_by: str | None = None) -> dict:
-        corpus = self.db.get_corpus(corpus_id)
-        if corpus is None:
-            raise ValueError("corpus not found")
-
-        reason = self._empty_reason(corpus_id=corpus_id)
+    def freeze_version(self, *, created_by: str | None = None) -> dict:
+        reason = self._empty_reason()
         if reason:
             # 不创建空集、不进入发布流程（FR-DS-EMPTY-002）
             raise ValueError(f"无问题可生成：{reason}")
 
-        latest = self.db.get_latest_version_number(corpus_id)
+        latest = self.db.get_latest_version_number()
         version_number = _next_version_number(latest)
 
         # 落库覆盖率报告（m02），回填 coverage_report_id（FR-DS-003 外键）
         coverage_report_id = save_coverage_report(
-            corpus_id,
             snapshot_metadata={
                 "frozen_at": datetime.utcnow().isoformat() + "Z",
-                "corpus_version": corpus.get("version"),
             },
         )
-        coverage = self.db.get_latest_coverage_report(corpus_id) or {}
+        coverage = self.db.get_latest_coverage_report() or {}
         snapshot_metadata = self._build_snapshot_metadata(
-            corpus_id=corpus_id,
-            corpus=corpus,
             coverage=coverage,
             created_by=created_by,
         )
 
         version_id = self.db.save_dataset_version(
-            corpus_id=corpus_id,
             version_number=version_number,
             status="frozen",
             case_count=0,
@@ -111,14 +102,14 @@ class DatasetLifecycleService:
             snapshot_metadata=snapshot_metadata,
         )
         # 把通过门禁的 generated_case 快照为不可变 eval_case 副本
-        case_count = self._snapshot_cases(version_id=version_id, corpus_id=corpus_id)
+        case_count = self._snapshot_cases(version_id=version_id)
         self.db.update_dataset_version(version_id, case_count=case_count, freeze=True)
         return self.db.get_dataset_version(version_id)
 
-    def _snapshot_cases(self, *, version_id: int, corpus_id: int) -> int:
+    def _snapshot_cases(self, *, version_id: int) -> int:
         """将可发布态的 generated_case 复制为 eval_case 快照（冻结后不可变）。"""
         count = 0
-        for case in self._publishable_cases(corpus_id):
+        for case in self._publishable_cases():
             self.db.save_eval_case(
                 version_id=version_id,
                 case_uid=f"case_{version_id:04d}_{case['case_id']:06d}",
@@ -140,11 +131,9 @@ class DatasetLifecycleService:
         return count
 
     def _build_snapshot_metadata(
-        self, *, corpus_id: int, corpus: dict, coverage: dict, created_by: str | None
+        self, *, coverage: dict, created_by: str | None
     ) -> dict:
         return {
-            "corpus_id": corpus_id,
-            "corpus_version": corpus.get("version"),
             "parser_version": "pymupdf-1.24.0",
             "embedding_model": "BAAI/bge-small-zh-v1.5",
             "llm_model": "gpt-4o-mini-2024-07-18",
@@ -157,8 +146,8 @@ class DatasetLifecycleService:
             "created_at": datetime.utcnow().isoformat() + "Z",
         }
 
-    def list_versions(self, corpus_id: int) -> list[dict]:
-        return self.db.list_dataset_versions(corpus_id)
+    def list_versions(self) -> list[dict]:
+        return self.db.list_dataset_versions()
 
     def get_version(self, version_id: int) -> dict | None:
         return self.db.get_dataset_version(version_id)
@@ -234,9 +223,9 @@ class DatasetLifecycleService:
     # ------------------------------------------------------------------
     # 树形浏览（FR-DS-TREE-001）
     # ------------------------------------------------------------------
-    def tree(self, corpus_id: int) -> dict:
-        cases = self._publishable_cases(corpus_id)
-        eius = self.db.list_eius(corpus_id, include_blocked=False)
+    def tree(self) -> dict:
+        cases = self._publishable_cases()
+        eius = self.db.list_eius(include_blocked=False)
 
         # section_path → 文档名 → 计数
         by_section: dict[str, dict] = {}
@@ -275,7 +264,7 @@ class DatasetLifecycleService:
                     "documents": node["documents"],
                 }
             )
-        return {"corpus_id": corpus_id, "tree": tree_list}
+        return {"tree": tree_list}
 
     # ------------------------------------------------------------------
     # 导出
@@ -354,7 +343,7 @@ class DatasetLifecycleService:
     # ------------------------------------------------------------------
     # 文档重传：覆盖式整体作废 + 全量重算（无增量，见 §8.14 / §3.3）
     # ------------------------------------------------------------------
-    def rebuild_on_reupload(self, *, corpus_id: int, document_id: int, job_id: int) -> None:
+    def rebuild_on_reupload(self, *, document_id: int, job_id: int) -> None:
         """文档重传回调（由 01 的 doc_update_job 完成后触发）。
 
         策略：整体作废该文档相关产物并全量重算。
@@ -363,21 +352,21 @@ class DatasetLifecycleService:
           删除旧版本中属于该文档（eiu→document）的 eval_case，再基于最新 generated_case 整体重快照。
         """
         self.db.update_job(job_id, phase="rebuild", progress=80, message="覆盖式整体重算中")
-        latest_versions = self.db.list_dataset_versions(corpus_id)
+        latest_versions = self.db.list_dataset_versions()
         if latest_versions:
             version_id = latest_versions[0]["version_id"]
             # 覆盖式：先全量作废该版本下的快照样本，再基于最新 m03/m04 结果整体重快照
-            self._rebuild_version_snapshot(version_id=version_id, corpus_id=corpus_id)
+            self._rebuild_version_snapshot(version_id=version_id)
         self.db.update_job(job_id, status="done", phase="rebuild", progress=100, message="已更新完成", finished=True)
 
-    def _rebuild_version_snapshot(self, *, version_id: int, corpus_id: int) -> int:
+    def _rebuild_version_snapshot(self, *, version_id: int) -> int:
         """覆盖式重建：清空该版本 eval_case 快照，基于最新 generated_case 重新整体快照。"""
         # 清空旧快照
         old = self.db.get_eval_cases(version_id, include_retired=True, limit=100000)
         for c in old:
             self.db.retire_eval_case(c["case_id"])
         # 整体重快照
-        new_count = self._snapshot_cases(version_id=version_id, corpus_id=corpus_id)
+        new_count = self._snapshot_cases(version_id=version_id)
         self.db.update_dataset_version(version_id, case_count=new_count)
         return new_count
 

@@ -2,10 +2,10 @@
 
 用法：
   python -m modules.m04_quality_governance.scripts.export_quality_report \
-      --corpus 1 [--out report.md] [--format md]
+      [--document 9] [--out report.md] [--format md]
 
 说明：基于已落库的检查结果生成汇总（不触发新一轮校验），
-与 GET /api/corpus/{corpus_id}/quality-check/results 数据一致。
+与 GET /api/quality-check/results 数据一致。
 """
 from __future__ import annotations
 
@@ -20,13 +20,13 @@ from modules.shared.core.logging_config import get_logger
 logger = get_logger(__name__)
 
 
-def build_report(corpus_id: int) -> dict:
-    return PipelineService().get_results_summary(corpus_id)
+def build_report(document_id: int | None = None) -> dict:
+    return PipelineService().get_results_summary(document_id)
 
 
 def render_markdown(summary: dict) -> str:
     lines: list[str] = [
-        f"# 质量校验报告（corpus {summary['corpus_id']}）",
+        "# 质量校验报告",
         "",
         f"- 参与校验样本：{summary['total_cases']}",
         f"- 通过：{summary['passed']} / 失败：{summary['failed']}",
@@ -63,7 +63,7 @@ def render_markdown(summary: dict) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="导出质量校验报告")
-    parser.add_argument("--corpus", type=int, required=True, help="语料库 id")
+    parser.add_argument("--document", type=int, default=None, help="按文档过滤（不传则全部）")
     parser.add_argument(
         "--format", choices=["json", "md"], default="md", help="输出格式"
     )
@@ -75,7 +75,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    summary = build_report(args.corpus)
+    summary = build_report(args.document)
     if args.format == "json":
         content = json.dumps(summary, ensure_ascii=False, indent=2)
     else:

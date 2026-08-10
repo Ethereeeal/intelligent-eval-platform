@@ -1,21 +1,19 @@
-"""M02 — EIU 抽取与覆盖规划：请求 / 响应 Pydantic 模型。"""
+"""M02 — EIU 抽取与覆盖规划：请求 / 响应 Pydantic 模型（按文件维度，无 corpus）。"""
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
 
 class EiuExtractResponse(BaseModel):
-    """POST /api/corpus/{corpus_id}/eiu/extract — 异步触发成功响应（202）。"""
+    """POST /api/eiu/extract — 异步触发成功响应（202）。"""
 
     job_id: int
-    corpus_id: int
     status: str
     message: str
 
 
 class EiuOut(BaseModel):
     eiu_id: int
-    corpus_id: int
     block_id: int
     document_id: int | None = None
     document_name: str | None = None
@@ -35,9 +33,10 @@ class EiuOut(BaseModel):
 
 
 class EiuListResponse(BaseModel):
-    corpus_id: int
     total: int
     items: list[EiuOut]
+
+    model_config = {"exclude_none": True}
 
 
 class EiuDetail(EiuOut):
@@ -72,7 +71,6 @@ class BlockReconciliation(BaseModel):
 
 
 class CoverageReport(BaseModel):
-    corpus_id: int
     total_eiu: int
     questionable_eiu: int
     excluded_eiu: int
@@ -98,7 +96,6 @@ class GapItem(BaseModel):
 
 
 class GapListResponse(BaseModel):
-    corpus_id: int
     total: int
     items: list[GapItem]
 

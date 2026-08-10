@@ -27,7 +27,6 @@ class ChatMessageResponse(BaseModel):
 class ChatSessionResponse(BaseModel):
     """A chat session summary."""
     session_id: int
-    corpus_id: int | None = None
     title: str
     status: str  # "active" | "archived"
     created_at: datetime

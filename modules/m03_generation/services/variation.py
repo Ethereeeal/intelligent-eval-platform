@@ -54,7 +54,6 @@ class VariationService:
             case = GeneratedCase(
                 intent_id=seed_case["intent_id"],  # 共享同一意图
                 eiu_id=seed_case.get("eiu_id"),
-                corpus_id=seed_case["corpus_id"],
                 document_id=seed_case.get("document_id"),
                 question=question,
                 question_type=seed_case["question_type"],
@@ -70,7 +69,6 @@ class VariationService:
             saved.append(self.database.save_generated_case(
                 intent_id=case.intent_id,
                 eiu_id=case.eiu_id,
-                corpus_id=case.corpus_id,
                 document_id=case.document_id,
                 question=case.question,
                 question_type=case.question_type,

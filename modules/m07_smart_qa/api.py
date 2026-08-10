@@ -42,7 +42,6 @@ class _StubStore:
         with self._lock:
             session = {
                 "session_id": self._next_session_id,
-                "corpus_id": None,
                 "title": "新对话",
                 "status": "active",
                 "created_at": _STUB_CREATED_AT,

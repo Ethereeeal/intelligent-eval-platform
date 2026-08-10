@@ -357,9 +357,45 @@ ul { list-style: none; }
 }
 .ctx-popup button:hover { background: var(--brand-bg); color: var(--brand); }
 
-/* 上传目录选择器 */
-.up-title { font-size: 12px; font-weight: 600; color: var(--sub); padding: 6px 12px 4px; text-transform: uppercase; letter-spacing: .3px; }
-.upload-picker { min-width: 200px; }
+/* 上传目录选择器 —— 点击弹出的 overlay modal */
+.up-modal-mask {
+  position: fixed; inset: 0; z-index: 9999;
+  background: rgba(16, 32, 56, .45); backdrop-filter: blur(2px);
+  display: flex; align-items: center; justify-content: center;
+  animation: fadeIn .12s ease;
+}
+.up-modal {
+  width: 420px; max-width: 92vw; max-height: 80vh; display: flex; flex-direction: column;
+  background: var(--surface); border: 1px solid var(--brand-tint); border-radius: 12px;
+  box-shadow: 0 18px 50px rgba(0,0,0,.28); overflow: hidden; animation: fadeUp .15s ease;
+}
+.up-modal-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 16px; border-bottom: 1px solid var(--brand-tint); font-size: 14px; font-weight: 600; color: var(--brand-strong); }
+.up-modal-head .up-close { border: none; background: transparent; font-size: 22px; line-height: 1; color: var(--sub); cursor: pointer; padding: 0 4px; }
+.up-modal-head .up-close:hover { color: var(--brand); }
+.up-modal-body { padding: 8px 10px; overflow-y: auto; max-height: 52vh; }
+.up-modal-foot { display: flex; gap: 10px; padding: 12px 16px; border-top: 1px solid var(--brand-tint); }
+.up-modal-foot button { flex: 1; padding: 9px 12px; border-radius: 8px; border: 1px solid var(--brand-tint); background: var(--brand-bg); color: var(--brand); font-size: 13px; font-weight: 600; cursor: pointer; }
+.up-modal-foot button:hover { background: var(--brand); color: #fff; }
+.up-hint { font-size: 12px; color: var(--sub); padding: 0 16px 14px; line-height: 1.5; }
+
+/* 上传目录树（modal 内可滚动/折叠） */
+.up-tree { max-height: 100%; overflow-y: auto; padding: 2px 4px; }
+.up-node-wrap .up-children { margin-left: 18px; border-left: 1px dashed var(--brand-tint); padding-left: 6px; }
+.up-node-wrap.collapsed > .up-children { display: none; }
+.up-node { display: flex; align-items: center; gap: 6px; padding: 7px 10px; border-radius: 6px; cursor: pointer; font-size: 13px; color: var(--text); }
+.up-node .tw-ic { width: 16px; height: 16px; color: var(--brand); }
+.up-node[data-doc="1"] .tw-ic { color: var(--sub); }
+.up-node .tw-chev { width: 14px; height: 14px; margin-left: auto; color: var(--sub); transition: transform .15s ease; }
+.up-node .tw-lock { width: 13px; height: 13px; color: var(--sub); }
+.up-node .dir-pur { font-size: 11px; padding: 1px 6px; border-radius: 999px; margin-left: 2px; }
+.up-node .dir-pur.basic { background: var(--brand-bg); color: var(--brand); }
+.up-node .dir-pur.gen { background: #fef0e6; color: #d9772b; }
+.up-node:hover { background: var(--brand-bg); color: var(--brand); }
+.up-node.sel { background: var(--brand); color: #fff; }
+.up-node.sel .tw-ic, .up-node.sel .tw-chev, .up-node.sel .tw-lock, .up-node.sel .dir-pur { color: #fff; }
+.up-node.sel .dir-pur.basic { background: rgba(255,255,255,.22); color: #fff; }
+.up-node.sel .dir-pur.gen { background: rgba(255,255,255,.22); color: #fff; }
+.up-node[data-system="1"] { font-weight: 600; }
 
 /* 上传进度条 */
 .upload-prog-wrap { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; padding: 10px 14px; background: var(--brand-bg); border-radius: 8px; }

@@ -105,7 +105,6 @@ class CaseGenerator:
         case = GeneratedCase(
             intent_id=f"intent_{eiu['eiu_id']}_{angle}",
             eiu_id=eiu["eiu_id"],
-            corpus_id=eiu["corpus_id"],
             document_id=eiu["document_id"],
             question=raw.get("question") or "",
             question_type=raw.get("question_type") or question_type,
@@ -127,7 +126,6 @@ class CaseGenerator:
         return self.database.save_generated_case(
             intent_id=case.intent_id,
             eiu_id=case.eiu_id,
-            corpus_id=case.corpus_id,
             document_id=case.document_id,
             question=case.question,
             question_type=case.question_type,

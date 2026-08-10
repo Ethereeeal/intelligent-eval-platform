@@ -33,7 +33,6 @@ class EiuRecord:
     """一条可评测信息单元（Evaluable Information Unit）。"""
 
     eiu_id: int | None = None
-    corpus_id: int | None = None
     block_id: int | None = None
     statement: str = ""
     eiu_type: str = "rule"

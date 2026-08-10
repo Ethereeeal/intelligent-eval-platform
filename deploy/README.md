@@ -55,6 +55,19 @@ docker compose -f deploy/docker-compose.yml up -d
 > 修改代码或更新依赖后，执行 `docker compose -f deploy/docker-compose.yml build backend` 重新构建，
 > 再用 `up -d` 重新创建容器。模型文件放好后只需 `restart backend` 即可生效。
 
+## 端口约定（务必遵守）
+
+| 宿主机端口 | 服务 | 容器名 | 说明 |
+|---|---|---|---|
+| `8000` | 后端 API | `evalforge-backend` | FastAPI（`/api/...`），仅前端内部调用 |
+| `8080` | 前端 | `evalforge-studio` | 用户访问入口：**http://localhost:8080** |
+| `3306` | MySQL | `evalforge-mysql` | 元数据库 `evalforge` |
+| `9000` | MinIO API | `evalforge-minio` | 对象存储 |
+| `9001` | MinIO Console | `evalforge-minio` | 存储控制台 http://localhost:9001 |
+
+- 不要在宿主机手动起 `python main.py` / `http.server` 占用 `8000` 等端口，会与容器冲突或连到旧代码。
+- 源码烘焙进 `backend` 镜像：改 `modules/` 后必须 `build backend` 再 `up -d`，仅 `restart` 不生效。
+
 ## 前端工作台（AI Eval Studio）
 
 纯静态前端，由 `front-end/` 目录（独立构建上下文）下的 `Dockerfile`（nginx 托管）构建为 `studio` 服务，

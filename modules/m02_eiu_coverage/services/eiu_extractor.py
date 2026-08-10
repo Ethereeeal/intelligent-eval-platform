@@ -279,34 +279,34 @@ class EiuExtractorService:
         except OSError:
             return "你是一位精通银行授信政策和金融监管文件的专家。"
 
-    def extract_corpus(self, corpus_id: int, job_id: int) -> dict:
-        """对语料库全部段落 Block 执行 EIU 抽取（后台线程调用）。
+    def extract_corpus(self, job_id: int) -> dict:
+        """对全部文档的段落 Block 执行 EIU 抽取（后台线程调用）。
 
-        全量重算：先清空该语料库旧 EIU，再逐 Block 抽取写入。
+        全量重算：先清空全部旧 EIU，再逐 Block 抽取写入。
         """
         try:
-            return self._run(corpus_id, job_id)
+            return self._run(job_id)
         except Exception as exc:  # noqa: BLE001 — 记录失败并置 job 状态
             self.database.update_job(
                 job_id, status="failed", phase="extracting", message=f"EIU 抽取失败: {exc}"
             )
-            return {"job_id": job_id, "corpus_id": corpus_id, "status": "failed", "message": str(exc)}
+            return {"job_id": job_id, "status": "failed", "message": str(exc)}
 
-    def extract_document(self, corpus_id: int, document_id: int, job_id: int) -> dict:
+    def extract_document(self, document_id: int, job_id: int) -> dict:
         """仅对单个文档的段落 Block 执行 EIU 抽取（单文档隔离，不清全库）。
 
         仅删除该文档自身的旧 EIU，不影响其他文档已抽取的知识点。
         """
         try:
-            return self._run(corpus_id, job_id, document_id=document_id)
+            return self._run(job_id, document_id=document_id)
         except Exception as exc:  # noqa: BLE001
             self.database.update_job(
                 job_id, status="failed", phase="extracting", message=f"EIU 抽取失败: {exc}"
             )
-            return {"job_id": job_id, "corpus_id": corpus_id, "status": "failed", "message": str(exc)}
+            return {"job_id": job_id, "status": "failed", "message": str(exc)}
 
-    def _run(self, corpus_id: int, job_id: int, document_id: int | None = None) -> dict:
-        documents = self.database.list_documents(corpus_id)
+    def _run(self, job_id: int, document_id: int | None = None) -> dict:
+        documents = self.database.list_documents()
         if document_id is not None:
             documents = [d for d in documents if d["document_id"] == document_id]
         document_blocks: list[list[dict]] = []
@@ -321,17 +321,17 @@ class EiuExtractorService:
                 job_id, status="completed", phase="done", progress=100,
                 message="无可处理的段落", finished=True,
             )
-            return {"job_id": job_id, "corpus_id": corpus_id, "status": "completed", "message": "无可处理的段落", "count": 0}
+            return {"job_id": job_id, "status": "completed", "message": "无可处理的段落", "count": 0}
 
         self.database.update_job(
             job_id, status="running", phase="extracting", progress=0,
             message=f"开始 EIU 抽取，共 {total} 个段落 Block",
         )
-        # 单文档模式：仅清空该文档旧 EIU；全库模式：清空整个语料库旧 EIU
+        # 单文档模式：仅清空该文档旧 EIU；全库模式：清空全部旧 EIU
         if document_id is not None:
-            self.database.delete_eius_by_document(corpus_id=corpus_id, document_id=document_id)
+            self.database.delete_eius_by_document(document_id=document_id)
         else:
-            self.database.delete_eius_by_corpus(corpus_id)
+            self.database.delete_eius_all()
 
         document_map = {document["document_id"]: document for document in documents}
         neighbors = self._build_neighbors(document_blocks)
@@ -347,10 +347,9 @@ class EiuExtractorService:
             else:
                 block_error = None
             if items:
-                inserted += len(self.database.save_eius(corpus_id=corpus_id, items=items))
+                inserted += len(self.database.save_eius(items=items))
             else:
                 self.database.save_eius(
-                    corpus_id=corpus_id,
                     items=[exclusion_item(block, block_error or "段落无实质内容，未抽取到 EIU")],
                 )
                 excluded += 1
@@ -362,7 +361,6 @@ class EiuExtractorService:
         )
         return {
             "job_id": job_id,
-            "corpus_id": corpus_id,
             "status": "completed",
             "message": f"EIU 抽取完成，共 {inserted} 条",
             "count": inserted,

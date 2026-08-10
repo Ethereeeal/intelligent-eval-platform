@@ -2,7 +2,7 @@
 
 用法：
     python -m modules.m03_generation.scripts.export_cases \
-        --corpus 1 --format json --out eval_cases.json
+        --document 9 --format json --out eval_cases.json
 
 format 支持:
     json  — 完整结构（含证据绑定），可直接作为评测集交付物
@@ -55,7 +55,7 @@ def export_markdown(cases: list[dict]) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="导出评测样本集")
-    parser.add_argument("--corpus", type=int, required=True, help="语料库 ID")
+    parser.add_argument("--document", type=int, default=None, help="按文档 ID 过滤（不传则导出全部）")
     parser.add_argument("--format", choices=["json", "md"], default="json")
     parser.add_argument("--out", default="eval_cases.json", help="输出文件路径")
     parser.add_argument("--difficulty", help="按难度过滤: L1/L2/L3")
@@ -64,7 +64,7 @@ def main() -> None:
 
     database = DatabaseService()
     cases = database.list_generated_cases(
-        args.corpus,
+        document_id=args.document,
         difficulty=args.difficulty,
         status=args.status,
     )

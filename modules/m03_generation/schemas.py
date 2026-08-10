@@ -67,10 +67,11 @@ class EvidenceBinding(BaseModel):
 class CaseOut(BaseModel):
     """评测样本输出（列表项）。"""
 
+    model_config = {"exclude_none": True}
+
     case_id: int
     intent_id: str
     eiu_id: int | None = None
-    corpus_id: int
     document_id: int | None = None
     question: str
     question_type: str
@@ -108,7 +109,6 @@ class CaseUpdateRequest(BaseModel):
 class UploadQAPairRequest(BaseModel):
     """路径 2：用户直接上传问答对（种子），经校验后进入泛化。"""
 
-    corpus_id: int
     document_id: int | None = None
     question: str = Field(..., min_length=1)
     answer: str = Field(..., min_length=1)
@@ -148,7 +148,6 @@ class GeneratedCaseResult(BaseModel):
 class GenerateCasesResponse(BaseModel):
     """批量生成响应。"""
 
-    corpus_id: int
     total_questionable_eiu: int
     already_covered: int = 0
     generated: int = 0

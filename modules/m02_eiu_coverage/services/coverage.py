@@ -1,4 +1,4 @@
-"""M02 — 覆盖规划（确定性代码，不依赖 LLM，SPEC §6）。
+"""M02 — 覆盖规划（确定性代码，不依赖 LLM，SPEC §6，按文件维度，无 corpus）。
 
 包含：加权覆盖率计算（§6.1）、覆盖率失真防护告警（§6.2）、
 业务门禁数据（§6.3）、实质 Block 对账（§6.4）。
@@ -12,7 +12,6 @@ from modules.shared.services.database import PRIORITY_WEIGHT, DatabaseService
 
 
 def save_coverage_report(
-    corpus_id: int,
     *,
     covered_eiu_ids: Iterable[int] | None = None,
     blocked_eiu_ids: Iterable[int] | None = None,
@@ -20,10 +19,9 @@ def save_coverage_report(
 ) -> int:
     """计算覆盖率并落库为一条 coverage_report，返回 report_id（供 m05 冻结外键引用）。"""
     report = compute_coverage(
-        corpus_id, covered_eiu_ids=covered_eiu_ids, blocked_eiu_ids=blocked_eiu_ids
+        covered_eiu_ids=covered_eiu_ids, blocked_eiu_ids=blocked_eiu_ids
     )
     return DatabaseService().save_coverage_report(
-        corpus_id=corpus_id,
         total_eiu=report["total_eiu"],
         questionable_eiu=report["questionable_eiu"],
         excluded_eiu=report["excluded_eiu"],
@@ -40,12 +38,11 @@ def save_coverage_report(
 
 
 def compute_coverage(
-    corpus_id: int,
     *,
     covered_eiu_ids: Iterable[int] | None = None,
     blocked_eiu_ids: Iterable[int] | None = None,
 ) -> dict:
-    """生成覆盖率报告（corpus 维度的确定性计算）。
+    """生成覆盖率报告（全库维度，按文件组织 by_document 的确定性计算）。
 
     covered_eiu_ids：已有通过质量校验题目的 EIU（M03 生成题目后传入；M02 阶段为空，
     weighted_coverage 相应为 0.0，见 SPEC §7.3 示例）。
@@ -55,8 +52,8 @@ def compute_coverage(
     covered: set[int] = set(covered_eiu_ids or [])
     blocked: set[int] = set(blocked_eiu_ids or [])
 
-    eius = database.list_eius(corpus_id, include_blocked=False)
-    blocks = database.list_blocks(corpus_id)
+    eius = database.list_eius(include_blocked=False)
+    blocks = database.list_blocks()
 
     # ---- 基础计数（blocked 已由 list_eius 过滤）----
     active = [eiu for eiu in eius if eiu["eiu_id"] not in blocked]
@@ -76,7 +73,7 @@ def compute_coverage(
             by_section_counter[eiu["section_path"]] += 1
     document_names = {
         document["document_id"]: document["file_name"]
-        for document in database.list_documents(corpus_id)
+        for document in database.list_documents()
     }
     by_document = [
         {
@@ -141,7 +138,6 @@ def compute_coverage(
         )
 
     return {
-        "corpus_id": corpus_id,
         "total_eiu": len(active),
         "questionable_eiu": len(questionable),
         "excluded_eiu": len(excluded),
@@ -164,11 +160,11 @@ def compute_coverage(
     }
 
 
-def compute_gaps(corpus_id: int, *, covered_eiu_ids: Iterable[int] | None = None) -> list[dict]:
+def compute_gaps(*, covered_eiu_ids: Iterable[int] | None = None) -> list[dict]:
     """未覆盖 EIU 清单：可出题但尚无对应题目的 EIU（M02 阶段即全部可出题项）。"""
     database = DatabaseService()
     covered: set[int] = set(covered_eiu_ids or [])
-    eius = database.list_eius(corpus_id, include_blocked=False)
+    eius = database.list_eius(include_blocked=False)
     gaps = [
         {
             "eiu_id": eiu["eiu_id"],
