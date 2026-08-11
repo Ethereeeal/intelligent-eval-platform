@@ -28,7 +28,7 @@ class Settings(BaseModel):
     max_file_size: int = int(os.getenv("MAX_FILE_SIZE", str(50 * 1024 * 1024)))  # 50MB
     allowed_extensions: list[str] = [
         ext.strip().lower()
-        for ext in os.getenv("ALLOWED_EXTENSIONS", ".txt,.md,.pdf,.docx").split(",")
+        for ext in os.getenv("ALLOWED_EXTENSIONS", ".txt,.md,.pdf,.docx,.xlsx,.csv").split(",")
         if ext.strip()
     ]
     # 默认按 MYSQL_* 拼出连接串；若显式设置 DATABASE_URL 则优先

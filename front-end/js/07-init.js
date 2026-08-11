@@ -59,6 +59,11 @@
       const go = e.target.closest("[data-go]"); if (go) { goto(go.dataset.go); return; }
       const dl = e.target.closest(".mr-dl-link[data-goto]"); if (dl) { e.preventDefault(); goto(dl.dataset.goto); return; }
     });
+    // 概览：可点击 KPI 卡片支持 Enter 键跳转
+    document.addEventListener("keydown", e => {
+      if (e.key !== "Enter") return;
+      const go = e.target.closest("[data-go][role='link']"); if (go) { goto(go.dataset.go); }
+    });
     // 问答对生成：来源类型切换 → 选项随类型变化
     $("#srcTypeSeg").addEventListener("click", e => {
       const b = e.target.closest("button[data-type]"); if (!b) return;
@@ -69,16 +74,84 @@
       renderStudioOpts();
     });
     // 运行并监控
-    $("#studioRun").onclick = () => {
+    $("#studioRun").onclick = async () => {
       const srcIds = state.studioSrc || [];
       if (!srcIds.length) { toast("请先选择文件"); return; }
       // 待生成问答文件：需勾选至少一种难度
       if (state.studioType === "doc" && state.studioOpts.difficulties.length === 0) { toast("请至少选择一种难度"); return; }
-      // 演示环境：后端生成服务未实现，不跑假进度；直接展示已选文件并提供「导出已有问答对」
       renderMonitor();
-      const totalQa = srcIds.reduce((s, id) => s + ((DOCS[id] && DOCS[id].qa) ? DOCS[id].qa.length : 0), 0);
       const label = state.studioType === "doc" ? "问答对生成" : "问题泛化";
-      toast(`演示环境：生成服务未接入；已列出 ${srcIds.length} 个已选文件，可导出其现有问答对（共 ${totalQa} 条）`);
+      toast(`${label}中…（按所选文档逐个执行 m03 生成 → m04 质检）`);
+      let genTotal = 0, reuseTotal = 0, failTotal = 0;
+      for (const id of srcIds) {
+        const d = DOCS[id]; if (!d) continue;
+        // srcIds 形如 "doc3"，解析出后端 document_id
+        const m = String(id).match(/^doc(\d+)$/);
+        if (!m) { toast(`跳过「${d.name}」（无法识别文档 ID）`); continue; }
+        const docId = Number(m[1]);
+        try {
+          if (state.studioType === "qa") {
+            // 问题泛化：对该文档下已有问答对逐个调用 m03 泛化/改写接口
+            const qas = d.qa || [];
+            if (!qas.length) { toast(`「${d.name}」暂无问答对可泛化`); continue; }
+            let okN = 0;
+            for (const qa of qas) {
+              const cm = String(qa.id || "").match(/^Q-(\d+)$/);
+              if (!cm) continue;
+              const vr = await fetch(API_BASE + `/api/cases/${cm[1]}/variations`, {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ count: state.studioOpts.generalizeCount || 3 })
+              });
+              if (vr.ok) okN++;
+            }
+            genTotal += okN;
+            toast(`「${d.name}」泛化完成：${okN} 个种子题已改写扩写`);
+            continue;
+          }
+          // m03：按文档生成问答对（单文档隔离，未覆盖 EIU 才生成，可重复触发）
+          // 先展示进度条（初始 0%），请求期间轮询后端进度
+          renderGenProgress(d, { running: true, total: (d.kp || []).length, done: 0 });
+          const poll = setInterval(async () => {
+            try {
+              const jr = await fetch(API_BASE + `/api/cases/generate-progress?document_id=${docId}`);
+              if (!jr.ok) return;
+              const p = await jr.json();
+              renderGenProgress(d, p);
+            } catch (e) { /* 忽略单次轮询错误 */ }
+          }, 1000);
+          let gq, gqr;
+          try {
+            gq = await fetch(API_BASE + `/api/cases/generate?document_id=${docId}`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ angles: ["primary"], include_variations: false, dry_run: false })
+            });
+            if (!gq.ok) { const er = await gq.json().catch(() => null); throw new Error((er && er.detail) || gq.status); }
+            gqr = await gq.json();
+          } finally {
+            clearInterval(poll);
+          }
+          genTotal += gqr.generated || 0; reuseTotal += gqr.reused || 0; failTotal += gqr.failed || 0;
+          // m04：对该文档样本执行一轮质量校验（5 项检查 + hard 失败自动重生成）
+          setGenProgressPhase(d, "质量校验中…");
+          const qr = await fetch(API_BASE + `/api/quality-check?document_id=${docId}`, { method: "POST" }).catch(() => null);
+          if (qr && qr.ok) {
+            const qrBody = await qr.json().catch(() => null);
+            if (qrBody) toast(`「${d.name}」生成 ${gqr.generated || 0} 道 · 质检通过 ${qrBody.passed || 0} / 待确认 ${qrBody.failed || 0}`);
+            else toast(`「${d.name}」生成完成，已执行质量校验`);
+          } else {
+            toast(`「${d.name}」问答对已生成，质量校验未执行（m04 接口异常）`);
+          }
+        } catch (e) {
+          failTotal += 1;
+          toast(`「${d.name}」${state.studioType === "qa" ? "泛化" : "生成"}失败：${e.message || e}`);
+        } finally {
+          if (state.studioType === "doc") hideGenProgress();
+        }
+      }
+      await loadData();
+      hideGenProgress();
+      toast(`${label}结束：新生成 ${genTotal} 道、复用 ${reuseTotal} 道、失败 ${failTotal} 道（EIU 已持久化，可随时重新生成）`);
     };
 
     $("#bellBtn").onclick = () => {
@@ -107,33 +180,31 @@
         mask.innerHTML = `<div class="up-modal">` +
           `<div class="up-modal-head"><span>选择上传目标目录</span>` +
           `<button class="up-close" title="关闭">×</button></div>` +
-          `<div class="up-modal-body"><div class="up-tree">${uploadTreeHTML(TREE.children)}</div></div>` +
+          `<div class="up-modal-body"><div class="up-tree">${uploadTreeHTML([TREE])}</div></div>` +
           `<div class="up-modal-foot">` +
           `<button class="up-pick-file">上传文件</button>` +
           `<button class="up-pick-folder">上传文件夹（保留目录结构）</button>` +
           `</div>` +
-          `<div class="up-hint">文档须归属「基础问题输入文档 / 仅泛化输入文档」系统目录之一（可在其内部任意子目录间组织）。</div>` +
+          `<div class="up-hint">文档统一上传至「文档库」，可在其内部任意子目录间组织；上传后自动解析分块并抽取知识点。</div>` +
           `</div>`;
         document.body.appendChild(mask);
         if (window.lucide) window.lucide.createIcons();
         const closeModal = () => mask.remove();
         mask.querySelector(".up-close").onclick = closeModal;
         mask.addEventListener("click", (e) => { if (e.target === mask) closeModal(); });
-        // 目录树：点击文件夹节点（系统目录或内部任意子目录）即选中为目标；文档节点忽略；非系统文件夹可展开/折叠
+        // 目录树：点击任意文件夹节点即选中为目标（含根「文档库」）；文档节点忽略；可展开/折叠
         mask.querySelectorAll(".up-node").forEach(row => {
           row.addEventListener("click", (e) => {
             e.stopPropagation();
             if (row.dataset.doc) return; // 文档不可作为上传目标
-            if (row.dataset.folder && !row.dataset.system) {
-              row.parentElement.classList.toggle("collapsed");
-            }
+            row.parentElement.classList.toggle("collapsed");
             mask.querySelectorAll(".up-node").forEach(r => r.classList.remove("sel"));
             row.classList.add("sel");
             state._uploadFolderPath = fullFolderPathOf(row.__node);
           });
         });
-        // 绑定树节点对象到 DOM，便于取完整路径
-        bindTreeNodes(mask.querySelector(".up-tree"), TREE.children);
+        // 绑定树节点对象到 DOM，便于取完整路径（含根「文档库」）
+        bindTreeNodes(mask.querySelector(".up-tree"), [TREE]);
         // 选文件上传
         mask.querySelector(".up-pick-file").onclick = () => {
           if (!state._uploadFolderPath) { toast("请先选择目标目录", "warn"); return; }
@@ -203,12 +274,5 @@
     const ins = $("#hlInsight");
     if (!ins) return;
     if (!docCount) { ins.textContent = "当前暂无已加载的输入文档。"; return; }
-    const topics = new Set();
-    Object.values(DOCS).forEach(d => {
-      (d.purposes && d.purposes.length ? d.purposes : ["基础问题输入文档"]).forEach(p => {
-        topics.add(p === "gen" ? "泛化问题" : "基础问题");
-      });
-    });
-    const topicTxt = [...topics].join("、");
-    ins.textContent = `当前输入文档库共 ${docCount} 篇文档（含 ${topicTxt}），已生成 ${qaTotal} 条问答对，内容围绕银行证券业务规则与合规要点。`;
+    ins.textContent = `当前输入文档库共 ${docCount} 篇文档，已生成 ${qaTotal} 条问答对，内容围绕银行证券业务规则与合规要点。`;
   }

@@ -17,6 +17,7 @@ from modules.m04_quality_governance.services.prompts import (
     CHECK_TYPES,
     build_quality_check_prompt,
 )
+from modules.shared.core.config import settings
 from modules.shared.services.database import DatabaseService
 
 
@@ -41,7 +42,7 @@ class QualityChecker:
             evidence=evidence,
             source_context=source_context,
         )
-        response = self.llm.call(prompt, temperature=0.0, max_tokens=2048)
+        response = self.llm.call(prompt, temperature=0.0, max_tokens=settings.llm_max_tokens)
         raw_checks = self._parse_checks(response)
         items = self._normalize_checks(raw_checks)
         return QualityReport(case_id=case["case_id"], checks=items)

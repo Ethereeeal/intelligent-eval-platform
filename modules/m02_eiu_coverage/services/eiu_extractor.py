@@ -393,8 +393,19 @@ class EiuExtractorService:
         策略：先跑确定性规则抽取。若规则已能归类（绝大多数监管条款），直接采用、
         跳过 LLM；仅当规则无法归类（返回空）时，才调用 LLM 处理复杂句，且对 LLM
         产出的每条 EIU 仍用规则重算 type/priority/constraints（保证写死）。
+
+        表格类文件（excel/csv）不做特殊化：与普通文档走同一套抽取流程，
+        一行内可抽 0..n 条 EIU（规则逐句分类先抽，规则无法归类时交 LLM）。
+
+        唯一例外：表头含「问题/question」列时，以问题列为抽取输入，
+        避免「答案」列混入 EIU statement（否则生成题目会泄露标准答案）。
         """
-        text = block["block_text"]
+        # excel/csv 行若带「问题」列，用问题列文本作为 EIU 抽取输入（答案列不混入）
+        meta = block.get("metadata_json") or {}
+        if block.get("block_type") == "excel_row" and (meta.get("question") or "").strip():
+            text = str(meta.get("question")).strip()
+        else:
+            text = block["block_text"]
         if is_skippable(text):                       # #4 粗筛写死，前置拦截
             return []
 

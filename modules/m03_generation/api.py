@@ -55,6 +55,16 @@ def generate_cases(
 
 
 # ----------------------------------------------------------------------
+# 生成进度：GET /api/cases/generate-progress（前端「运行监测」轮询百分比）
+# ----------------------------------------------------------------------
+@generation_router.get("/generate-progress")
+def generate_progress(
+    document_id: int | None = Query(default=None, description="指定文档时返回该文档生成进度，缺省返回全量任务进度。"),
+):
+    return pipeline_service.get_generate_progress(document_id=document_id)
+
+
+# ----------------------------------------------------------------------
 # 评测样本列表：GET /api/cases（全量）
 # ----------------------------------------------------------------------
 @cases_router.get("", response_model=list[CaseOut])
@@ -114,6 +124,15 @@ def generate_from_upload(payload: UploadQAPairRequest):
 # ----------------------------------------------------------------------
 # 样本详情 / 编辑 / 删除
 # ----------------------------------------------------------------------
+@cases_router.delete("/document/{document_id}")
+def delete_cases_by_document(document_id: int):
+    """清空指定文档下的全部问答对（保留文档与 EIU，可重新生成）。"""
+    deleted = pipeline_service.database.delete_generated_cases_by_document(
+        document_id=document_id
+    )
+    return {"document_id": document_id, "deleted": deleted}
+
+
 @cases_router.get("/{case_id}", response_model=CaseDetailOut)
 def get_case(case_id: int):
     case = pipeline_service.get_case(case_id)

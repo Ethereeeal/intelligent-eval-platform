@@ -3,6 +3,34 @@
     renderSrcTree();
   }
 
+  /* 生成进度条：studioRun 期间轮询后端进度并渲染到「运行监测」顶部 */
+  function renderGenProgress(d, p) {
+    const box = $("#genProgress"); if (!box) return;
+    const total = p && p.total ? p.total : (d.kp || []).length;
+    const done = p && p.done ? p.done : 0;
+    const running = p ? p.running : true;
+    const pct = total ? Math.min(100, Math.round(done / total * 100)) : 0;
+    box.hidden = false;
+    box.innerHTML = `
+      <div class="gen-prog-head">
+        <span class="gp-name">${d.name}</span>
+        <span class="gp-meta">${running ? "生成中…" : "完成"} · ${done}/${total} 知识点</span>
+        <span class="gp-pct">${pct}%</span>
+      </div>
+      <div class="gen-prog-bar"><span style="width:${pct}%"></span></div>`;
+  }
+  function hideGenProgress() {
+    const box = $("#genProgress"); if (box) box.hidden = true;
+  }
+  function setGenProgressPhase(d, text) {
+    const box = $("#genProgress"); if (!box || box.hidden) return;
+    const head = box.querySelector(".gen-prog-head");
+    if (head) {
+      const meta = head.querySelector(".gp-meta");
+      if (meta) meta.textContent = text;
+    }
+  }
+
   /* 运行监测：演示环境无后端执行，仅展示已选文件并提供真实「导出已有问答对」下载 */
   function renderMonitor() {
     const el = $("#monitorList"); if (!el) return;
@@ -18,9 +46,14 @@
         ? `难度${state.studioOpts.difficulties.join("/") || "未选"}${state.studioOpts.flatOutput ? "·扁平" : "·层级"}`
         : `×${state.studioOpts.generalizeCount}`;
       const qaN = (d.qa || []).length;
+      const eiuN = (d.kp || []).length;
+      const metaBits = [];
+      if (eiuN > 0) metaBits.push(`${eiuN} 知识点`); else if (d.status) metaBits.push(d.status);
+      metaBits.push(`已有问答对 ${qaN} 条`);
+      if (d.size) metaBits.push(d.size);
       return `<div class="monitor-row">
         <span class="mr-name">${d.name} · ${typeLabel} · ${tag}</span>
-        <span class="mr-meta">已有问答对 ${qaN} 条</span>
+        <span class="mr-meta">${metaBits.join(" · ")}</span>
         <span class="mr-pct"><button class="btn ghost sm mr-dl-btn" data-doc="${id}"><i data-lucide="download"></i>导出问答对</button></span>
       </div>`;
     }).join("");
@@ -37,13 +70,45 @@
       return (node.children || []).flatMap(c => c.doc ? [c.doc] : collectDocs(c));
     }
 
+    // 节点统计信息：文件夹聚合全部后代文档；文档取自身 EIU / 问答对 / 大小 / 类型
+    function nodeStats(docIds) {
+      let eiuN = 0, qaN = 0;
+      docIds.forEach(id => {
+        const d = DOCS[id]; if (!d) return;
+        eiuN += (d.kp || []).length;
+        qaN += (d.qa || []).length;
+      });
+      return { eiuN, qaN };
+    }
     function renderNode(node, depth) {
-      const hasChildren = node.children && node.children.length > 0;
+      const isFolder = Array.isArray(node.children);
+      const hasChildren = isFolder && node.children.length > 0;
       const docIds = hasChildren ? collectDocs(node) : (node.doc ? [node.doc] : []);
       const hasDocs = docIds.length > 0;
       const allSel = hasDocs && docIds.every(id => sel.has(id));
       const partSel = hasDocs && !allSel && docIds.some(id => sel.has(id));
-      const icon = hasChildren ? "folder" : "file-text";
+      const icon = isFolder ? "folder" : "file-text";
+
+      // 第一行右侧 + 第二行小字
+      let line1Meta = "", line2 = "";
+      if (isFolder) {
+        if (hasDocs) {
+          const s = nodeStats(docIds);
+          line1Meta = `${docIds.length} 篇`;
+          line2 = `${s.eiuN} 知识点 · ${s.qaN} 问答对`;
+        } else {
+          line2 = "空文件夹";
+        }
+      } else {
+        const d = DOCS[node.doc] || {};
+        const s = nodeStats(docIds);
+        line1Meta = s.eiuN > 0 ? `${s.eiuN} 知识点` : (d.status && d.status !== "已解析" ? d.status : "暂无知识点");
+        const bits = [];
+        if (s.qaN > 0) bits.push(`${s.qaN} 问答对`);
+        if (d.size) bits.push(d.size);
+        if (d.type) bits.push(d.type);
+        line2 = bits.join(" · ");
+      }
 
       let html = `<div class="src-tn${depth === 0 ? ' src-tn-root' : ''}" style="padding-left:${depth*18+4}px">`;
       html += hasChildren
@@ -55,9 +120,10 @@
             <span class="src-tn-ckmark"></span></label>`
         : `<span class="src-tn-arr noop"></span>`;
       html += `<i data-lucide="${icon}" class="src-tn-ic"></i>`;
-      html += `<span class="si-name">${node.name}</span>`;
-      if (docIds.length) html += `<span class="si-meta">${docIds.length} 个</span>`;
-      html += `</div>`;
+      html += `<div class="si-body">`;
+      html += `<div class="si-line1"><span class="si-name">${node.name}</span>${line1Meta ? `<span class="si-meta">${line1Meta}</span>` : ""}</div>`;
+      if (line2) html += `<div class="si-sub">${line2}</div>`;
+      html += `</div></div>`;
 
       if (hasChildren && !collapsed[node.name]) {
         node.children.forEach(c => { html += renderNode(c, depth + 1); });
@@ -65,11 +131,11 @@
       return html;
     }
 
-    const wantPurpose = state.studioType === "qa" ? "gen" : "basic";
-    const groups = TREE.children.filter(c => c.purpose === wantPurpose);
-    $("#srcList").innerHTML = groups.length
-      ? groups.map(c => `<div class="src-group">${renderNode(c, 0)}</div>`).join("")
-      : emptyState("该类型下暂无语料", "当前语料库中没有「" + (state.studioType === "qa" ? "仅泛化" : "基础问题") + "输入文档」。");
+    // 统一文档库：文件树展示全部文档，由用户自行勾选；是否泛化由下方模式与选项决定
+    const hasAnyDoc = collectDocs(TREE).length > 0;
+    $("#srcList").innerHTML = hasAnyDoc
+      ? `<div class="src-group">${renderNode(TREE, 0)}</div>`
+      : emptyState("文档库为空", "当前文档库中没有输入文档，请先到「输入文档库」上传。");
     icons();
 
     $$("#srcList .src-tn-arr[data-folder]").forEach(arr => {

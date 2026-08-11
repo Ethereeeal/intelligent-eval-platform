@@ -51,7 +51,7 @@
           </div>
 
           <div class="kpi-grid">
-            <div class="kpi"><div class="kpi-top"><span class="kpi-ic" style="--c:#124571"><i data-lucide="layers"></i></span><span class="kpi-label">问答对总量</span></div><div class="kpi-num" id="kpiQaTotal">—</div><div class="kpi-trend up">实时 <i data-lucide="activity"></i></div></div>
+            <div class="kpi kpi-link" data-go="qalib" role="link" tabindex="0" title="点击查看输出问答对库"><div class="kpi-top"><span class="kpi-ic" style="--c:#124571"><i data-lucide="layers"></i></span><span class="kpi-label">问答对总量</span></div><div class="kpi-num" id="kpiQaTotal">—</div><div class="kpi-trend up">实时 <i data-lucide="activity"></i></div></div>
           </div>
 
           <div class="panel open">
@@ -84,6 +84,20 @@
           </div>
         </section>
 
+        <!-- ============ 输入文档库（左目录树 + 右预览） ============ -->
+        <section class="view" data-view="doclib" hidden>
+          <div class="page-head">
+            <div><h1>输入文档库</h1><p class="sub">文档接入、解析、在线查看与版本管理</p></div>
+            <div class="page-actions"><button class="btn ghost" id="uploadBtn"><i data-lucide="upload"></i>上传文档</button><input type="file" id="uploadInput" accept=".pdf,.doc,.docx,.txt,.md,.xlsx,.xls,.csv" multiple hidden /><input type="file" id="uploadFolderInput" webkitdirectory directory multiple hidden /></div>
+          </div>
+          <div class="lib-split">
+            <div class="tree" id="docTree">
+              <div class="tree-bar"><span class="tree-bar-t">目录</span><button class="tree-toggle" id="treeToggle" title="隐藏/显示目录"><i data-lucide="chevron-left"></i></button></div>
+            </div>
+            <div id="docContent"></div>
+          </div>
+        </section>
+
         <!-- ============ 问答对生成（选择文件类型 / 配置 / 监控） ============ -->
         <section class="view" data-view="studio" hidden>
           <div class="page-head">
@@ -108,21 +122,8 @@
 
           <div class="card card-pad mt">
             <div class="card-t">运行监测</div>
+            <div id="genProgress" class="gen-progress" hidden></div>
             <div id="monitorList"></div>
-          </div>
-        </section>
-
-        <!-- ============ 输入文档库（左目录树 + 右预览） ============ -->
-        <section class="view" data-view="doclib" hidden>
-          <div class="page-head">
-            <div><h1>输入文档库</h1><p class="sub">文档接入、解析、在线查看与版本管理</p></div>
-            <div class="page-actions"><button class="btn ghost" id="uploadBtn"><i data-lucide="upload"></i>上传文档</button><input type="file" id="uploadInput" accept=".pdf,.doc,.docx,.txt,.md" multiple hidden /><input type="file" id="uploadFolderInput" webkitdirectory directory multiple hidden /></div>
-          </div>
-          <div class="lib-split">
-            <div class="tree" id="docTree">
-              <div class="tree-bar"><span class="tree-bar-t">目录</span><button class="tree-toggle" id="treeToggle" title="隐藏/显示目录"><i data-lucide="chevron-left"></i></button></div>
-            </div>
-            <div id="docContent"></div>
           </div>
         </section>
 

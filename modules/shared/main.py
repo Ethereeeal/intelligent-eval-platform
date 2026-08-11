@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from modules.m01_data_foundation.api import (
     documents_router,
+    folders_router,
     jobs_router,
 )
 from modules.m02_eiu_coverage.api import eiu_router
@@ -45,6 +46,7 @@ app.add_middleware(
 )
 
 app.include_router(documents_router)
+app.include_router(folders_router)
 app.include_router(jobs_router)
 app.include_router(eiu_router)
 app.include_router(generation_router)

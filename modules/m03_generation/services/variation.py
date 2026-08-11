@@ -13,6 +13,7 @@ from typing import Any
 from modules.m03_generation.models import GeneratedCase
 from modules.m03_generation.services.llm_service import LLMService
 from modules.m03_generation.services.prompts import build_variation_prompt
+from modules.shared.core.config import settings
 from modules.shared.services.database import DatabaseService
 
 
@@ -40,7 +41,7 @@ class VariationService:
             acceptable_answers=seed_case.get("acceptable_answers") or [],
             styles=styles,
         )
-        response = self.llm.call(prompt, temperature=0.4, max_tokens=2048)
+        response = self.llm.call(prompt, temperature=0.4, max_tokens=settings.llm_max_tokens)
         variants = self._parse_variants(response)
 
         saved: list[dict] = []

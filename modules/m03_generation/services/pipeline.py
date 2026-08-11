@@ -24,6 +24,34 @@ class PipelineService:
         self.database = DatabaseService()
         self.generator = CaseGenerator()
         self.variation = VariationService()
+        # 生成进度（进程内，单进程 uvicorn 适用）：key = document_id（数字）或 "all"（全量）
+        self._progress: dict[str | int, dict] = {}
+
+    # ------------------------------------------------------------------
+    # 生成进度（GET /api/cases/generate-progress，前端运行监测轮询）
+    # ------------------------------------------------------------------
+    def get_generate_progress(self, document_id: int | None = None) -> dict:
+        """返回当前生成任务进度。document_id 为空时返回全量（corpus）任务进度。"""
+        key: str | int = document_id if document_id is not None else "all"
+        p = self._progress.get(key)
+        if not p or p.get("status") != "running":
+            return {
+                "running": False,
+                "document_id": document_id,
+                "total": 0,
+                "done": 0,
+                "percent": 0,
+            }
+        total = p.get("total", 0)
+        done = p.get("done", 0)
+        percent = round(done / total * 100) if total else 0
+        return {
+            "running": True,
+            "document_id": document_id,
+            "total": total,
+            "done": done,
+            "percent": percent,
+        }
 
     # ------------------------------------------------------------------
     # 批量生成（POST /api/cases/generate，按 document_id 或全量）
@@ -64,14 +92,22 @@ class PipelineService:
             }
 
         results: list[dict[str, Any]] = []
-        for eiu in pending:
-            result = self._generate_for_eiu_with_angles(
-                eiu,
-                angles=angles,
-                include_variations=include_variations,
-                variation_count=variation_count,
-            )
-            results.append(result)
+        total = len(pending)
+        self._progress["all"] = {"document_id": None, "total": total, "done": 0, "status": "running"}
+        try:
+            for idx, eiu in enumerate(pending):
+                try:
+                    result = self._generate_for_eiu_with_angles(
+                        eiu,
+                        angles=angles,
+                        include_variations=include_variations,
+                        variation_count=variation_count,
+                    )
+                    results.append(result)
+                finally:
+                    self._progress["all"]["done"] = idx + 1
+        finally:
+            self._progress["all"]["status"] = "done"
 
         return {
             "total_questionable_eiu": len(eius),
@@ -93,22 +129,24 @@ class PipelineService:
         variation_count: int = 2,
         dry_run: bool = False,
     ) -> dict[str, Any]:
-        """为单个文档下未覆盖 EIU 生成题目+答案，单文档隔离。
+        """为单个文档重建问答对库（单文档隔离），可重复触发。
 
         隔离语义：
         - 仅读取该文档的 EIU（list_eius 按 document_id 过滤）；
-        - 重抽前删除该文档已生成问答对，不触碰其他文档；
-        - 已覆盖 EIU 判定也限定在该文档内，不会重复生成。
+        - 每次触发都是"重建"：先删该文档旧问答对，再按当前全部 EIU 重新生成，
+          因此删掉旧问答对库后 EIU 仍在，可随时再次触发重新生成；
+        - 不触碰其他文档的问答对与 EIU；
+        - 重合内容跨文件复用（statement 精确匹配）避免重复调用 LLM。
         """
         eius = self.database.list_eius(
             questionable=True, document_id=document_id
         )
-        covered = self.database.list_covered_eiu_ids(
-            document_id=document_id
-        )
-        pending = [eiu for eiu in eius if eiu["eiu_id"] not in covered]
 
         if dry_run:
+            covered = self.database.list_covered_eiu_ids(
+                document_id=document_id
+            )
+            pending = [eiu for eiu in eius if eiu["eiu_id"] not in covered]
             return {
                 "document_id": document_id,
                 "total_questionable_eiu": len(eius),
@@ -127,50 +165,67 @@ class PipelineService:
                 ],
             }
 
-        # 单文档隔离：重抽前先清掉该文档旧问答对，避免重复
+        # 单文档隔离：重建语义——先清掉该文档旧问答对（EIU 保留在文档库，
+        # 不受影响），随后按当前全部 EIU 重新生成；可重复触发生成多轮问答对库。
         self.database.delete_generated_cases_by_document(
             document_id=document_id
         )
+        pending = list(eius)
+
+        # 单文档生成进度（前端运行监测轮询展示百分比）
+        total = len(pending)
+        self._progress[document_id] = {
+            "document_id": document_id,
+            "total": total,
+            "done": 0,
+            "status": "running",
+        }
 
         results: list[dict[str, Any]] = []
         reused_total = 0
-        for eiu in pending:
-            # 重合内容复用 —— 先按归一化 statement 跨文件精确匹配
-            statement_norm = normalize_statement(eiu.get("statement", ""))
-            hit = (
-                self.database.find_cases_by_statement(statement_norm)
-                if statement_norm
-                else []
-            )
-            if hit:
-                reused = self._reuse_case_for_eiu(
-                    eiu, hit[0], angles=angles or ["primary"]
-                )
-                reused_total += len(reused)
-                results.append(
-                    {
-                        "eiu_id": eiu["eiu_id"],
-                        "eiu_type": eiu["eiu_type"],
-                        "statement": eiu["statement"],
-                        "case_ids": [c["case_id"] for c in reused],
-                        "reused": True,
-                        "error": None,
-                    }
-                )
-                continue
+        try:
+            for idx, eiu in enumerate(pending):
+                try:
+                    # 重合内容复用 —— 先按归一化 statement 跨文件精确匹配
+                    statement_norm = normalize_statement(eiu.get("statement", ""))
+                    hit = (
+                        self.database.find_cases_by_statement(statement_norm)
+                        if statement_norm
+                        else []
+                    )
+                    if hit:
+                        reused = self._reuse_case_for_eiu(
+                            eiu, hit[0], angles=angles or ["primary"]
+                        )
+                        reused_total += len(reused)
+                        results.append(
+                            {
+                                "eiu_id": eiu["eiu_id"],
+                                "eiu_type": eiu["eiu_type"],
+                                "statement": eiu["statement"],
+                                "case_ids": [c["case_id"] for c in reused],
+                                "reused": True,
+                                "error": None,
+                            }
+                        )
+                        continue
 
-            result = self._generate_for_eiu_with_angles(
-                eiu,
-                angles=angles,
-                include_variations=include_variations,
-                variation_count=variation_count,
-            )
-            results.append(result)
+                    result = self._generate_for_eiu_with_angles(
+                        eiu,
+                        angles=angles,
+                        include_variations=include_variations,
+                        variation_count=variation_count,
+                    )
+                    results.append(result)
+                finally:
+                    self._progress[document_id]["done"] = idx + 1
+        finally:
+            self._progress[document_id]["status"] = "done"
 
         return {
             "document_id": document_id,
             "total_questionable_eiu": len(eius),
-            "already_covered": len(covered),
+            "already_covered": 0,  # 重建语义：触发前已删除该文档旧问答对，故 0
             "generated": sum(1 for r in results if r.get("error") is None and not r.get("reused")),
             "reused": reused_total,
             "failed": sum(1 for r in results if r.get("error") is not None),
@@ -299,35 +354,17 @@ class PipelineService:
         return self.database.update_generated_case(case_id, **fields)
 
     def delete_case(self, case_id: int) -> bool:
-        """删除题目 = 人工放弃该 EIU（README DELETE 语义）。
+        """删除题目（标记 retired），不影响 EIU 出题状态。
 
-        将 case 标记 retired；若这是该 EIU 下最后一个存活题，
-        则同时把 EIU 标记为不可出题（is_questionable=0），
-        避免下次批量生成又为该 EIU 出题（删了又生成、反复不过的循环）。
+        删除问答对只移除该条样本，EIU 保持 is_questionable 原状，
+        从而支持「删库后重新生成」：删掉某文档全部问答对后，
+        EIU 仍在文档库，随时可再次触发生成（重建语义）。
+        如需彻底放弃某 EIU 出题，请使用 EIU 层面的排除/标记接口。
         """
         case = self.database.get_generated_case(case_id)
         if case is None or case.get("review_status") == "retired":
             return False
-        deleted = self.database.retire_generated_case(case_id)
-        if not deleted:
-            return False
-
-        eiu_id = case.get("eiu_id")
-        if eiu_id is None:
-            return True  # 用户上传题无 EIU，无需跳过
-        # 该 EIU 下是否还有其他存活题（list_generated_cases 默认排除 retired）
-        remaining_eiu_ids = {
-            c.get("eiu_id")
-            for c in self.database.list_generated_cases(document_id=case.get("document_id"))
-            if c.get("eiu_id") is not None
-        }
-        if eiu_id not in remaining_eiu_ids:
-            self.database.update_eiu(
-                eiu_id,
-                is_questionable=False,
-                exclusion_reason="人工删除该 EIU 下全部题目：放弃出题",
-            )
-        return True
+        return self.database.retire_generated_case(case_id)
 
     # ------------------------------------------------------------------
     # 内部工具

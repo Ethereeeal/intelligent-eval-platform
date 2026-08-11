@@ -11,23 +11,20 @@
 
   // 后端基础地址（demo 后端运行在 8000 端口；如需跨机访问可改为对应 IP）
   const API_BASE = (location.port === "8000") ? "" : "http://localhost:8000";
-  // 多用户本地模型：一个用户一个根目录，文档必须归属两个系统目录之一（基础问题输入文档=basic / 仅泛化输入文档=gen）。
-  // 不再有 corpus 维度；所有数据按 document/user 维度隔离，上传时由 purpose 决定归属。
+  // 当前用户：无真实登录体系，统一为 web（与上传 upload_user 一致）；
+  // 文件夹按 owner 记录归属，为后续真实账号隔离预留
+  const CURRENT_USER = "web";
+  // 文档库统一模型：所有输入文档归入单一根目录「文档库」，用户可自由新建文件夹/子目录组织；
+  // 不再区分「基础问题输入文档 / 仅泛化输入文档」两类系统目录。
 
   // DOCS 由 loadData() 填充；这里先声明为可变对象，保证其余逻辑可直接读写
   let DOCS = {};
-  // TREE：输入文档库目录树，保持原始「全部文档 → 基础问题输入文档 / 泛化问题输入文档」两棵子树结构
-  let TREE = { name: "全部文档", children: [
-    { name: "基础问题输入文档", purpose: "basic", system: true, desc: "系统目录：需经知识点抽取生成基础问答对，不可删除或移动", children: [] },
-    { name: "仅泛化输入文档", purpose: "gen", system: true, desc: "系统目录：本身即问答对，直接作为泛化问答对输入，不可删除或移动", children: [] }
-  ] };
-  // 各文档归属的输入用途（basic=基础问题输入文档 gen=泛化问题输入文档）
+  // TREE：输入文档库目录树，单一根「文档库」，其下为用户自建文件夹与文档
+  let TREE = { name: "文档库", children: [] };
+  // 各文档归属的输入用途（统一为 basic=基础问题输入；是否泛化由生成界面选择）
   let DOC_PURPOSE = {};
-  // 文档用途判定：真实后端不返回「文档用途」字段，按业务规则推断——
-  // 当前 demo 仅做了「基础问答对生成」（m03 产出基础问答对），故真实文档均归 basic；
-  // 若后续接入「本身即问答对」的泛化输入文档，将其 purpose 置为 "gen" 即可。
+  // 文档用途判定：所有输入文档统一视为基础问题输入（basic），仅泛化/问答对生成在生成界面选择
   function docPurposeOf(d) {
-    // 预留：可在此依据 d.tags / 文件名 / 业务标记切换为 "gen"
     return "basic";
   }
 
@@ -153,7 +150,8 @@
   // 从后端拉取并映射成原有 DOCS/TREE/DOC_PURPOSE 结构
   async function loadData() {
     try {
-      const [docs, eiuResp, cases] = await Promise.all([
+      const [folders, docs, eiuResp, cases] = await Promise.all([
+        apiGet(`/api/folders`).catch(() => []),
         apiGet(`/api/documents`),
         apiGet(`/api/eiu`).catch(() => ({ total: 0, items: [] })),
         apiGet(`/api/cases`).catch(() => [])
@@ -170,7 +168,8 @@
       });
 
       DOCS = {};
-      TREE.children.forEach(c => c.children = []);
+      // 先按后端持久化的文件夹重建目录树（含空文件夹，刷新后不丢失）
+      TREE.children = buildFolderTree(folders || []);
       DOC_PURPOSE = {};
 
       (docs || []).forEach(d => {
@@ -214,35 +213,28 @@
           kp, qa, review: []  // review：demo 未单独建模 → 留空
         };
         DOC_PURPOSE[id] = purpose;
-        // 按后端 folder_path 重建目录树（保留上传时的目录层级），缺省落到系统目录根部
-        insertDocIntoFolderTree(purpose, d.folder_path || "", id, d.file_name);
+        // 按后端 folder_path 重建目录树（保留上传时的目录层级），缺省挂到「文档库」根
+        insertDocIntoFolderTree(d.folder_path || "", id, d.file_name);
       });
       // 演示数据补齐：已解析（跑通）但后端未返回问答对的文档，生成一份确定性示例问答对，
       // 以便「输出问答对库」能展示问答对表与难度占比（真实后端返回时以真实数据为准，不覆盖）。
-      Object.keys(DOCS).forEach(id => {
-        const d = DOCS[id];
-        const parsed = /已解析/.test(d.status);
-        if (parsed && (!d.qa || d.qa.length === 0)) {
-          const qaType = d.purpose === "gen" ? "gen" : "plain";
-          d.qa = sampleQaForDoc(d, id, qaType);
-        }
-      });
+      // 注：2026-08 已移除该兜底——真实后端联调后，仅展示数据库真实问答对；
+      // 删除文档问答对后若再补示例数据会误导用户（表现为「删了还有假数据」）。
+      // 如需纯前端演示再启用 sampleQaForDoc 兜底。
     } catch (err) {
       console.error("加载后端数据失败，所有文档区将显示为空：", err);
       toast("后端数据加载失败，请确认服务已启动（http://localhost:8000）");
       DOCS = {};
-      TREE.children.forEach(c => c.children = []);
+      TREE.children = [];
       DOC_PURPOSE = {};
     }
   }
 
-  // 将文档按 folder_path 插入到对应系统目录（purpose）之下的子树中，保留层级结构。
-  // folder_path 形如「子A/子B」（相对系统目录根），或为空表示直接挂在系统目录根下。
-  function insertDocIntoFolderTree(purpose, folderPath, docId, docName) {
-    const root = TREE.children.find(c => c.purpose === purpose);
-    if (!root) return;
+  // 将文档按 folder_path 插入到「文档库」子树中，保留层级结构。
+  // folder_path 形如「子A/子B」（相对文档库根），或为空表示直接挂在文档库根下。
+  function insertDocIntoFolderTree(folderPath, docId, docName) {
     const parts = String(folderPath || "").split("/").map(s => s.trim()).filter(Boolean);
-    let parent = root;
+    let parent = TREE;
     for (const part of parts) {
       let node = parent.children.find(n => n.name === part && !n.doc);
       if (!node) { node = { name: part, children: [] }; parent.children.push(node); }
@@ -251,12 +243,32 @@
     parent.children.push({ name: docName, doc: docId });
   }
 
-  // 由文件夹节点递归得到其完整路径（含系统目录根，用 / 连接）。
-  // 注意：此函数依赖调用方传入的 TREE 节点对象；为通用，提供基于名称的版本 fullFolderPathOf。
+  // 后端 folder 扁平列表（[{folder_id, name, parent_id}]）→ 嵌套目录树（仅文件夹）。
+  // parent_id 为 null 的节点挂在「文档库」根下；空文件夹也会生成节点，保证刷新后保留。
+  function buildFolderTree(folderList) {
+    const byParent = {};
+    (folderList || []).forEach(f => {
+      const key = (f.parent_id == null) ? "root" : f.parent_id;
+      (byParent[key] = byParent[key] || []).push(f);
+    });
+    function make(parentKey) {
+      return (byParent[parentKey] || []).map(f => {
+        const node = { name: f.name, children: [], folderId: f.folder_id };
+        node.children = make(f.folder_id);
+        return node;
+      });
+    }
+    return make("root");
+  }
+
+  // 文件夹节点相对「文档库」根的子路径（如「子A/子B」），空串 = 根
+  function relPathOfNode(node) {
+    return fullFolderPathOf(node).split("/").filter(p => p && p !== TREE.name).join("/");
+  }
+
+  // 由文件夹节点递归得到其完整路径（用 / 连接），根为「文档库」。
   function fullFolderPathOf(node) {
-    const root = TREE.children.find(c => c.children && c.children.includes(node) || c === node);
-    if (TREE.children.includes(node)) return node.name; // 系统目录根
-    // 通用：从 TREE 根递归查找该节点的祖先链
+    if (node === TREE) return TREE.name;
     const path = [];
     function walk(children, trail) {
       for (const n of children) {
@@ -265,7 +277,7 @@
       }
       return false;
     }
-    walk(TREE.children, []);
+    walk(TREE.children, [TREE.name]);
     return path.join("/");
   }
 

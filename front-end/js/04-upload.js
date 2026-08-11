@@ -40,23 +40,21 @@
   async function handleUpload(file, folderPath) {
     const id = "u" + Date.now().toString(36) + Math.floor(Math.random() * 1000);
     const ext = (file.name.split(".").pop() || "").toLowerCase();
-    const typeMap = { pdf: "PDF", docx: "DOCX", doc: "DOC", txt: "TXT", md: "MD" };
+    const typeMap = { pdf: "PDF", docx: "DOCX", doc: "DOC", txt: "TXT", md: "MD", xlsx: "XLSX", csv: "CSV" };
     const type = typeMap[ext] || ext.toUpperCase() || "FILE";
     const kb = file.size / 1024;
     const size = kb >= 1024 ? (kb / 1024).toFixed(1) + " MB" : Math.max(1, Math.round(kb)) + " KB";
-    // folderPath：完整目标目录路径（含系统目录根，如「基础问题输入文档/子A/子B」）；缺省按 purpose 落到系统目录根
+    // folderPath：完整目标目录路径（含根「文档库」，如「文档库/子A/子B」）；缺省挂到文档库根
     const targetFull = folderPath || "";
-    const rootName = targetFull.split("/")[0] || (state._uploadPurpose === "gen" ? "仅泛化输入文档" : "基础问题输入文档");
-    const purpose = state._uploadPurpose && !targetFull
-      ? state._uploadPurpose
-      : (rootName === "仅泛化输入文档" ? "gen" : "basic");
+    // 相对文档库根的子路径（如「子A/子B」），空串表示文档库根
+    const relPath = targetFull.split("/").filter(p => p && p !== TREE.name).join("/");
+    const purpose = "basic"; // 统一基础问题输入，是否泛化由生成界面决定
     state._uploadPurpose = null;
     state._uploadFolderPath = null;
-    const relPath = targetFull.replace(/^[^/]+\/?/, ""); // 去掉系统目录根后的相对子路径
 
     DOCS[id] = { name: file.name, type, size, status: "上传中…", ver: "v1", updated: "刚刚",
-      preview: [], versions: [{ tag: "v1", note: `首次入库（上传至「${targetFull || rootName}」）`, time: "刚刚" }], kp: [], qa: [], review: [], parseProgress: 0 };
-    insertDocIntoFolderTree(purpose, relPath, id, file.name);
+      preview: [], versions: [{ tag: "v1", note: `首次入库（上传至「${targetFull || TREE.name}」）`, time: "刚刚" }], kp: [], qa: [], review: [], parseProgress: 0 };
+    insertDocIntoFolderTree(relPath, id, file.name);
 
     renderLib("doc");
     state.sel.doc = id;
@@ -65,12 +63,10 @@
     if (tr) { $$("#docTree .tree-row.active").forEach(x => x.classList.remove("active")); tr.classList.add("active"); }
 
     try {
-      // 0) 按所选系统目录（purpose）上传，后端强制文档归属 basic/gen 两系统目录之一，不可游离到其它位置
-
-      // 1) 上传到后端（归属所选系统目录；folder_path 保留目录结构层级）
+      // 1) 上传到后端（folder_path 为相对文档库根的子路径，保留目录结构层级）
       const fd = new FormData();
       fd.append("purpose", purpose);
-      if (targetFull) fd.append("folder_path", targetFull);
+      if (relPath) fd.append("folder_path", relPath);
       fd.append("file", file);
       fd.append("upload_user", "web");
       fd.append("document_version", "v1");
@@ -122,28 +118,14 @@
                 icons();
                 return;
               }
-              // 4) 单文档问答对生成：仅当前文档，不混库、不重抽其他文档
-              toast(`「${file.name}」知识点已抽取，正在生成问答对…`);
-              try {
-                const gq = await fetch(
-                  API_BASE + `/api/cases/generate?document_id=${docId}`,
-                  { method: "POST", headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ angles: ["primary"], include_variations: false, dry_run: false }) }
-                );
-                if (gq.ok) {
-                  const gqr = await gq.json().catch(() => null);
-                  await loadData();
-                  if (gqr && typeof gqr.reused === "number" && gqr.reused > 0) {
-                    toast(`「${file.name}」复用旧库问答对 ${gqr.reused} 道、新生成 ${gqr.generated || 0} 道`);
-                  } else {
-                    toast(`「${file.name}」已自动解析知识点并生成问答对`);
-                  }
-                }
-              } catch (e) { /* 问答对生成失败不影响知识点结果 */ }
+              // 4) 入库 + 知识点抽取完成：不自动生成问答对。
+              //    EIU 已持久化在文档库，之后用户可在「问答对生成」界面手动选择该文档
+              //    触发 m03 生成 + m04 质检；删掉旧问答对库后 EIU 仍在，可随时重新生成。
               await loadData();
               state.sel.doc = realId;
               renderLib("doc");
               renderLibContent("doc", realId);
+              toast(`「${file.name}」已入库并抽取知识点，可在「问答对生成」界面手动生成问答对`);
               icons();
             }
           } catch (e) { /* 忽略单次轮询错误 */ }

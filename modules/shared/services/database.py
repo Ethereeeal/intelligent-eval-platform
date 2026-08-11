@@ -86,6 +86,24 @@ class DocumentRow(Base):
     )
 
 
+class FolderRow(Base):
+    """文档库目录：用户自建文件夹，层级由 parent_id 自引用表达。
+
+    owner 记录归属用户（当前无登录态，前端统一传 web）；后续接入真实账号
+    体系后可按 owner 隔离各自的目录树。文档与文件夹通过 document.folder_path
+    （相对「文档库」根的子路径）冗余关联。
+    """
+
+    __tablename__ = "folder"
+
+    folder_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    # 父文件夹 id；NULL = 直接挂在「文档库」根下
+    parent_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    owner: Mapped[str] = mapped_column(String(128), nullable=False, default="web")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class BlockRow(Base):
     __tablename__ = "document_block"
 
@@ -479,6 +497,7 @@ class DatabaseService:
         file_size: int | None = None,
         folder_path: str | None = None,
         purpose: str | None = None,
+        file_name: str | None = None,
     ) -> None:
         with SessionLocal() as session:
             row = session.get(DocumentRow, document_id)
@@ -500,6 +519,8 @@ class DatabaseService:
                 row.folder_path = folder_path
             if purpose is not None:
                 row.purpose = purpose
+            if file_name is not None:
+                row.file_name = file_name
             session.commit()
 
     def delete_document_blocks(self, document_id: int) -> None:
@@ -508,10 +529,12 @@ class DatabaseService:
             session.commit()
 
     def delete_document(self, document_id: int) -> None:
-        """物理删除文档及其全部附属数据（解析块 + 知识点 EIU + 文档行）。
+        """物理删除文档及其全部附属数据（解析块 + 知识点 EIU + 问答对 + 质检结果 + 文档行）。
 
-        覆盖重算后清理旧文档用；问答对版本（m05 dataset_version）为独立表，
-        不在此处删除，因此不影响已冻结的版本快照。
+        删除文档 = 彻底弃用该文档：其知识点（EIU）与问答对库中由该文档生成的
+        问答对（generated_case）一并物理删除，质检结果（quality_check_result）
+        随问答对清理，避免残留孤儿数据。覆盖重算后清理旧文档用；
+        m05 dataset_version 为独立版本快照表，不在此处删除。
         """
         existing = self.get_document(document_id)
         if existing is None:
@@ -520,10 +543,216 @@ class DatabaseService:
         self.delete_eius_by_document(document_id=document_id)
         # 2) 再删解析块
         self.delete_document_blocks(document_id)
-        # 3) 最后删文档行
+        # 3) 删该文档的问答对（generated_case）及其质检结果
+        with SessionLocal() as session:
+            case_ids = [
+                r[0]
+                for r in session.query(GeneratedCaseRow.case_id)
+                .filter(GeneratedCaseRow.document_id == document_id)
+                .all()
+            ]
+            if case_ids:
+                session.query(QualityCheckRow).filter(
+                    QualityCheckRow.case_id.in_(case_ids)
+                ).delete(synchronize_session=False)
+            session.query(GeneratedCaseRow).filter(
+                GeneratedCaseRow.document_id == document_id
+            ).delete(synchronize_session=False)
+            session.commit()
+        # 4) 最后删文档行
         with SessionLocal() as session:
             session.query(DocumentRow).filter(DocumentRow.document_id == document_id).delete()
             session.commit()
+
+    # ------------------------------------------------------------------
+    # folder — 文档库目录（用户自建文件夹，持久化；空文件夹刷新后仍保留）
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _normalize_path(path: str | None) -> str:
+        return str(path or "").strip("/")
+
+    def list_folders(self, owner: str | None = None) -> list[dict]:
+        """返回文件夹扁平列表 [{folder_id, name, parent_id, owner}]。
+
+        当前无真实登录体系，owner 仅作记录，不按 owner 过滤（避免历史 seed
+        文档（upload_user=demo）与新用户文件夹树割裂）。
+        """
+        with SessionLocal() as session:
+            query = session.query(FolderRow)
+            if owner:
+                query = query.filter(FolderRow.owner == owner)
+            rows = query.order_by(FolderRow.folder_id.asc()).all()
+            return [
+                {
+                    "folder_id": row.folder_id,
+                    "name": row.name,
+                    "parent_id": row.parent_id,
+                    "owner": row.owner,
+                }
+                for row in rows
+            ]
+
+    @staticmethod
+    def _folder_by_path(session: Session, path: str) -> FolderRow | None:
+        """按「相对文档库根」的路径（如 A/B）逐级查找文件夹；找不到返回 None。"""
+        parent_id: int | None = None
+        row: FolderRow | None = None
+        for name in path.split("/"):
+            if not name:
+                continue
+            row = (
+                session.query(FolderRow)
+                .filter(FolderRow.name == name, FolderRow.parent_id == parent_id)
+                .first()
+            )
+            if row is None:
+                return None
+            parent_id = row.folder_id
+        return row
+
+    def _ensure_in_session(self, session: Session, owner: str, path: str) -> int | None:
+        """在已有 session 中确保路径上的文件夹都存在，返回最深 folder_id（根返回 None）。"""
+        fp = self._normalize_path(path)
+        if not fp:
+            return None
+        parent_id: int | None = None
+        for name in fp.split("/"):
+            if not name:
+                continue
+            row = (
+                session.query(FolderRow)
+                .filter(FolderRow.name == name, FolderRow.parent_id == parent_id)
+                .first()
+            )
+            if row is None:
+                row = FolderRow(name=name, parent_id=parent_id, owner=owner)
+                session.add(row)
+                session.flush()
+            parent_id = row.folder_id
+        return parent_id
+
+    def ensure_folder_path(self, owner: str, path: str | None) -> int | None:
+        """确保 folder_path（相对文档库根，如 A/B）路径上的文件夹均有记录。
+
+        上传/移动文档时调用，保证目标目录持久化；返回最深文件夹 id（根返回 None）。
+        """
+        fp = self._normalize_path(path)
+        if not fp:
+            return None
+        with SessionLocal() as session:
+            fid = self._ensure_in_session(session, owner, fp)
+            session.commit()
+            return fid
+
+    def create_folder(self, *, owner: str, name: str, parent_path: str | None = None) -> dict:
+        """在 parent_path（相对文档库根，空=根下）创建子文件夹，同父下禁止重名。"""
+        name = str(name or "").strip()
+        if not name or "/" in name:
+            raise ValueError("文件夹名不能为空且不能包含 /")
+        parent_id = self.ensure_folder_path(owner, parent_path) if parent_path else None
+        with SessionLocal() as session:
+            dup = (
+                session.query(FolderRow)
+                .filter(FolderRow.name == name, FolderRow.parent_id == parent_id)
+                .first()
+            )
+            if dup is not None:
+                raise ValueError(f"目标目录已存在同名文件夹：{name}")
+            row = FolderRow(name=name, parent_id=parent_id, owner=owner)
+            session.add(row)
+            session.commit()
+            session.refresh(row)
+            return {
+                "folder_id": row.folder_id,
+                "name": row.name,
+                "parent_id": row.parent_id,
+                "owner": row.owner,
+            }
+
+    def rename_folder(self, *, owner: str, from_path: str, to_path: str) -> dict:
+        """移动/重命名文件夹：from_path（旧相对路径）→ to_path（新完整路径）。
+
+        文件夹层级由 parent_id 表达，子孙文件夹路径自动随链变化，无需逐行更新；
+        但 document.folder_path 是冗余路径字符串，需按前缀重写。
+        """
+        fp = self._normalize_path(from_path)
+        tp = self._normalize_path(to_path)
+        if not fp or not tp:
+            raise ValueError("文件夹路径不能为空")
+        with SessionLocal() as session:
+            row = self._folder_by_path(session, fp)
+            if row is None:
+                raise ValueError(f"文件夹不存在：{fp}")
+            to_parts = tp.split("/")
+            new_name = to_parts[-1]
+            new_parent_path = "/".join(to_parts[:-1])
+            new_parent_id = self._ensure_in_session(session, owner, new_parent_path)
+            # 自身不能移动到自身/子孙内部（避免成环）：新父路径不得以 fp 为前缀
+            if new_parent_path == fp or new_parent_path.startswith(fp + "/"):
+                raise ValueError("不能把文件夹移动到自身或其子文件夹内")
+            dup = (
+                session.query(FolderRow)
+                .filter(
+                    FolderRow.name == new_name,
+                    FolderRow.parent_id == new_parent_id,
+                    FolderRow.folder_id != row.folder_id,
+                )
+                .first()
+            )
+            if dup is not None:
+                raise ValueError(f"目标目录已存在同名文件夹：{new_name}")
+            row.name = new_name
+            row.parent_id = new_parent_id
+            session.flush()
+            # 重写该文件夹下文档的 folder_path 前缀（文档路径字符串随目录变更）
+            for doc in session.query(DocumentRow).all():
+                dfp = doc.folder_path or ""
+                if dfp == fp:
+                    doc.folder_path = tp
+                elif dfp.startswith(fp + "/"):
+                    doc.folder_path = tp + dfp[len(fp):]
+            session.commit()
+            return {
+                "folder_id": row.folder_id,
+                "name": new_name,
+                "parent_id": new_parent_id,
+                "owner": row.owner,
+            }
+
+    def delete_folder(self, *, owner: str | None, path: str) -> dict:
+        """删除文件夹（递归子孙）：其下文档 folder_path 上移到被删文件夹的父目录，
+        不丢失文档；再物理删除文件夹行。"""
+        fp = self._normalize_path(path)
+        if not fp:
+            raise ValueError("文件夹路径不能为空")
+        parent_path = "/".join(fp.split("/")[:-1])
+        with SessionLocal() as session:
+            row = self._folder_by_path(session, fp)
+            if row is None:
+                raise ValueError(f"文件夹不存在：{fp}")
+            # 递归收集该文件夹及其全部子孙 id
+            ids = [row.folder_id]
+
+            def collect(pid: int) -> None:
+                for c in session.query(FolderRow).filter(FolderRow.parent_id == pid).all():
+                    ids.append(c.folder_id)
+                    collect(c.folder_id)
+
+            collect(row.folder_id)
+            # 文档上移到父目录：去掉被删文件夹前缀段
+            for doc in session.query(DocumentRow).all():
+                dfp = doc.folder_path or ""
+                if dfp == fp:
+                    doc.folder_path = parent_path
+                elif dfp.startswith(fp + "/"):
+                    doc.folder_path = (
+                        (parent_path + "/" + dfp[len(fp) + 1:]) if parent_path else dfp[len(fp) + 1:]
+                    )
+            session.query(FolderRow).filter(FolderRow.folder_id.in_(ids)).delete(
+                synchronize_session=False
+            )
+            session.commit()
+            return {"deleted_folders": len(ids), "document_ids_kept": True}
 
     def get_document_blocks(self, document_id: int) -> list[dict]:
         with SessionLocal() as session:

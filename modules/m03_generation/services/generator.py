@@ -27,6 +27,7 @@ from modules.m03_generation.services.prompts import (
     SEMANTIC_TOP_K,
     build_qa_prompt,
 )
+from modules.shared.core.config import settings
 from modules.shared.core.logging_config import get_logger
 from modules.shared.services.database import DatabaseService, normalize_statement
 
@@ -258,7 +259,7 @@ class CaseGenerator:
     # LLM 调用与解析
     # ------------------------------------------------------------------
     def _call_and_parse(self, prompt: str) -> dict[str, Any]:
-        response = self.llm.call(prompt, temperature=0.0, max_tokens=2048)
+        response = self.llm.call(prompt, temperature=0.0, max_tokens=settings.llm_max_tokens)
         data = self._parse_llm_json(response)
         if not isinstance(data, dict):
             raise ValueError(f"LLM 返回不是 JSON 对象: {response[:200]}")

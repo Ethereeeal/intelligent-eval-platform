@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import csv
+import io
 import re
 import statistics
 from dataclasses import dataclass, field
@@ -35,10 +37,91 @@ class DocumentParser:
             raw = self._read_pdf(file_path)
         elif suffix in {".docx", ".doc"}:
             raw = self._read_docx(file_path)
+        elif suffix in {".xlsx", ".xls", ".csv"}:
+            # 表格类文件（excel/csv）：每行一条独立 Block，不合并、不逐句切分
+            return self._read_tabular(file_path, suffix)
         else:
             raw = self._read_text(file_path)
         raw = self._merge_consecutive(raw)
         return self._assign_hierarchy(raw)
+
+    # ------------------------------------------------------------------
+    # 表格类文件（xlsx / csv）：每个数据行生成一个独立 Block
+    # ------------------------------------------------------------------
+    def _read_tabular(self, file_path: Path, suffix: str) -> list[ParsedBlock]:
+        """表格类文件专用读取：每行一个 block（block_type="excel_row"）。
+
+        excel/csv 只是普通支持的文件类型，分块方式为「每行一块」：
+          - 每行独立 block，不做相邻合并（避免多行合成一大块）
+          - EIU 抽取不特殊化，与普通文档同流程：一行可抽 0..n 条
+          - 第一行非空且含文本时视为表头（列名），行文本拼成「列名: 值」
+          - 表头含「问题/question」列时，该列值记入 metadata（生成时可复用）
+          - 表头含「答案/answer」列时，该列值记入 metadata（生成时可复用标准答案）
+        """
+        rows: list[list[str]] = []
+        sheet_name = "表格"
+        if suffix == ".csv":
+            text = self._safe_read(file_path)
+            reader = csv.reader(io.StringIO(text))
+            rows = [[cell.strip() for cell in row] for row in reader]
+        else:
+            import openpyxl
+
+            wb = openpyxl.load_workbook(str(file_path), read_only=True, data_only=True)
+            ws = wb.active
+            sheet_name = ws.title or "表格"
+            for row in ws.iter_rows(values_only=True):
+                rows.append([("" if c is None else str(c)).strip() for c in row])
+        # 去掉全空行
+        rows = [r for r in rows if any(r)]
+        if not rows:
+            return []
+        # 表头识别：第一行是「列名」而非数据行时才视为表头。
+        # 判定规则：非空、非纯数字行、且每个单元格都是短文本（≤30 字符）且不含数字
+        # —— 数据行（如「甲类账户日累计限额1万元」）含数字或较长，不会被误判为表头。
+        header = rows[0]
+        non_empty_header = [c for c in header if c]
+        has_header = bool(non_empty_header) and not all(
+            c.replace(".", "").replace("-", "").isdigit() for c in non_empty_header
+        ) and all(
+            len(c) <= 30 and not any(ch.isdigit() for ch in c) for c in non_empty_header
+        )
+        if has_header:
+            rows = rows[1:]
+        blocks: list[ParsedBlock] = []
+        for idx, row in enumerate(rows, start=1):
+            if not any(row):
+                continue
+            parts: list[str] = []
+            meta: dict = {
+                "row": idx + (1 if has_header else 0),
+                "sheet": sheet_name,
+                "header": header if has_header else [],
+            }
+            for col_idx, cell in enumerate(row):
+                name = (
+                    header[col_idx]
+                    if has_header and col_idx < len(header) and header[col_idx]
+                    else f"列{col_idx + 1}"
+                )
+                parts.append(f"{name}: {cell}" if has_header else cell)
+                low = name.lower()
+                if "问题" in low or "question" in low:
+                    meta["question"] = cell
+                if "答案" in low or "answer" in low:
+                    meta["answer"] = cell
+            text = " | ".join(parts)
+            if not text:
+                continue
+            blocks.append(
+                ParsedBlock(
+                    section_path=sheet_name,
+                    block_type="excel_row",
+                    block_text=text,
+                    metadata_json=meta,
+                )
+            )
+        return blocks
 
     # ------------------------------------------------------------------
     # 各格式读取：产出扁平 raw 列表，每项含 text / level / block_type 等

@@ -25,7 +25,8 @@ from modules.shared.core.logging_config import get_logger
 logger = get_logger(__name__)
 
 # 调用超时（秒）：读/连接各 30s，避免请求无限挂起
-_REQUEST_TIMEOUT = (30, 30)
+# 推理模型（如 deepseek-v4-flash）生成长文耗时较长，读超时放宽到 600s
+_REQUEST_TIMEOUT = (30, 600)
 # 失败重试次数（不含首次）
 _MAX_RETRIES = 2
 # 重试间隔（秒）
@@ -87,7 +88,15 @@ def call(
                 logger.warning("LLM call http=%d elapsed=%.2fs", response.status_code, elapsed)
                 response.raise_for_status()
             logger.debug("LLM call ok elapsed=%.2fs", elapsed)
-            return _parse_response(response.json())
+            parsed = _parse_response(response.json())
+            if not parsed or not parsed.strip():
+                logger.warning(
+                    "LLM 返回空内容 model=%s elapsed=%.2fs raw=%s",
+                    _API_MODEL,
+                    elapsed,
+                    response.text[:500],
+                )
+            return parsed
         except requests.RequestException as exc:
             last_exc = exc
             logger.warning("LLM call failed attempt=%d: %s", attempt, exc)

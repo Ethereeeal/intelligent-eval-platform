@@ -32,7 +32,6 @@
 
   function docContentHTML(docId) {
     const d = DOCS[docId];
-    const isGen = DOC_PURPOSE[docId] === "gen";
     const isParsing = d.status.includes("解析中");
     const progressBar = isParsing ? `<div class="upload-prog-wrap mt"><div class="upload-prog-track"><div class="upload-prog-bar" style="width:${Math.round(d.parseProgress||0)}%"></div></div><span class="upload-prog-txt">知识点解析中 ${Math.round(d.parseProgress||0)}%</span></div>` : "";
     return `<div class="lib-head">
@@ -46,8 +45,8 @@
         <div class="doc-preview collapsed" id="docPreview">${d.preview.length ? d.preview.map(p => `<p>${p}</p>`).join("") : `<p class="muted">点击上方「在线查看」标题展开文档原文预览</p>`}</div>
         <div class="sec-h mt">版本历史</div>
         <div class="ver-list">${d.versions.map(v => `<div class="ver"><span class="ver-tag">${v.tag}</span><span>${v.note}</span><span class="mut">${v.time}</span></div>`).join("")}</div>
-        ${isGen ? `<div class="gen-input-note"><i data-lucide="info"></i><div>本输入文档属于「仅泛化输入文档」，<b>本身即问答对，无需抽取知识点</b>，将直接作为泛化问答对输入使用。</div></div>` : `<div class="sec-h mt kp-sec-h">知识点 · ${d.kp.length} 条<button class="btn ghost sm kp-export-btn" id="dlEIUKp"><i data-lucide="download"></i>导出</button><button class="btn ghost icon-only sm kp-zoom-btn" id="kpFullscreenBtn" title="放大查看"><i data-lucide="maximize"></i></button></div>
-        ${d.kp && d.kp.length ? kpTableHTML(d.kp) : `<p class="muted mt">${isParsing ? "正在解析中..." : "未识别到可抽取知识点。"}</p>`}`}
+        <div class="sec-h mt kp-sec-h">知识点 · ${d.kp.length} 条<button class="btn ghost sm kp-export-btn" id="dlEIUKp"><i data-lucide="download"></i>导出</button><button class="btn ghost icon-only sm kp-zoom-btn" id="kpFullscreenBtn" title="放大查看"><i data-lucide="maximize"></i></button></div>
+        ${d.kp && d.kp.length ? kpTableHTML(d.kp) : `<p class="muted mt">${isParsing ? "正在解析中..." : "未识别到可抽取知识点。"}</p>`}
       </div>`;
   }
 
@@ -104,6 +103,12 @@
   function renderLibContent(mode, docId) {
     state.folderSel[mode] = null;
     if (mode === "doc") {
+      // 文档库空（全部文档已删除）时展示空态，避免 d 为 undefined 报错
+      if (!docId || !DOCS[docId]) {
+        $("#docContent").innerHTML = emptyState("文档库为空", "上传文档后自动解析分块并抽取知识点，支持新建文件夹/子目录组织。");
+        icons();
+        return;
+      }
       $("#docContent").innerHTML = docContentHTML(docId);
       const dl = $("#docContent #dlEIUDoc"); if (dl) dl.onclick = () => downloadEIU(docId);
       const kpDl = $("#docContent #dlEIUKp"); if (kpDl) kpDl.onclick = () => downloadEIU(docId);
@@ -133,6 +138,20 @@
       if (qaTreeEl) qaTreeEl.classList.add("collapsed");
       if (qaSplit) qaSplit.classList.add("tree-hidden");
       const rbEl = $(".tree-reopen"); if (rbEl) rbEl.classList.toggle("show", true);
+      // 删除文档后选中可能失效：自动回退到第一个仍有问答对的文档，否则展示空态
+      if (!docId || !DOCS[docId]) {
+        const first = Object.keys(DOCS).find(id => (DOCS[id].qa || []).length);
+        if (first) {
+          state.sel.qa = first;
+          const fRow = $(`#qaTree .tree-row[data-qa-id="${first}"]`);
+          if (fRow) { $$("#qaTree .tree-row.active").forEach(x => x.classList.remove("active")); fRow.classList.add("active"); }
+          renderLibContent("qa", first);
+          return;
+        }
+        $("#qaContent").innerHTML = emptyState("问答对库为空", "上传文档并生成问答对后，可在此查看与管理。");
+        icons();
+        return;
+      }
       const d = DOCS[docId];
       if (!d.qa || !d.qa.length) {
         $("#qaContent").innerHTML = qaHead(docId) + emptyState("该文档无问答对", "已执行拒答验证：所选文档无可提取知识点，未生成问答对（不单独成栏）。");
@@ -1031,20 +1050,22 @@
     exportQaRows(d.qa, d.name);
   }
   // 导出一组问答对（支持文件夹聚合/整库导出）
+  // 格式：CSV（Excel 友好，列：问题|答案|难度|证据|来源文档，与「新增问答对模板」一致）
+  // 导出的 CSV 可直接再次上传到「输入文档库」→ 走 EIU 抽取（每行一条，问题列即 EIU）→ 再生成/泛化，形成闭环
   function exportQaRows(rows, name) {
     if (!rows || !rows.length) { toast("当前没有可导出的问答对"); return; }
-    const payload = {
-      doc: name,
-      qa_count: rows.length,
-      qa: rows.map(q => ({ id: q.id, q: q.q, a: q.a, diff: q.diff, type: typeLabel(q.type), review: q.review, evidence: q.evidence, src: q.src }))
-    };
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+    const head = ["问题", "答案", "难度", "证据", "来源文档"];
+    const esc = (v) => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`;
+    const lines = [head.map(esc).join(",")];
+    rows.forEach(q => lines.push([q.q, q.a, q.diff, q.evidence, q.src].map(esc).join(",")));
+    const csv = "\ufeff" + lines.join("\r\n"); // BOM：Excel 直接打开不乱码
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url; a.download = (name || "问答对集").replace(/[\\/:*?"<>|]/g, "_") + "_问答对.json";
+    a.href = url; a.download = (name || "问答对集").replace(/[\\/:*?"<>|]/g, "_") + "_问答对.csv";
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
-    toast(`已导出「${name}」的 ${rows.length} 条问答对`);
+    toast(`已导出「${name}」的 ${rows.length} 条问答对（CSV，可直接再上传走 EIU 流程）`);
   }
   // 新增问答对模板（CSV，列：问题|答案|难度|证据|来源文档）
   function downloadQaTemplate() {
