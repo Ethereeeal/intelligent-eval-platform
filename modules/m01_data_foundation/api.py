@@ -67,19 +67,16 @@ def move_document(
 ):
     """移动文档到目标目录（持久化 folder_path），并据所属子树标记业务用途。
 
-    文档只能在两个受保护系统目录（基础问题输入文档 / 仅泛化输入文档）之内移动，
-    允许在系统目录内部的任意子层级目录之间拖动；禁止游离到系统目录之外，
-    也禁止把文件落到名为系统目录但非受保护根的子路径。
+    文档统一归属「文档库」根下的任意目录，不再区分基础/泛化系统目录；
+    purpose 仅作业务用途标记，缺省或非系统值时回退为 basic（与上传接口一致）。
     """
     document = pipeline_service.get_document(document_id)
     if document is None:
         raise HTTPException(status_code=404, detail="document not found")
-    # 文档统一归属「文档库」根下的任意目录；purpose 仅记录业务用途（basic），不再强绑定目录
-    if purpose is not None and purpose not in SYSTEM_FOLDERS.values():
-        raise HTTPException(
-            status_code=400,
-            detail=f"purpose 必须为系统目录用途之一：{', '.join(set(SYSTEM_FOLDERS.values()))}",
-        )
+    # 目录模型已统一为「文档库 + 用户自建文件夹」，不再强绑定系统目录用途。
+    # purpose 仅记录业务用途，非系统值时回退为 basic（与 upload_document 处理一致）。
+    if purpose is None or purpose not in SYSTEM_FOLDERS.values():
+        purpose = "basic"
     # folder_path：相对「文档库」根目录的子路径（如「子A/子B」），允许任意层级
     # 移到「文档库」根：FastAPI 会把空串表单解析为 None，而 update_document 以 None
     # 表示「不更新」，因此这里显式规范化为空串，确保根目录（folder_path=''）能写入数据库
