@@ -430,6 +430,10 @@ ul { list-style: none; }
 .doc-preview { background: var(--surface); border-radius: 12px; padding: 14px 16px; box-shadow: var(--shadow-sm); }
 .doc-preview p { font-size: 13px; color: var(--ink-2); line-height: 1.7; padding: 6px 0; }
 .doc-preview p + p { box-shadow: 0 -1px 0 rgba(140,124,240,.06); }
+.doc-preview .kp-badge,
+.doc-preview .qa-badge { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; color: var(--brand); background: var(--brand-bg); border: 1px solid rgba(140,124,240,.16); border-radius: 20px; padding: 5px 11px; margin: 0; }
+.doc-preview .kp-badge svg,
+.doc-preview .qa-badge svg { width: 14px; height: 14px; }
 .ver-list { display: flex; flex-direction: column; gap: 8px; }
 .ver { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--surface); border-radius: 11px; box-shadow: var(--shadow-sm); font-size: 12.5px; color: var(--ink-2); }
 .ver-tag { font-family: var(--mono); font-size: 11px; font-weight: 700; color: var(--brand-strong); background: var(--brand-tint); padding: 3px 9px; border-radius: 8px; flex: none; }

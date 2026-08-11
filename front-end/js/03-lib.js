@@ -59,9 +59,17 @@
         return `<div class="doc-card" data-doc="${id}">
           <div class="dc-top"><div class="dc-ic"><i data-lucide="file-text"></i></div>
             <div><div class="dc-name">${d.name}</div><div class="dc-meta">${d.type} · ${d.size} · <span style="color:var(--ok)">${d.status}</span></div></div></div>
-          <div class="doc-preview">${d.preview.slice(0, 2).map(p => `<p>${p}</p>`).join("")}</div>
+          <div class="doc-preview">${kpCountHTML(d)}</div>
         </div>`;
       }).join("")}</div>`;
+  }
+
+  // 文档卡片底部：原空白 preview 区域改为展示「生成知识点数量」
+  function kpCountHTML(d) {
+    const kpN = (d.kp || []).length, qaN = (d.qa || []).length;
+    let text = kpN > 0 ? `${kpN} 个知识点` : (qaN > 0 ? `${qaN} 个问答对` : "暂无知识点");
+    let cls = kpN > 0 ? "kp-badge" : (qaN > 0 ? "qa-badge" : "muted");
+    return `<p class="${cls}"><i data-lucide="${kpN > 0 ? "sparkles" : "message-circle"}"></i> ${text}</p>`;
   }
 
   // 知识点表格：标题行「知识点 / 推荐 / 类型 / 证据 / 来源文档」，无图标
