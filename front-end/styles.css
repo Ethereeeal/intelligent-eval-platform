@@ -348,7 +348,7 @@ ul { list-style: none; }
   display: none; width: 24px; height: 24px; border: none; background: transparent; border-radius: 4px; cursor: pointer; align-items: center; justify-content: center; color: var(--sub); margin-left: auto; flex-shrink: 0;
 }
 .tree-dots:hover { background: var(--brand-bg); color: var(--brand); }
-.tree-row:hover .tree-dots, .tree-row.active .tree-dots { display: flex; }
+.tree-row:hover .tree-dots, .tree-row.active .tree-dots, .tree-row.menu-open .tree-dots { display: flex; }
 
 /* 上下文弹窗（不透明实底，避免与背景混淆） */
 .ctx-popup {
@@ -358,6 +358,8 @@ ul { list-style: none; }
   display: block; width: 100%; text-align: left; padding: 8px 12px; border: none; background: var(--surface); border-radius: 6px; font-size: 13px; color: var(--text); cursor: pointer;
 }
 .ctx-popup button:hover { background: var(--brand-bg); color: var(--brand); }
+/* 菜单超高时内部滚动，避免显示到窗口之外 */
+.ctx-popup { max-height: calc(100vh - 16px); overflow-y: auto; overscroll-behavior: contain; }
 
 /* 上传目录选择器 —— 点击弹出的 overlay modal */
 .up-modal-mask {

@@ -339,10 +339,10 @@
     const pop = document.createElement("div");
     pop.className = "ctx-popup";
     pop.innerHTML = `<button data-act="qa-export">导出文档</button><button data-act="qa-reupload">重新上传</button>`;
-    const rect = btn.getBoundingClientRect();
-    pop.style.top = rect.bottom + 4 + "px";
-    pop.style.left = Math.min(rect.left, window.innerWidth - 180) + "px";
+    pop.style.visibility = "hidden";
     document.body.appendChild(pop);
+    placePopup(pop, btn, 4, 8);
+    bindPopupLifecycle(pop, btn, 4, 8);
     pop.querySelectorAll("button").forEach(b => {
       b.onclick = () => {
         pop.remove();
@@ -350,8 +350,6 @@
         else if (b.dataset.act === "qa-reupload") { const docName = DOCS[id] ? DOCS[id].name : ""; setUploadTarget(findNodeParent(docName) || ""); $("#uploadInput").click(); }
       };
     });
-    const closeF = (ev) => { if (!pop.contains(ev.target)) { pop.remove(); document.removeEventListener("click", closeF); } };
-    setTimeout(() => document.addEventListener("click", closeF), 0);
   }
 
   // 目录级（泛化问题 / 基础问题）右键：新建分组文件夹
@@ -361,10 +359,10 @@
     const pop = document.createElement("div");
     pop.className = "ctx-popup";
     pop.innerHTML = `<button data-act="qa-new-group">新建分组文件夹</button><button data-act="qa-import">拖入/导入问答对集</button>`;
-    const rect = btn.getBoundingClientRect();
-    pop.style.top = rect.bottom + 4 + "px";
-    pop.style.left = Math.min(rect.left, window.innerWidth - 180) + "px";
+    pop.style.visibility = "hidden";
     document.body.appendChild(pop);
+    placePopup(pop, btn, 4, 8);
+    bindPopupLifecycle(pop, btn, 4, 8);
     pop.querySelectorAll("button").forEach(b => {
       b.onclick = () => {
         pop.remove();
@@ -378,8 +376,6 @@
         }
       };
     });
-    const closeF = (ev) => { if (!pop.contains(ev.target)) { pop.remove(); document.removeEventListener("click", closeF); } };
-    setTimeout(() => document.addEventListener("click", closeF), 0);
   }
 
   // 分组级右键：重命名 / 删除分组（删除仅移除分组，不删文档）
@@ -390,10 +386,10 @@
     const pop = document.createElement("div");
     pop.className = "ctx-popup";
     pop.innerHTML = `<button data-act="qa-group-rename">重命名</button><button data-act="qa-group-delete">删除分组</button>`;
-    const rect = btn.getBoundingClientRect();
-    pop.style.top = rect.bottom + 4 + "px";
-    pop.style.left = Math.min(rect.left, window.innerWidth - 180) + "px";
+    pop.style.visibility = "hidden";
     document.body.appendChild(pop);
+    placePopup(pop, btn, 4, 8);
+    bindPopupLifecycle(pop, btn, 4, 8);
     pop.querySelectorAll("button").forEach(b => {
       b.onclick = () => {
         pop.remove();
@@ -408,8 +404,6 @@
         }
       };
     });
-    const closeF = (ev) => { if (!pop.contains(ev.target)) { pop.remove(); document.removeEventListener("click", closeF); } };
-    setTimeout(() => document.addEventListener("click", closeF), 0);
   }
   function reviewBadge(r) {
     const map = { "已通过": "ok", "已驳回": "bad", "待审核": "warn" };
@@ -806,10 +800,10 @@
     const vals = [...new Set(d.qa.map(q => field === "review" ? q.review : (q[field] || "—")))].filter(Boolean);
     const pop = document.createElement("div"); pop.className = "ctx-popup col-filter-pop";
     pop.innerHTML = `<div class="up-title">筛选：${colFilterLabel[field] || field}</div>` + vals.map(v => `<label class="cf-item"><input type="checkbox" checked data-v="${v}"/> ${v}</label>`).join("") + `<button class="cf-apply">应用</button>`;
+    pop.style.visibility = "hidden";
     document.body.appendChild(pop);
-    const rect = anchor ? anchor.getBoundingClientRect() : { bottom: 200, left: 200 };
-    pop.style.top = (rect.bottom + 6) + "px";
-    pop.style.left = Math.min(rect.left, window.innerWidth - 220) + "px";
+    placePopup(pop, anchor || { getBoundingClientRect: () => ({ bottom: 200, left: 200, right: 200, top: 200, width: 0, height: 0 }) }, 6, 8);
+    bindPopupLifecycle(pop, anchor, 6, 8);
     const cellClass = { q: "qa-q-cell", a: "qa-a-cell", diff: "qa-diff-cell", review: "qa-review-cell", evidence: "qa-ev-cell", src: "qa-src-cell", type: "qa-type-cell" };
     pop.querySelector(".cf-apply").onclick = () => {
       const keep = new Set([...pop.querySelectorAll("input[data-v]:checked")].map(x => x.dataset.v));
@@ -822,8 +816,6 @@
       });
       state.qaPage = 1; refreshPagers(); pop.remove();
     };
-    const closeF = (ev) => { if (!pop.contains(ev.target)) { pop.remove(); document.removeEventListener("click", closeF); } };
-    setTimeout(() => document.addEventListener("click", closeF), 0);
   }
 
   // 知识点表格列筛选（与问答对列筛选机制一致）
@@ -834,10 +826,10 @@
     const cells = $$(`.kp-c-${field}`);
     const vals = [...new Set(cells.map(c => c.textContent.replace(/^#\d+\s*/, "").trim()).filter(Boolean))];
     pop.innerHTML = `<div class="up-title">筛选：${kpColFilterLabel[field] || field}</div>` + vals.map(v => `<label class="cf-item"><input type="checkbox" checked data-v="${escapeHTML(v)}"/> ${escapeHTML(v)}</label>`).join("") + `<button class="cf-apply">应用</button>`;
+    pop.style.visibility = "hidden";
     document.body.appendChild(pop);
-    const rect = anchor ? anchor.getBoundingClientRect() : { bottom: 200, left: 200 };
-    pop.style.top = (rect.bottom + 6) + "px";
-    pop.style.left = Math.min(rect.left, window.innerWidth - 220) + "px";
+    placePopup(pop, anchor || { getBoundingClientRect: () => ({ bottom: 200, left: 200, right: 200, top: 200, width: 0, height: 0 }) }, 6, 8);
+    bindPopupLifecycle(pop, anchor, 6, 8);
     pop.querySelector(".cf-apply").onclick = () => {
       const keep = new Set([...pop.querySelectorAll("input[data-v]:checked")].map(x => x.dataset.v));
       $$(`.kp-table .kp-tr`).forEach(row => {
@@ -848,8 +840,6 @@
       });
       state.kpPage = 1; refreshPagers(); pop.remove();
     };
-    const closeF = (ev) => { if (!pop.contains(ev.target)) { pop.remove(); document.removeEventListener("click", closeF); } };
-    setTimeout(() => document.addEventListener("click", closeF), 0);
   }
   function bindKpColFilters(scope) {
     (scope || document).querySelectorAll(".kp-table .col-filter").forEach(icon => {

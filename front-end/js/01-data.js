@@ -1,5 +1,80 @@
   const $ = (s, r = document) => r.querySelector(s);
   const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+
+  /* 浮层定位：按锚点元素在视口内摆放弹层，超出边界时自动翻转/收敛，避免显示到浏览器窗口之外。
+     pop 需已挂载到 DOM 且为 position:fixed；anchor 为触发按钮。 */
+  function placePopup(pop, anchor, gap = 4, edge = 8) {
+    if (!pop || !anchor) return;
+    const rect = anchor.getBoundingClientRect();
+    const pw = pop.offsetWidth, ph = pop.offsetHeight;
+    // 垂直：默认锚点下方，放不下则翻到上方，仍放不下则贴视口边缘
+    let top = rect.bottom + gap;
+    if (top + ph > window.innerHeight - edge) {
+      const above = rect.top - ph - gap;
+      top = above >= edge ? above : Math.max(edge, window.innerHeight - ph - edge);
+    }
+    if (top < edge) top = edge;
+    // 水平：默认与锚点左对齐，超出右边界则右对齐，再收敛进视口
+    let left = rect.left;
+    if (left + pw > window.innerWidth - edge) left = rect.right - pw;
+    if (left + pw > window.innerWidth - edge) left = window.innerWidth - pw - edge;
+    if (left < edge) left = edge;
+    pop.style.top = top + "px";
+    pop.style.left = left + "px";
+    pop.style.visibility = "";
+  }
+
+  /* 锚点是否真实可见：既要在视口内，也不能被内部滚动容器（如目录树 .tree）裁剪掉。
+     仅判断视口是不够的——目录树自身 overflow:auto，滚出去的行仍会返回视口内坐标。 */
+  function isAnchorVisible(anchor) {
+    if (!anchor || !document.body.contains(anchor)) return false;
+    const r = anchor.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) return false;
+    // 视口边界
+    if (r.bottom <= 0 || r.top >= window.innerHeight || r.right <= 0 || r.left >= window.innerWidth) return false;
+    // 逐级检查带裁剪的祖先容器
+    let n = anchor.parentElement;
+    while (n && n !== document.body) {
+      const s = getComputedStyle(n);
+      if (["auto", "scroll", "hidden"].includes(s.overflowY) || ["auto", "scroll", "hidden"].includes(s.overflowX)) {
+        const cr = n.getBoundingClientRect();
+        // 锚点中心点落在容器可视区之外则视为不可见
+        const cy = r.top + r.height / 2, cx = r.left + r.width / 2;
+        if (cy < cr.top || cy > cr.bottom || cx < cr.left || cx > cr.right) return false;
+      }
+      n = n.parentElement;
+    }
+    return true;
+  }
+
+  /* 浮层生命周期：滚动时跟随锚点重定位；锚点滚出可视区（含被内部容器裁剪）或被移除则自动关闭。
+     返回 cleanup 函数；外部点击关闭逻辑一并接管。 */
+  function bindPopupLifecycle(pop, anchor, gap, edge) {
+    // 三点按钮默认 hover 才显示；菜单打开期间强制保持可见，否则鼠标移开后锚点尺寸归零
+    const hostRow = anchor.closest && anchor.closest(".tree-row");
+    if (hostRow) hostRow.classList.add("menu-open");
+    const cleanup = () => {
+      if (hostRow) hostRow.classList.remove("menu-open");
+      pop.remove();
+      document.removeEventListener("click", onDocClick, true);
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", onResize);
+    };
+    const onScroll = () => {
+      if (!isAnchorVisible(anchor)) { cleanup(); return; }
+      placePopup(pop, anchor, gap, edge);
+    };
+    const onResize = () => placePopup(pop, anchor, gap, edge);
+    const onDocClick = (ev) => { if (!pop.contains(ev.target)) cleanup(); };
+    // 先挂一次，等浏览器把本次点击冒泡完再监听，避免立刻被自己的 click 关掉
+    setTimeout(() => {
+      if (!document.body.contains(pop)) return;
+      window.addEventListener("scroll", onScroll, true);
+      window.addEventListener("resize", onResize);
+      document.addEventListener("click", onDocClick, true);
+    }, 0);
+    return cleanup;
+  }
   // 图标渲染：lucide 若未就绪则静默跳过，避免直接抛错阻断后续逻辑
   const icons = () => { if (window.lucide) { try { lucide.createIcons(); } catch (e) {} } bindKpColFilters(); };
 

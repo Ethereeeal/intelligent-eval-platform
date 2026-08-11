@@ -171,10 +171,10 @@
       : `<button data-act="ctx-newfolder">新建文件夹</button><button data-act="ctx-upload-here">上传文档到此目录</button><button data-act="ctx-rename">重命名</button><button data-act="ctx-delete">删除</button>`;
     pop.innerHTML = isFolder ? folderMenu
       : `<button data-act="ctx-export">导出文档</button><button data-act="ctx-move">移动到</button><button data-act="ctx-rename-doc">重命名</button><button data-act="ctx-delete-doc">删除文档</button>`;
-    const rect = btn.getBoundingClientRect();
-    pop.style.top = rect.bottom + 4 + "px";
-    pop.style.left = Math.min(rect.left, window.innerWidth - 180) + "px";
+    pop.style.visibility = "hidden";
     document.body.appendChild(pop);
+    placePopup(pop, btn, 4, 8);
+    bindPopupLifecycle(pop, btn, 4, 8);
     pop.querySelectorAll("button").forEach(b => {
       b.onclick = async () => {
         pop.remove();
@@ -205,8 +205,6 @@
         }
       };
     });
-    const closeCtx = (ev) => { if (!pop.contains(ev.target)) { pop.remove(); document.removeEventListener("click", closeCtx); } };
-    setTimeout(() => document.addEventListener("click", closeCtx), 0);
   }
 
   function findNodeParent(childName) {
