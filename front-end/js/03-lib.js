@@ -64,12 +64,11 @@
       }).join("")}</div>`;
   }
 
-  // 文档卡片底部：原空白 preview 区域改为展示「生成知识点数量」
+  // 文档卡片底部：原空白 preview 区域改为展示「生成知识点数量」（纯文字）
   function kpCountHTML(d) {
     const kpN = (d.kp || []).length, qaN = (d.qa || []).length;
-    let text = kpN > 0 ? `${kpN} 个知识点` : (qaN > 0 ? `${qaN} 个问答对` : "暂无知识点");
-    let cls = kpN > 0 ? "kp-badge" : (qaN > 0 ? "qa-badge" : "muted");
-    return `<p class="${cls}"><i data-lucide="${kpN > 0 ? "sparkles" : "message-circle"}"></i> ${text}</p>`;
+    const text = kpN > 0 ? `${kpN} 个知识点` : (qaN > 0 ? `${qaN} 个问答对` : "暂无知识点");
+    return `<p class="kp-count-text">${text}</p>`;
   }
 
   // 知识点表格：标题行「知识点 / 推荐 / 类型 / 证据 / 来源文档」，无图标
