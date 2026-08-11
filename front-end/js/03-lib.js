@@ -165,7 +165,18 @@
 
   function renderLib(mode) {
     const treeId = mode === "doc" ? "#docTree" : "#qaTree";
-    if (mode === "qa") bindQaTree($(treeId)); else bindTree($(treeId), mode);
+    if (mode === "qa") {
+      bindQaTree($(treeId));
+      // 打开「输出问答对库」栏目时，默认展开目录：确保目录区可见且各级节点处于展开态
+      const qaSplit = $(treeId) && $(treeId).closest(".lib-split");
+      if (qaSplit) { qaSplit.classList.remove("tree-hidden"); qaSplit.querySelector(".tree").classList.remove("collapsed"); }
+      const rb = $(".tree-reopen"); if (rb) rb.classList.remove("show");
+      // 双保险：重置所有目录/分组/子内容为展开
+      $(treeId).querySelectorAll(".tree-folder, .tree-group").forEach(r => r.classList.add("open"));
+      $(treeId).querySelectorAll(".tree-children").forEach(c => c.classList.add("open"));
+    } else {
+      bindTree($(treeId), mode);
+    }
     renderLibContent(mode, state.sel[mode]);
   }
 
