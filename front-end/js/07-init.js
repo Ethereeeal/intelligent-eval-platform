@@ -18,10 +18,12 @@
       trees.forEach(t => {
         if (!t) return;
         const split = t.closest(".lib-split");
-        if (split) split.classList.toggle("tree-hidden", t.classList.contains("collapsed"));
-        if (t.classList.contains("collapsed")) anyHidden = true;
+        // 仅对「当前可见栏目」内的目录同步收起状态；其他栏目的收缩状态互不串扰
+        const inActiveView = t.closest(".view") && !t.closest(".view").hidden;
+        if (split) split.classList.toggle("tree-hidden", inActiveView && t.classList.contains("collapsed"));
+        if (inActiveView && t.classList.contains("collapsed")) anyHidden = true;
       });
-      // 任一目录收起时，在页面最左边吸附显示「展开目录」按钮
+      // 仅当当前可见栏目有目录被收起时，才在页面最左边显示「展开目录」按钮
       rb.classList.toggle("show", anyHidden);
     }
     function toggleAsk(force) {
@@ -44,6 +46,10 @@
       }
     });
     applyTreeHidden();
+    // 切换栏目（.view 的 hidden 变化）后重算目录显隐，确保收起状态不串到其他栏目（如概览）
+    $$(".view").forEach(v => {
+      new MutationObserver(() => applyTreeHidden()).observe(v, { attributes: true, attributeFilter: ["hidden"] });
+    });
     // 智能问答窗口：全屏放大 / 缩小固定（无拖拽改大小）
     const askMax = $("#askMax");
     if (askMax) askMax.onclick = () => {
