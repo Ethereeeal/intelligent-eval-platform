@@ -431,6 +431,8 @@ ul { list-style: none; }
 .doc-preview p { font-size: 13px; color: var(--ink-2); line-height: 1.7; padding: 6px 0; }
 .doc-preview p + p { box-shadow: 0 -1px 0 rgba(140,124,240,.06); }
 .doc-preview .kp-count-text { color: var(--text-2); font-size: 12px; margin: 0; }
+/* 文档卡片底部仅展示知识点数量时，去掉白底/圆角/内边距，直接融入卡片背景 */
+.doc-preview.kp-count { background: transparent; border-radius: 0; padding: 0; box-shadow: none; max-height: none; }
 .ver-list { display: flex; flex-direction: column; gap: 8px; }
 .ver { display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: var(--surface); border-radius: 11px; box-shadow: var(--shadow-sm); font-size: 12.5px; color: var(--ink-2); }
 .ver-tag { font-family: var(--mono); font-size: 11px; font-weight: 700; color: var(--brand-strong); background: var(--brand-tint); padding: 3px 9px; border-radius: 8px; flex: none; }

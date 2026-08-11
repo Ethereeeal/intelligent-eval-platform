@@ -59,7 +59,7 @@
         return `<div class="doc-card" data-doc="${id}">
           <div class="dc-top"><div class="dc-ic"><i data-lucide="file-text"></i></div>
             <div><div class="dc-name">${d.name}</div><div class="dc-meta">${d.type} · ${d.size} · <span style="color:var(--ok)">${d.status}</span></div></div></div>
-          <div class="doc-preview">${kpCountHTML(d)}</div>
+          <div class="doc-preview kp-count">${kpCountHTML(d)}</div>
         </div>`;
       }).join("")}</div>`;
   }
