@@ -34,7 +34,7 @@
 | 数据库 | MySQL（docker: evalforge 库） |
 | 存储 | MinIO（docker，原始文件落盘到 `storage/raw/`） |
 | 向量索引 | FAISS 单例（进程内，state 持久化到 `state/`） |
-| Embedding | BGE-small-zh-v1.5 |
+| Embedding | BGE-small-zh-v1.5（生成阶段用于"知识点语义复用"检索：同义知识点复用历史问答对以省 LLM，见 m03 §2.4） |
 | Reranker | BGE-reranker-v2-m3 |
 | LLM | 可配置（OpenAI 兼容 API，见 `.env`） |
 | 前端 | 管理台风格静态页面（`front-end/`，docker: studio 容器托管） |

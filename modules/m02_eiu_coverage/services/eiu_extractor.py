@@ -19,6 +19,9 @@ from modules.shared.services.database import EIU_TYPES, PRIORITY_WEIGHT, Databas
 _PROMPT_PATH = Path(__file__).resolve().parent.parent / "prompts" / "eiu_extraction.txt"
 _STATEMENT_MAX = 200  # 验收 D4：statement ≤ 200 字
 
+# 语义去重阈值：BGE 余弦相似度 ≥ 该值视为"同义知识点"，后出现的重复条标记排除
+SEMANTIC_DEDUP_THRESHOLD = 0.90
+
 # 过渡句 / 无实质内容关键字（标题与目录等已由 block_type 过滤，此处兜底）
 _SKIP_KEYWORDS = (
     "见上文", "见下文", "详见", "见附件", "如表", "如下表", "如下图", "见图",
@@ -246,6 +249,69 @@ def normalize_item(item: dict, block_id: int, extraction_model: str) -> dict | N
     }
 
 
+def _norm(text: str) -> str:
+    """归一化知识点陈述，用作精确去重 key（去编号/标点/空白/小写）。"""
+    t = re.sub(r"\s+", "", text)
+    t = re.sub(r"[^\u4e00-\u9fa5a-zA-Z0-9]", "", t)
+    return t.lower()
+
+
+_embedder = None
+
+
+def _encode_one(text: str) -> list[float] | None:
+    """BGE 编码单条 statement（query 模式）。无模型则返回 None，去重层优雅跳过。"""
+    global _embedder
+    if _embedder is False:
+        return None
+    try:
+        if _embedder is None:
+            from modules.m01_data_foundation.services.embedding import EmbeddingService
+            _embedder = EmbeddingService()
+        (vec,) = _embedder.embed_texts([text], is_query=True)
+        return list(vec)
+    except Exception:
+        _embedder = False
+        return None
+
+
+def _dedup_semantic(items: list[dict], seen: list[tuple[str, list[float]]]) -> list[dict]:
+    """对一批抽出的 EIU 做语义去重（跨 Block 同义合并）。
+
+    - 精确层：归一化 statement 与已插入者完全一致 → 重复；
+    - 语义层：BGE 余弦相似度 ≥ SEMANTIC_DEDUP_THRESHOLD → 同义重复；
+    重复者不入库，改为 is_questionable=False + 排除原因，仍计入对账率。
+    无本地 BGE 模型时仅做精确去重，不阻断主流程。
+    """
+    if not items:
+        return items
+    out: list[dict] = []
+    for it in items:
+        if not it.get("is_questionable"):
+            out.append(it)
+            continue
+        stmt = (it.get("statement") or "").strip()
+        k = _norm(stmt)
+        dup = False
+        for seen_k, seen_vec in seen:
+            if seen_k == k:
+                dup = True
+                break
+            if seen_vec is not None:
+                vec = _encode_one(stmt)
+                if vec is not None:
+                    sim = sum(a * b for a, b in zip(vec, seen_vec))
+                    if sim >= SEMANTIC_DEDUP_THRESHOLD:
+                        dup = True
+                        break
+        if dup:
+            it = dict(it)
+            it["is_questionable"] = False
+            it["exclusion_reason"] = "与已抽取知识点语义重复（同义去重）"
+        out.append(it)
+    return out
+
+
 def exclusion_item(block: dict, reason: str) -> dict:
     """为无可抽内容 / 抽取失败的 Block 生成排除记录，保证对账率 100%（SPEC §6.4）。"""
     return {
@@ -338,6 +404,7 @@ class EiuExtractorService:
 
         inserted = 0
         excluded = 0
+        _sem_vecs: list[tuple[str, list[float]]] = []  # 已插入 EIU 的 (归一化statement, 向量)
         for index, block in enumerate(substantive, start=1):
             try:
                 items = self._extract_block(block, document_map[block["document_id"]], neighbors[block["block_id"]])
@@ -346,8 +413,16 @@ class EiuExtractorService:
                 block_error = f"抽取失败: {str(exc)[:60]}"
             else:
                 block_error = None
+            # 语义去重：与本次已插入的知识点比对，同义（措辞不同但同义）者标记排除
+            items = self._dedup_semantic(items, _sem_vecs)
             if items:
                 inserted += len(self.database.save_eius(items=items))
+                # 记录已插入可出题 EIU 的归一化 statement 向量，供后续块比对
+                for it in items:
+                    if it.get("is_questionable"):
+                        stmt = (it.get("statement") or "").strip()
+                        if stmt:
+                            _sem_vecs.append((_norm(stmt), _encode_one(stmt)))
             else:
                 self.database.save_eius(
                     items=[exclusion_item(block, block_error or "段落无实质内容，未抽取到 EIU")],

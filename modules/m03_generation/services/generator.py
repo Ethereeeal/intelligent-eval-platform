@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from typing import Any
 
@@ -29,7 +30,14 @@ from modules.m03_generation.services.prompts import (
 )
 from modules.shared.core.config import settings
 from modules.shared.core.logging_config import get_logger
-from modules.shared.services.database import DatabaseService, normalize_statement
+from modules.shared.services.database import (
+    DatabaseService,
+    find_similar_cases,
+    normalize_statement,
+)
+
+# 语义复用阈值：余弦相似度 ≥ 该值视为"同一知识点"，复用历史问答对
+SEMANTIC_REUSE_THRESHOLD = float(os.getenv("SEMANTIC_REUSE_THRESHOLD", "0.92"))
 
 logger = get_logger(__name__)
 
@@ -59,6 +67,16 @@ class CaseGenerator:
         """
         if not eiu.get("is_questionable", True):
             raise ValueError(f"EIU {eiu['eiu_id']} 不可出题：{eiu.get('exclusion_reason')}")
+
+        # 0. 两级复用（省 LLM）：①归一化精确匹配 ②BGE 语义相似匹配
+        reused = self._try_reuse(eiu)
+        if reused is not None:
+            logger.info(
+                "EIU %s 命中复用（%s），跳过 LLM 生成",
+                eiu["eiu_id"],
+                reused["_reuse_kind"],
+            )
+            return reused["case"]
 
         # 1. 定位原文证据 Block 与动态筛选的上下文
         block = block or self._resolve_source_block(eiu)
@@ -139,6 +157,51 @@ class CaseGenerator:
             content_priority=case.content_priority,
             review_status=case.review_status,
             statement_norm=case.statement_norm,
+        )
+
+    # ------------------------------------------------------------------
+    # 两级复用：精确（哈希归一化）→ 语义（BGE 余弦），均命中则跳过 LLM
+    # ------------------------------------------------------------------
+    def _try_reuse(self, eiu: dict[str, Any]) -> dict | None:
+        """尝试复用历史生成的问答对。命中返回 {"case": GeneratedCase, "_reuse_kind": str}。"""
+        statement = eiu.get("statement", "")
+        norm = normalize_statement(statement)
+
+        # ① 精确复用：归一化 statement 完全一致
+        exact = self.database.find_cases_by_statement(norm)
+        if exact:
+            src = exact[0]
+            case = self._case_from_reused(src, eiu, norm)
+            return {"case": case, "_reuse_kind": "exact"}
+
+        # ② 语义复用：BGE 余弦相似度 ≥ 阈值（措辞不同但同义）
+        similar = find_similar_cases(statement, SEMANTIC_REUSE_THRESHOLD)
+        if similar:
+            src = similar[0]
+            case = self._case_from_reused(src, eiu, norm)
+            case.statement_norm = norm  # 仍用本次归一化键，便于后续精确匹配
+            return {"case": case, "_reuse_kind": f"semantic@{src.get('similarity')}"}
+
+        return None
+
+    @staticmethod
+    def _case_from_reused(src: dict, eiu: dict[str, Any], norm: str) -> GeneratedCase:
+        """将复用的历史 case 映射为本 EIU 的新 GeneratedCase（review_status=reused）。"""
+        return GeneratedCase(
+            intent_id=f"intent_{eiu['eiu_id']}_reused",
+            eiu_id=eiu["eiu_id"],
+            document_id=eiu["document_id"],
+            question=src.get("question", ""),
+            question_type=src.get("question_type", "rule"),
+            difficulty=src.get("difficulty", "L1"),
+            scope_type=src.get("scope_type", "single_segment"),
+            gold_answer=src.get("gold_answer", ""),
+            must_have_points=src.get("must_have_points") or [eiu.get("statement", "")],
+            acceptable_answers=src.get("acceptable_answers") or [],
+            evidence=src.get("evidence") or [],
+            content_priority=eiu.get("content_priority", "P2"),
+            review_status="reused",
+            statement_norm=norm,
         )
 
     # ------------------------------------------------------------------

@@ -287,6 +287,7 @@ class DocumentParser:
     @staticmethod
     def _merge_consecutive(raw: list[dict]) -> list[dict]:
         """合并相邻的非标题块（同类型），避免一行一段造成过碎；但受 MAX_MERGE_CHARS 限制。"""
+        _SENTENCE_END = re.compile(r"[。！？；;….]{1,}$")
         merged: list[dict] = []
         for item in raw:
             if item.get("level") is not None:
@@ -294,15 +295,27 @@ class DocumentParser:
                 continue
             last = merged[-1] if merged else None
             if (
-                last is not None
-                and last.get("level") is None
-                and last.get("block_type") == item.get("block_type")
-                and len(last["text"]) + len(item["text"]) <= DocumentParser.MAX_MERGE_CHARS
+                last is None
+                or last.get("level") is not None
+                or last.get("block_type") != item.get("block_type")
+            ):
+                merged.append(item)
+                continue
+            merged_len = len(last["text"]) + len(item["text"])
+            if merged_len > DocumentParser.MAX_MERGE_CHARS * 2:
+                merged.append(item)
+            elif merged_len > DocumentParser.MAX_MERGE_CHARS and not _SENTENCE_END.search(
+                last["text"]
             ):
                 last["text"] = f"{last['text']}\n{item['text']}"
                 last["end"] = item.get("end")
-            else:
+            elif merged_len > DocumentParser.MAX_MERGE_CHARS and _SENTENCE_END.search(
+                last["text"]
+            ):
                 merged.append(item)
+            else:
+                last["text"] = f"{last['text']}\n{item['text']}"
+                last["end"] = item.get("end")
         return merged
 
     @staticmethod

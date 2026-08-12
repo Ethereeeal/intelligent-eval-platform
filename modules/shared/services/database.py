@@ -20,6 +20,9 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
 
 from modules.shared.core.config import settings
+from modules.shared.core.logging_config import get_logger
+
+logger = get_logger(__name__)
 
 # 10 种 EIU 类型（M02 SPEC 4.2）
 EIU_TYPES = {
@@ -1432,6 +1435,56 @@ class DatabaseService:
                 .first()
             )
             return [self._generated_case_to_dict(row)] if row else []
+
+    def find_similar_cases(
+        self, statement: str, threshold: float = 0.92
+    ) -> list[dict]:
+        """语义复用：用 BGE 编码 statement，检索全库历史 case 中语义相近者。
+
+        与 find_cases_by_statement（归一化精确匹配）互补——
+        精确匹配只能命中"措辞完全一致"的陈述，本方法可命中"语义相同但
+        措辞不同"的历史知识点，从而复用已生成的规范问答对、跳过 LLM 重生成。
+
+        无本地 embedding 模型（离线）时优雅降级为空列表（不阻断主流程）。
+        """
+        if not statement:
+            return []
+        try:
+            from modules.m01_data_foundation.services.embedding import (
+                EmbeddingService,
+            )
+
+            embedder = EmbeddingService()
+            (qvec,) = embedder.embed_texts([statement], is_query=True)
+        except Exception as exc:  # 离线/无模型：跳过语义复用
+            logger.warning("语义复用跳过（embedding 不可用）：%s", exc)
+            return []
+
+        with SessionLocal() as session:
+            rows = (
+                session.query(GeneratedCaseRow)
+                .filter(GeneratedCaseRow.statement_norm.isnot(None))
+                .all()
+            )
+        best: dict | None = None
+        best_score = threshold
+        for row in rows:
+            norm = row.statement_norm
+            if not norm:
+                continue
+            try:
+                (cvec,) = embedder.embed_texts([norm])
+            except Exception:
+                continue
+            # 已是 unit 向量（normalize_embeddings=True），内积=余弦相似度
+            score = float(sum(a * b for a, b in zip(qvec, cvec)))
+            if score >= best_score:
+                best_score = score
+                best = self._generated_case_to_dict(row)
+        if best is not None:
+            best = dict(best)
+            best["similarity"] = round(best_score, 4)
+        return [best] if best else []
 
     def list_generated_cases(
         self,
