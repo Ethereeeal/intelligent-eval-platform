@@ -32,7 +32,6 @@ from modules.shared.core.config import settings
 from modules.shared.core.logging_config import get_logger
 from modules.shared.services.database import (
     DatabaseService,
-    find_similar_cases,
     normalize_statement,
 )
 
@@ -175,7 +174,7 @@ class CaseGenerator:
             return {"case": case, "_reuse_kind": "exact"}
 
         # ② 语义复用：BGE 余弦相似度 ≥ 阈值（措辞不同但同义）
-        similar = find_similar_cases(statement, SEMANTIC_REUSE_THRESHOLD)
+        similar = self.database.find_similar_cases(statement, SEMANTIC_REUSE_THRESHOLD)
         if similar:
             src = similar[0]
             case = self._case_from_reused(src, eiu, norm)

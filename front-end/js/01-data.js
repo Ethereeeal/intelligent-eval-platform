@@ -98,6 +98,9 @@
   let TREE = { name: "文档库", children: [] };
   // 各文档归属的输入用途（统一为 basic=基础问题输入；是否泛化由生成界面选择）
   let DOC_PURPOSE = {};
+  // 后端持久化的文件夹扁平列表（[{folder_id, name, parent_id}]），
+  // 输出问答对库目录树据此重建，保证空文件夹与层级刷新后不丢失。
+  let QA_FOLDERS = [];
   // 文档用途判定：所有输入文档统一视为基础问题输入（basic），仅泛化/问答对生成在生成界面选择
   function docPurposeOf(d) {
     return "basic";
@@ -245,6 +248,9 @@
       DOCS = {};
       // 先按后端持久化的文件夹重建目录树（含空文件夹，刷新后不丢失）
       TREE.children = buildFolderTree(folders || []);
+      // 输出问答对库复用同一份持久化文件夹（与输入文档库同构）；
+      // 各自独立构造节点对象，避免两棵树共享节点导致折叠态互相串扰。
+      QA_FOLDERS = folders || [];
       DOC_PURPOSE = {};
 
       (docs || []).forEach(d => {
@@ -277,12 +283,19 @@
           // 证据后段：后端若仅提供证据前段（定位/来源路径）而未给后段原文，则补充该字段并输出。
           // 优先取 evidence 块内的原文句子（block_text/content/text），后端无则兜底为空串，由展示层标「（无）」。
           evidence2: evBack(c.evidence) || (c.gold_answer || c.answer || c.question || ""),
-          type: qaType
+          type: qaType,
+          // 后端持久化的问答对目录归属（相对「问答对库」根），用于输出问答对库目录树
+          caseId: c.case_id,
+          folderPath: c.folder_path || "",
+          purpose: c.purpose || purpose
         }));
+        // 问答对集在「问答对库」中的目录归属：取其问答对上后端持久化的 folder_path；
+        // 后端尚未回填时（历史数据）兜底沿用源文档的 folder_path，保持与输入库同构。
+        const qaFolderPath = (qa.find(x => x.folderPath) || {}).folderPath || (d.folder_path || "");
         DOCS[id] = {
           name: d.file_name, type: (d.file_type || "").replace(/^\./, "").toUpperCase(),
           size: fmtSize(d.file_size), status: statusCN(d.parse_status),
-          ver: "", updated: (d.created_at || "").slice(0, 10), purpose,
+          ver: "", updated: (d.created_at || "").slice(0, 10), purpose, qaFolderPath,
           preview: [],        // 文档原文改为「在线查看」时按需从后端 blocks 接口拉取
           versions: [],       // demo 后端未提供版本记录 → 留空
           kp, qa, review: []  // review：demo 未单独建模 → 留空
@@ -302,6 +315,7 @@
       DOCS = {};
       TREE.children = [];
       DOC_PURPOSE = {};
+      QA_FOLDERS = [];
     }
   }
 

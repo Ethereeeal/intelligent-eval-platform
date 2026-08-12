@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Any
 
 from modules.m03_generation.services.generator import CaseGenerator
@@ -222,6 +223,19 @@ class PipelineService:
         finally:
             self._progress[document_id]["status"] = "done"
 
+        # 问答对库目录归属：继承源文档的 folder_path / purpose（与文档库目录同构）
+        doc = self.database.get_document(document_id)
+        doc_folder = (doc or {}).get("folder_path") or ""
+        doc_purpose = (doc or {}).get("purpose") or "basic"
+        all_case_ids: list[int] = []
+        for r in results:
+            all_case_ids.extend(r.get("case_ids", []))
+            all_case_ids.extend(r.get("variation_case_ids", []))
+        for cid in all_case_ids:
+            self.database.update_generated_case(
+                cid, folder_path=doc_folder, purpose=doc_purpose
+            )
+
         return {
             "document_id": document_id,
             "total_questionable_eiu": len(eius),
@@ -269,12 +283,25 @@ class PipelineService:
         evidence: list[dict] | None = None,
         generate_variations: bool = False,
         variation_count: int = 2,
+        folder_path: str | None = None,
+        purpose: str | None = None,
     ) -> dict[str, Any]:
         """保存用户上传的种子问答对，可选立即泛化。
 
         种子无 EIU（eiu_id=None）；intent_id 独立生成，
         后续泛化变体共享该 intent_id 与原答案。
+        folder_path / purpose：问答对库目录归属（缺省继承源文档）。
         """
+        # 未显式指定目录时，继承源文档目录（与批量生成同构）
+        if folder_path is None and document_id is not None:
+            doc = self.database.get_document(document_id)
+            folder_path = (doc or {}).get("folder_path") or ""
+        if purpose is None:
+            if document_id is not None:
+                doc = self.database.get_document(document_id)
+                purpose = (doc or {}).get("purpose") or "basic"
+            else:
+                purpose = "basic"
         seed = self.database.save_generated_case(
             intent_id=f"upload_{uuid.uuid4().hex[:12]}",
             eiu_id=None,
@@ -289,6 +316,8 @@ class PipelineService:
             evidence=evidence or [],
             content_priority=content_priority,
             review_status="candidate",
+            folder_path=folder_path,
+            purpose=purpose,
         )
 
         variation_case_ids: list[int] = []
@@ -338,6 +367,8 @@ class PipelineService:
         question_type: str | None = None,
         difficulty: str | None = None,
         status: str | None = None,
+        folder_path: str | None = None,
+        purpose: str | None = None,
     ) -> list[dict]:
         return self.database.list_generated_cases(
             document_id=document_id,
@@ -345,6 +376,8 @@ class PipelineService:
             question_type=question_type,
             difficulty=difficulty,
             status=status,
+            folder_path=folder_path,
+            purpose=purpose,
         )
 
     def get_case(self, case_id: int) -> dict | None:
@@ -365,6 +398,73 @@ class PipelineService:
         if case is None or case.get("review_status") == "retired":
             return False
         return self.database.retire_generated_case(case_id)
+
+    # ------------------------------------------------------------------
+    # 目录级导出（带目录结构，与输入文档库同构）
+    # ------------------------------------------------------------------
+    def export_cases_folder(
+        self,
+        folder_path: str | None = None,
+        recursive: bool = True,
+        purpose: str | None = None,
+    ) -> dict[str, Any]:
+        """导出问答对库目录树（含子目录），返回带层级结构的 JSON。
+
+        结构：
+          {
+            "meta": {...},
+            "tree": { <目录> : { "folders": {...}, "files": [case...] } },
+            "flat_files": [ 所有命中的 case ]
+          }
+        目录树根按 purpose 分为「基础问题」「泛化问题」两个系统目录。
+        """
+        all_cases = self.database.list_generated_cases(purpose=purpose)
+        # 仅保留指定目录范围（精确 + 递归子目录）
+        if folder_path:
+            fp = folder_path.rstrip("/")
+            scoped = []
+            for c in all_cases:
+                cfp = (c.get("folder_path") or "").rstrip("/")
+                if cfp == fp:
+                    scoped.append(c)
+                elif recursive and cfp.startswith(fp + "/"):
+                    scoped.append(c)
+            all_cases = scoped
+
+        # 构建以 purpose 系统目录为根的树
+        root: dict[str, Any] = {}
+        flat_files: list[dict[str, Any]] = []
+
+        def ensure_path(node: dict, parts: list[str]) -> dict:
+            cur = node
+            for p in parts:
+                cur.setdefault("folders", {})
+                cur.setdefault("files", [])
+                cur = cur["folders"].setdefault(p, {})
+            cur.setdefault("folders", {})
+            cur.setdefault("files", [])
+            return cur
+
+        for c in all_cases:
+            purpose_label = "泛化问题" if c.get("purpose") == "gen" else "基础问题"
+            fp = (c.get("folder_path") or "").strip("/")
+            parts = fp.split("/") if fp else []
+            node = root.setdefault(purpose_label, {})
+            target = ensure_path(node, parts)
+            target["files"].append(c)
+            flat_files.append(c)
+
+        return {
+            "meta": {
+                "exported_at": datetime.now().isoformat(timespec="seconds"),
+                "scope_folder": folder_path or "/",
+                "recursive": recursive,
+                "purpose": purpose,
+                "total": len(flat_files),
+            },
+            "tree": root,
+            "flat_files": flat_files,
+        }
 
     # ------------------------------------------------------------------
     # 内部工具

@@ -230,10 +230,7 @@
       };
       // 单文件上传：按已选 folder_path 上传
       uploadInput.addEventListener("change", e => {
-        if (state._qaImportType) {
-          const t = state._qaImportType; state._qaImportType = null;
-          [...e.target.files].forEach(f => importQaSet(f, t));
-        } else if (state._uploadFolderPath) {
+        if (state._uploadFolderPath) {
           [...e.target.files].forEach(f => handleUpload(f, state._uploadFolderPath));
         }
         uploadInput.value = "";

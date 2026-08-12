@@ -181,108 +181,142 @@
       const qaSplit = $(treeId) && $(treeId).closest(".lib-split");
       if (qaSplit) { qaSplit.classList.remove("tree-hidden"); qaSplit.querySelector(".tree").classList.remove("collapsed"); }
       const rb = $(".tree-reopen"); if (rb) rb.classList.remove("show");
-      $(treeId).querySelectorAll(".tree-folder, .tree-group").forEach(r => r.classList.add("open"));
-      $(treeId).querySelectorAll(".tree-children").forEach(c => c.classList.add("open"));
+      // 注：各节点的展开/折叠由 QA_COLLAPSED 记忆并在 qaTreeHTML 中渲染，
+      // 此处只负责恢复整个目录面板的显示，不再强制展开所有节点。
     }
   }
 
   // 类型标签：gen=泛化问题 plain=基础问题
   function typeLabel(t) { return t === "gen" ? "泛化问题" : (t === "plain" ? "基础问题" : t); }
 
-  // 输出问答对目录树：两个固定目录（泛化问题 / 基础问题），下可含子分组与问答对集
-  // QA_GROUPS 维护用户自建的分组（按 type 分），分组下挂文档 id
-  if (!window.QA_GROUPS) window.QA_GROUPS = { gen: [], plain: [] };
+  // ============================================================
+  // 输出问答对库目录树（后端驱动，真实持久化）
+  // ------------------------------------------------------------
+  // 结构与「输入文档库」完全同构：
+  //   泛化问题 / 基础问题（两个系统根，不可重命名/删除）
+  //     └─ 用户文件夹（来自 /api/folders，与输入库共享同一份持久化目录）
+  //          └─ 问答对集（按其问答对上后端持久化的 folder_path 归位）
+  // 交互也与输入库一致：chevron-down 箭头 + 可折叠（.tree-node/.tree-children.open/.collapsed）
+  // ============================================================
+
+  // 系统根定义：key 为前端 qa.type，purpose 为后端持久化字段
+  const QA_ROOTS = [
+    { key: "gen", name: "泛化问题", purpose: "gen" },
+    { key: "plain", name: "基础问题", purpose: "basic" }
+  ];
+
+  // 折叠态记忆：key = `${rootKey}:${relPath}`，值为 true 表示已折叠。
+  // 重渲染（新建/重命名/移动后）时保持用户的展开/折叠状态。
+  if (!window.QA_COLLAPSED) window.QA_COLLAPSED = {};
+
+  // 由后端 folder 扁平列表构建某个系统根下的目录树（每个根独立造节点，互不共享）
+  function qaFolderTree() {
+    const byParent = {};
+    (QA_FOLDERS || []).forEach(f => {
+      const k = (f.parent_id == null) ? "root" : f.parent_id;
+      (byParent[k] = byParent[k] || []).push(f);
+    });
+    function make(parentKey) {
+      return (byParent[parentKey] || []).map(f => ({
+        name: f.name, folderId: f.folder_id, children: make(f.folder_id)
+      }));
+    }
+    return make("root");
+  }
+
+  // 某系统根下的问答对集：按 purpose 过滤，返回 { relPath -> [docId] }
+  function qaSetsByPath(rootKey) {
+    const map = {};
+    Object.keys(DOCS).forEach(id => {
+      const rows = (DOCS[id].qa || []).filter(q => q.type === rootKey);
+      if (!rows.length) return;
+      const rel = (rows.find(r => r.folderPath) || {}).folderPath || DOCS[id].qaFolderPath || "";
+      (map[rel] = map[rel] || []).push(id);
+    });
+    return map;
+  }
+
   function qaTreeHTML() {
-    const dirs = [
-      { key: "gen", name: "泛化问题", badge: "泛化问题" },
-      { key: "plain", name: "基础问题", badge: "基础问题" }
-    ];
     let html = `<div class="tree-h up-title">问答对目录</div>`;
-    dirs.forEach(d => {
-      const docIds = Object.keys(DOCS).filter(id => (DOCS[id].qa || []).some(q => q.type === d.key));
-      const groups = (window.QA_GROUPS[d.key] || []);
-      // 目录内容容器（折叠时整体收起）
-      let dirBody = "";
-      // 子分组
-      groups.forEach((g, gi) => {
-        const gDocs = g.docIds.filter(id => DOCS[id]);
-        dirBody += `<div class="tree-row tree-group" data-dot="qa-group" data-type="${d.key}" data-gi="${gi}">
-          <i data-lucide="folder-open" class="tw-ic"></i><span class="tw-name">${g.name}</span><span class="tw-count">${gDocs.length}</span><i data-lucide="chevron-down" class="tw-chev"></i><button class="tree-dots" data-dot="qa-group" data-type="${d.key}" data-gi="${gi}" title="更多操作"><i data-lucide="more-horizontal"></i></button>
-        </div>`;
-        dirBody += `<div class="tree-children open">${gDocs.map(id => qaChildRowHTML(id, d.key, d.badge)).join("")}</div>`;
-      });
-      // 未分组的问答对集
-      const groupedIds = new Set(groups.flatMap(g => g.docIds));
-      const ungrouped = docIds.filter(id => !groupedIds.has(id));
-      if (ungrouped.length) {
-        dirBody += ungrouped.map(id => qaChildRowHTML(id, d.key, d.badge)).join("");
-      }
-      html += `<div class="tree-row tree-folder open" data-dot="qa-dir" data-type="${d.key}">
-        <i data-lucide="folder" class="tw-ic"></i><span class="tw-name">${d.name}</span><span class="tw-count">${docIds.length}</span><i data-lucide="chevron-down" class="tw-chev"></i><button class="tree-dots" data-dot="qa-dir" data-type="${d.key}" title="更多操作"><i data-lucide="more-horizontal"></i></button>
+    html += `<div class="lib-hint"><i data-lucide="info"></i><div><b>问答对库</b>：目录与「输入文档库」同构，问答对集随源文档目录自动归位；可新建文件夹、移动、重命名，并支持按目录导出。</div></div>`;
+    QA_ROOTS.forEach(root => {
+      const folders = qaFolderTree();
+      const setsByPath = qaSetsByPath(root.key);
+      const total = Object.values(setsByPath).reduce((s, arr) => s + arr.length, 0);
+      const collapsed = !!window.QA_COLLAPSED[`${root.key}:`];
+      html += `<div class="tree-node">
+        <div class="tree-row${collapsed ? " collapsed" : ""}" data-qa-folder="1" data-qa-root="1" data-root-key="${root.key}" data-path="" data-name="${root.name}">
+          <i data-lucide="folder" class="tw-ic"></i><span class="tw-name">${root.name}</span><span class="tw-count">${total}</span><i data-lucide="chevron-down" class="tw-chev"></i>
+          <button class="tree-dots" data-dot="qa-root" data-root-key="${root.key}" data-path="" data-name="${root.name}" title="更多操作"><i data-lucide="more-horizontal"></i></button>
+        </div>
+        <div class="tree-children${collapsed ? "" : " open"}">
+          ${folders.map(f => qaFolderNodeHTML(f, "", root, setsByPath)).join("")}
+          ${(setsByPath[""] || []).map(id => qaChildRowHTML(id, root, "")).join("")}
+        </div>
       </div>`;
-      html += `<div class="tree-children open">${dirBody}</div>`;
     });
     return html;
   }
-  function qaChildRowHTML(id, typeKey, badge) {
+
+  // 递归渲染用户文件夹节点（与输入库 treeNodeHTML 同构）
+  function qaFolderNodeHTML(node, parentRel, root, setsByPath) {
+    const rel = parentRel ? parentRel + "/" + node.name : node.name;
+    const sets = setsByPath[rel] || [];
+    // 计数：本目录 + 所有子目录下的问答对集数量
+    const count = Object.keys(setsByPath)
+      .filter(p => p === rel || p.startsWith(rel + "/"))
+      .reduce((s, p) => s + setsByPath[p].length, 0);
+    const collapsed = !!window.QA_COLLAPSED[`${root.key}:${rel}`];
+    return `<div class="tree-node">
+      <div class="tree-row${collapsed ? " collapsed" : ""}" data-qa-folder="1" data-root-key="${root.key}" data-path="${rel}" data-name="${node.name}">
+        <i data-lucide="folder" class="tw-ic"></i><span class="tw-name">${node.name}</span><span class="tw-count">${count}</span><i data-lucide="chevron-down" class="tw-chev"></i>
+        <button class="tree-dots" data-dot="qa-folder" data-root-key="${root.key}" data-path="${rel}" data-name="${node.name}" title="更多操作"><i data-lucide="more-horizontal"></i></button>
+      </div>
+      <div class="tree-children${collapsed ? "" : " open"}">
+        ${(node.children || []).map(c => qaFolderNodeHTML(c, rel, root, setsByPath)).join("")}
+        ${sets.map(id => qaChildRowHTML(id, root, rel)).join("")}
+      </div>
+    </div>`;
+  }
+
+  // 问答对集叶子节点
+  function qaChildRowHTML(id, root, rel) {
     const doc = DOCS[id];
-    const cnt = (doc.qa || []).filter(q => q.type === typeKey).length;
+    const cnt = (doc.qa || []).filter(q => q.type === root.key).length;
     const active = state.sel.qa === id ? "active" : "";
-    return `<div class="tree-row tree-child ${active}" data-dot="qa" data-id="${id}" data-type="${typeKey}" data-qa-id="${id}" data-qa-type="${typeKey}" draggable="true">
-      <i data-lucide="file-text" class="tw-ic"></i><span class="tw-name">${doc.name}</span><span class="tw-count">${cnt} 条</span><span class="qa-badge ${typeKey}">${badge}</span><button class="tree-dots" data-dot="qa" data-id="${id}" data-type="${typeKey}" title="更多操作"><i data-lucide="more-horizontal"></i></button>
+    return `<div class="tree-row tree-child ${active}" data-dot="qa" data-id="${id}" data-type="${root.key}" data-root-key="${root.key}" data-path="${rel}" data-qa-id="${id}" data-qa-type="${root.key}" data-name="${doc.name}" draggable="true">
+      <i data-lucide="file-text" class="tw-ic"></i><span class="tw-name">${doc.name}</span><span class="tw-count">${cnt} 条</span><span class="qa-badge ${root.key}">${root.name}</span><button class="tree-dots" data-dot="qa" data-id="${id}" data-type="${root.key}" data-root-key="${root.key}" data-path="${rel}" data-name="${doc.name}" title="更多操作"><i data-lucide="more-horizontal"></i></button>
     </div>`;
   }
 
   function bindQaTree(container) {
     syncTreeBody(container, qaTreeHTML());
     icons();
-    // 目录级（泛化问题 / 基础问题）：展开/折叠 + 拖拽（导入新集 / 接收移动到此目的）
-    container.querySelectorAll(".tree-folder").forEach(row => {
+    // 文件夹行（系统根 + 用户文件夹）：折叠/展开（与输入库一致）+ 拖入接收
+    container.querySelectorAll('.tree-row[data-qa-folder]').forEach(row => {
       row.addEventListener("click", (e) => {
         if (e.target.closest(".tree-dots")) return;
-        row.classList.toggle("open");
-        const kids = row.nextElementSibling;
-        if (kids && kids.classList.contains("tree-children")) kids.classList.toggle("open");
+        const kids = row.closest(".tree-node").querySelector(".tree-children");
+        if (kids) kids.classList.toggle("open");
+        row.classList.toggle("collapsed");
+        // 记住折叠态，重渲染后保持
+        window.QA_COLLAPSED[`${row.dataset.rootKey}:${row.dataset.path || ""}`] = row.classList.contains("collapsed");
       });
       row.addEventListener("dragover", (e) => {
         e.preventDefault(); e.stopPropagation();
-        const t = e.dataTransfer; const mId = t && t.getData("text/qa-id"); const mType = t && t.getData("text/qa-type");
-        if (mId && mType && mType !== row.dataset.type) { e.dataTransfer.dropEffect = "none"; return; }
+        const t = e.dataTransfer; const mType = t && t.getData("text/qa-type");
+        if (mType && mType !== row.dataset.rootKey) { e.dataTransfer.dropEffect = "none"; return; }
         row.classList.add("drop-target");
       });
-      row.addEventListener("dragleave", () => row.classList.remove("drop-target"));
-      row.addEventListener("drop", (e) => {
-        e.preventDefault(); e.stopPropagation();
-        row.classList.remove("drop-target");
-        const files = e.dataTransfer && e.dataTransfer.files;
-        const mId = e.dataTransfer && e.dataTransfer.getData("text/qa-id");
-        const mType = e.dataTransfer && e.dataTransfer.getData("text/qa-type");
-        if (files && files.length) {
-          [...files].forEach(f => importQaSet(f, row.dataset.type));
-        } else if (mId) {
-          if (mType !== row.dataset.type) { toast("仅可移动到相同目的（同为泛化或基础问题）的文件夹"); return; }
-          moveQaToGroup(mId, row.dataset.type, -1);
-        }
-      });
-    });
-    // 子分组：折叠 + 接收拖入（仅同目的）+ 拖拽移动
-    container.querySelectorAll(".tree-group").forEach(row => {
-      row.addEventListener("click", (e) => { if (e.target.closest(".tree-dots")) return; row.classList.toggle("open"); const kids = row.nextElementSibling; if (kids && kids.classList.contains("tree-children")) kids.classList.toggle("open"); });
-      row.addEventListener("dragover", (e) => {
-        e.preventDefault(); e.stopPropagation();
-        const t = e.dataTransfer; const mId = t && t.getData("text/qa-id"); const mType = t && t.getData("text/qa-type");
-        if (mId && mType && mType !== row.dataset.type) { e.dataTransfer.dropEffect = "none"; return; }
-        row.classList.add("drop-target");
-      });
-      row.addEventListener("dragleave", () => row.classList.remove("drop-target"));
-      row.addEventListener("drop", (e) => {
+      row.addEventListener("dragleave", (e) => { if (!row.contains(e.relatedTarget)) row.classList.remove("drop-target"); });
+      row.addEventListener("drop", async (e) => {
         e.preventDefault(); e.stopPropagation();
         row.classList.remove("drop-target");
         const mId = e.dataTransfer && e.dataTransfer.getData("text/qa-id");
         const mType = e.dataTransfer && e.dataTransfer.getData("text/qa-type");
         if (!mId) return;
-        if (mType !== row.dataset.type) { toast("仅可移动到相同目的（同为泛化或基础问题）的文件夹"); return; }
-        moveQaToGroup(mId, row.dataset.type, parseInt(row.dataset.gi, 10));
+        if (mType !== row.dataset.rootKey) { toast("仅可移动到相同目的（同为泛化或基础问题）的文件夹"); return; }
+        await moveQaSetToFolder(mId, mType, row.dataset.path || "");
       });
     });
     // 问答对集节点：选中并展示 + 可拖拽到其他同目的文件夹
@@ -300,127 +334,354 @@
         e.dataTransfer.effectAllowed = "move";
       });
     });
-    // 三点菜单：目录 / 分组 / 文档（事件委托，避免图标替换导致 handler 丢失）
+    // 三点菜单：系统根 / 用户文件夹 / 问答对集（事件委托，避免图标替换导致 handler 丢失）
     container.addEventListener("click", (e) => {
       const btn = e.target.closest(".tree-dots");
       if (!btn) return;
       e.stopPropagation();
-      const row = btn.closest(".tree-row");
       const dot = btn.dataset.dot;
-      if (dot === "qa-dir") showQaDirContextMenu(e, btn);
-      else if (dot === "qa-group") showQaGroupContextMenu(e, btn);
+      if (dot === "qa-root") showQaRootContextMenu(e, btn);
+      else if (dot === "qa-folder") showQaFolderContextMenu(e, btn);
       else showQaContextMenu(e, btn);
     });
   }
 
-  // 将问答对集移动到目标分组：-1 表示移到该类型目录下的“未分组”区
-  function moveQaToGroup(docId, typeKey, gi) {
-    const groups = window.QA_GROUPS[typeKey] || [];
-    groups.forEach(g => {
-      const i = g.docIds.indexOf(docId);
-      if (i >= 0) g.docIds.splice(i, 1);
-    });
-    if (gi >= 0 && groups[gi]) {
-      if (!groups[gi].docIds.includes(docId)) groups[gi].docIds.push(docId);
+  // 将问答对集（= 某文档的全部同类问答对）移动到目标目录：调用后端逐条落库
+  async function moveQaSetToFolder(docId, rootKey, targetRel) {
+    const doc = DOCS[docId];
+    if (!doc) return;
+    const rows = (doc.qa || []).filter(q => q.type === rootKey);
+    if (!rows.length) return;
+    const cur = (rows.find(r => r.folderPath) || {}).folderPath || doc.qaFolderPath || "";
+    if (cur === targetRel) { toast("已在目标目录"); return; }
+    try {
+      for (const r of rows) {
+        if (!r.caseId) continue;
+        const fd = new FormData();
+        fd.append("folder_path", targetRel);
+        const res = await fetch(API_BASE + `/api/cases/${r.caseId}/move`, { method: "POST", body: fd });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          toast(`移动失败：${err.detail || res.status}`, "warn");
+          return;
+        }
+      }
+    } catch (err) {
+      toast("移动请求失败，请检查后端", "warn");
+      return;
     }
+    // 前端同步，避免整页重载
+    rows.forEach(r => { r.folderPath = targetRel; });
+    doc.qaFolderPath = targetRel;
     renderLib("qa");
     state.sel.qa = docId;
     renderLibContent("qa", docId);
     icons();
-    toast(gi >= 0 ? `已移动到「${groups[gi].name}」` : `已移到「${typeLabel(typeKey)}」未分组区`);
+    toast(`已移动「${doc.name}」到「${targetRel || typeLabel(rootKey)}」`);
   }
 
-  // 导入问答对集：创建 DOCS 条目（仅含 qa，无知识点），归类到指定类型
-  function importQaSet(file, typeKey) {
-    const id = "q" + Date.now().toString(36) + Math.floor(Math.random() * 1000);
-    const ext = (file.name.split(".").pop() || "").toUpperCase();
-    const type = { PDF: "PDF", DOCX: "DOCX", JSON: "JSON", CSV: "CSV" }[ext] || ext || "FILE";
-    const kb = file.size / 1024;
-    const size = kb >= 1024 ? (kb / 1024).toFixed(1) + " MB" : Math.max(1, Math.round(kb)) + " KB";
-    DOCS[id] = { name: file.name, type, size, status: "已生成", ver: "v1", updated: "刚刚",
-      preview: [], versions: [{ tag: "v1", note: `导入问答对集（${typeLabel(typeKey)}）`, time: "刚刚" }],
-      kp: [], qa: [], review: [] };
-    // 模拟解析为该类型问答对
-    const sample = { id: id + "-1", q: file.name.replace(/\.[^.]+$/, "") + " 相关问题？", a: "（已导入，待补充答案）", diff: "中等", review: "待审核", evidence: "—", src: file.name, type: typeKey };
-    DOCS[id].qa = [sample];
-    renderLib("qa");
-    state.sel.qa = id;
-    renderLibContent("qa", id);
-    toast(`已导入问答对集「${file.name}」至${typeLabel(typeKey)}目录`);
-    icons();
+
+  // 通用弹层构造：返回 pop 元素，调用方绑定 button.onclick
+  function qaPopup(btn, html) {
+    $$(".ctx-popup").forEach(p => p.remove());
+    const pop = document.createElement("div");
+    pop.className = "ctx-popup";
+    pop.innerHTML = html;
+    pop.style.visibility = "hidden";
+    document.body.appendChild(pop);
+    placePopup(pop, btn, 4, 8);
+    bindPopupLifecycle(pop, btn, 4, 8);
+    return pop;
   }
 
+  // 问答对集三点菜单：导出 / 移动到 / 重命名 / 删除
   function showQaContextMenu(e, btn) {
-    $$(".ctx-popup").forEach(p => p.remove());
     const id = btn.dataset.id;
-    const pop = document.createElement("div");
-    pop.className = "ctx-popup";
-    pop.innerHTML = `<button data-act="qa-export">导出文档</button><button data-act="qa-reupload">重新上传</button>`;
-    pop.style.visibility = "hidden";
-    document.body.appendChild(pop);
-    placePopup(pop, btn, 4, 8);
-    bindPopupLifecycle(pop, btn, 4, 8);
+    const rootKey = btn.dataset.rootKey || btn.dataset.type;
+    const pop = qaPopup(btn, `<button data-act="qa-export">导出</button><button data-act="qa-move">移动到</button><button data-act="qa-rename">重命名</button><button data-act="qa-delete">删除</button>`);
     pop.querySelectorAll("button").forEach(b => {
-      b.onclick = () => {
+      b.onclick = async () => {
         pop.remove();
-        if (b.dataset.act === "qa-export") exportQaSet(id);
-        else if (b.dataset.act === "qa-reupload") { const docName = DOCS[id] ? DOCS[id].name : ""; setUploadTarget(findNodeParent(docName) || ""); $("#uploadInput").click(); }
+        const act = b.dataset.act;
+        if (act === "qa-export") exportQaSet(id);
+        else if (act === "qa-move") showMoveQaModal(id, rootKey);
+        else if (act === "qa-rename") renameQaSetInline(btn.closest(".tree-row"), id, rootKey);
+        else if (act === "qa-delete") await deleteQaSet(id, rootKey);
       };
     });
   }
 
-  // 目录级（泛化问题 / 基础问题）右键：新建分组文件夹
-  function showQaDirContextMenu(e, btn) {
-    $$(".ctx-popup").forEach(p => p.remove());
-    const typeKey = btn.dataset.type;
-    const pop = document.createElement("div");
-    pop.className = "ctx-popup";
-    pop.innerHTML = `<button data-act="qa-new-group">新建分组文件夹</button><button data-act="qa-import">拖入/导入问答对集</button>`;
-    pop.style.visibility = "hidden";
-    document.body.appendChild(pop);
-    placePopup(pop, btn, 4, 8);
-    bindPopupLifecycle(pop, btn, 4, 8);
+  // 系统根（泛化问题 / 基础问题）三点菜单：仅「新建文件夹」
+  function showQaRootContextMenu(e, btn) {
+    const rootKey = btn.dataset.rootKey;
+    const pop = qaPopup(btn, `<button data-act="qa-newfolder">新建文件夹</button>`);
     pop.querySelectorAll("button").forEach(b => {
-      b.onclick = () => {
+      b.onclick = async () => {
         pop.remove();
-        if (b.dataset.act === "qa-new-group") {
-          if (!window.QA_GROUPS[typeKey]) window.QA_GROUPS[typeKey] = [];
-          window.QA_GROUPS[typeKey].push({ name: "新建分组", docIds: [] });
-          renderLib("qa");
-        } else if (b.dataset.act === "qa-import") {
-          state._qaImportType = typeKey;
-          $("#uploadInput").click();
-        }
+        if (b.dataset.act === "qa-newfolder") await createQaFolder("", rootKey);
       };
     });
   }
 
-  // 分组级右键：重命名 / 删除分组（删除仅移除分组，不删文档）
-  function showQaGroupContextMenu(e, btn) {
-    $$(".ctx-popup").forEach(p => p.remove());
-    const typeKey = btn.dataset.type;
-    const gi = parseInt(btn.dataset.gi, 10);
-    const pop = document.createElement("div");
-    pop.className = "ctx-popup";
-    pop.innerHTML = `<button data-act="qa-group-rename">重命名</button><button data-act="qa-group-delete">删除分组</button>`;
-    pop.style.visibility = "hidden";
-    document.body.appendChild(pop);
-    placePopup(pop, btn, 4, 8);
-    bindPopupLifecycle(pop, btn, 4, 8);
+  // 用户文件夹三点菜单：导出 / 新建文件夹 / 重命名 / 删除
+  function showQaFolderContextMenu(e, btn) {
+    const rootKey = btn.dataset.rootKey;
+    const rel = btn.dataset.path || "";
+    const name = btn.dataset.name || "";
+    const pop = qaPopup(btn, `<button data-act="qa-folder-export">导出</button><button data-act="qa-newfolder">新建文件夹</button><button data-act="qa-folder-rename">重命名</button><button data-act="qa-folder-delete">删除</button>`);
     pop.querySelectorAll("button").forEach(b => {
-      b.onclick = () => {
+      b.onclick = async () => {
         pop.remove();
-        if (b.dataset.act === "qa-group-rename") {
-          const g = window.QA_GROUPS[typeKey][gi];
-          const nv = prompt("分组名称", g.name);
-          if (nv && nv.trim()) { g.name = nv.trim(); renderLib("qa"); }
-        } else if (b.dataset.act === "qa-group-delete") {
-          window.QA_GROUPS[typeKey].splice(gi, 1);
-          renderLib("qa");
-          toast("已删除分组（问答对集保留在目录下）");
-        }
+        const act = b.dataset.act;
+        if (act === "qa-folder-export") exportQaFolder(rel, rootKey, name);
+        else if (act === "qa-newfolder") await createQaFolder(rel, rootKey);
+        else if (act === "qa-folder-rename") renameQaFolderInline(btn.closest(".tree-row"), rel, name);
+        else if (act === "qa-folder-delete") await deleteQaFolder(rel, name);
       };
     });
+  }
+
+  // ---------------- 目录操作（复用 /api/folders，与输入库共享持久化目录） ----------------
+
+  // 新建文件夹：parentRel 为空表示建在系统根下
+  async function createQaFolder(parentRel, rootKey) {
+    try {
+      const fd = new FormData();
+      fd.append("owner", CURRENT_USER);
+      fd.append("name", "新建文件夹");
+      if (parentRel) fd.append("parent_path", parentRel);
+      const res = await fetch(API_BASE + "/api/folders", { method: "POST", body: fd });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        toast(`新建文件夹失败：${err.detail || res.status}`, "warn");
+        return;
+      }
+      const created = await res.json();
+      // 同步两棵树的数据源：QA_FOLDERS（问答对库）与 TREE（输入文档库共享同一份持久化目录）
+      QA_FOLDERS.push({ folder_id: created.folder_id, name: created.name, parent_id: created.parent_id ?? null });
+      const parentNode = parentRel ? (findOrCreateFolder(parentRel.split("/").pop()) || TREE) : TREE;
+      if (parentNode && !(parentNode.children || []).some(c => c.name === created.name)) {
+        (parentNode.children = parentNode.children || []).push({ name: created.name, children: [], folderId: created.folder_id });
+      }
+    } catch (err) {
+      toast("新建文件夹请求失败，请检查后端", "warn");
+      return;
+    }
+    // 展开父目录，便于看到新建项并直接进入重命名态
+    window.QA_COLLAPSED[`${rootKey}:${parentRel}`] = false;
+    renderLib("qa");
+    const rel = parentRel ? parentRel + "/新建文件夹" : "新建文件夹";
+    const row = $(`#qaTree .tree-row[data-qa-folder][data-root-key="${rootKey}"][data-path="${CSS.escape(rel)}"]`)
+      || $$(`#qaTree .tree-row[data-qa-folder]`).find(r => r.dataset.path === rel && r.dataset.rootKey === rootKey);
+    if (row) renameQaFolderInline(row, rel, "新建文件夹");
+  }
+
+  // 内联重命名文件夹：走 /api/folders/move（后端会一并重写文档与问答对的 folder_path）
+  function renameQaFolderInline(row, rel, oldName) {
+    if (!row) return;
+    const nameSpan = row.querySelector(".tw-name");
+    if (!nameSpan) return;
+    const input = document.createElement("input");
+    input.type = "text"; input.value = oldName; input.className = "tree-rename-input";
+    input.style.cssText = "font-size:12.5px;padding:2px 6px;border:1px solid var(--brand);border-radius:6px;width:120px;outline:none;";
+    nameSpan.replaceWith(input);
+    input.focus(); input.select();
+    let done = false;
+    const commit = async () => {
+      if (done) return; done = true;
+      const v = input.value.trim();
+      if (!v || v === oldName) { renderLib("qa"); return; }
+      const parentRel = rel.split("/").slice(0, -1).join("/");
+      const newRel = parentRel ? parentRel + "/" + v : v;
+      try {
+        const fd = new FormData();
+        fd.append("owner", CURRENT_USER);
+        fd.append("from_path", rel);
+        fd.append("to_path", newRel);
+        const res = await fetch(API_BASE + "/api/folders/move", { method: "PATCH", body: fd });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          toast(`重命名失败：${err.detail || res.status}`, "warn");
+          renderLib("qa");
+          return;
+        }
+      } catch (err) {
+        toast("重命名请求失败，请检查后端", "warn");
+        renderLib("qa");
+        return;
+      }
+      // 目录改名会影响两个库的 folder_path，重新拉取后端数据保证一致
+      await loadData();
+      renderLib("qa");
+      toast(`已重命名为「${v}」`);
+    };
+    input.addEventListener("keydown", e => { if (e.key === "Enter") commit(); if (e.key === "Escape") { done = true; renderLib("qa"); } });
+    input.addEventListener("blur", commit);
+  }
+
+  // 删除文件夹：后端会把其下内容上移到父级
+  // 统计某目录（含子孙）下归属的问答对条数
+  function countQaUnder(rel) {
+    let n = 0;
+    for (const d of Object.values(DOCS)) {
+      const fp = d.qaFolderPath || "";
+      const under = rel ? (fp === rel || fp.startsWith(rel + "/")) : (fp === "" || fp === null);
+      if (!under) continue;
+      (d.qa || []).forEach(q => (q.children || []).forEach(c => { if (c.purpose) n++; }));
+    }
+    return n;
+  }
+
+  async function deleteQaFolder(rel, name) {
+    const cnt = countQaUnder(rel);
+    const tip = cnt > 0
+      ? `该文件夹及其子目录下共有 <b>${cnt}</b> 条问答对，将<b>一并删除且不可恢复</b>。`
+      : `该文件夹下没有问答对，仅删除空目录。`;
+    const mask = document.createElement("div");
+    mask.className = "up-modal-mask";
+    mask.innerHTML = `
+      <div class="up-modal" style="max-width:420px">
+        <div class="up-modal-title">删除文件夹「${name}」</div>
+        <div class="up-modal-body" style="line-height:1.7">
+          ${tip}<br/>此操作不可恢复，确认继续？
+        </div>
+        <div class="up-modal-foot">
+          <button class="up-btn" data-act="cancel">取消</button>
+          <button class="up-btn primary" data-act="ok">确认删除</button>
+        </div>
+      </div>`;
+    document.body.appendChild(mask);
+    const close = () => mask.remove();
+    mask.addEventListener("click", (e) => {
+      if (e.target === mask || e.target.dataset.act === "cancel") return close();
+      if (e.target.dataset.act === "ok") doDelete();
+    });
+    async function doDelete() {
+      try {
+        const res = await fetch(API_BASE + `/api/folders?path=${encodeURIComponent(rel)}&owner=${CURRENT_USER}`, { method: "DELETE" });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          toast(`删除失败：${err.detail || res.status}`, "warn");
+          return close();
+        }
+      } catch (err) {
+        toast("删除请求失败，请检查后端", "warn");
+        return close();
+      }
+      close();
+      await loadData();
+      renderLib("qa");
+      toast(`已删除文件夹「${name}」${cnt > 0 ? `及 ${cnt} 条问答对` : ""}`);
+    }
+  }
+
+  // 按目录导出（带目录结构）：直接下载后端生成的 JSON
+  function exportQaFolder(rel, rootKey, name) {
+    const purpose = rootKey === "gen" ? "gen" : "basic";
+    const qs = new URLSearchParams({ recursive: "true", purpose });
+    if (rel) qs.set("folder_path", rel);
+    const url = API_BASE + `/api/cases/export-folder?` + qs.toString();
+    const a = document.createElement("a");
+    a.href = url; a.download = "";
+    document.body.appendChild(a); a.click(); a.remove();
+    toast(`正在导出「${name || typeLabel(rootKey)}」目录下的问答对（含目录结构）`);
+  }
+
+  // 重命名问答对集：改其下每条问答对的问题标题不合适，这里改「集名」= 源文档显示名
+  function renameQaSetInline(row, docId, rootKey) {
+    if (!row) return;
+    const doc = DOCS[docId];
+    if (!doc) return;
+    const nameSpan = row.querySelector(".tw-name");
+    if (!nameSpan) return;
+    const oldName = doc.name;
+    const input = document.createElement("input");
+    input.type = "text"; input.value = oldName; input.className = "tree-rename-input";
+    input.style.cssText = "font-size:12.5px;padding:2px 6px;border:1px solid var(--brand);border-radius:6px;width:140px;outline:none;";
+    nameSpan.replaceWith(input);
+    input.focus(); input.select();
+    let done = false;
+    const commit = () => {
+      if (done) return; done = true;
+      const v = input.value.trim();
+      if (v && v !== oldName) {
+        // 问答对集名即源文档显示名：仅前端展示层改名，不影响落盘文件与问答对内容
+        doc.name = v;
+        toast(`已重命名为「${v}」`);
+      }
+      renderLib("qa");
+    };
+    input.addEventListener("keydown", e => { if (e.key === "Enter") commit(); if (e.key === "Escape") { done = true; renderLib("qa"); } });
+    input.addEventListener("blur", commit);
+  }
+
+  // 删除问答对集：删除该文档在此系统根下的全部问答对（逐条调后端）
+  async function deleteQaSet(docId, rootKey) {
+    const doc = DOCS[docId];
+    if (!doc) return;
+    const rows = (doc.qa || []).filter(q => q.type === rootKey);
+    if (!rows.length) { toast("该问答对集为空"); return; }
+    if (!confirm(`确认删除「${doc.name}」下的 ${rows.length} 条问答对？该操作不可撤销。`)) return;
+    try {
+      for (const r of rows) {
+        if (!r.caseId) continue;
+        const res = await fetch(API_BASE + `/api/cases/${r.caseId}`, { method: "DELETE" });
+        if (!res.ok && res.status !== 404) {
+          const err = await res.json().catch(() => ({}));
+          toast(`删除失败：${err.detail || res.status}`, "warn");
+          return;
+        }
+      }
+    } catch (err) {
+      toast("删除请求失败，请检查后端", "warn");
+      return;
+    }
+    doc.qa = (doc.qa || []).filter(q => q.type !== rootKey);
+    if (state.sel.qa === docId) state.sel.qa = null;
+    renderLib("qa");
+    toast(`已删除「${doc.name}」的 ${rows.length} 条问答对`);
+  }
+
+  // 「移动到」弹窗：列出可选目标目录（系统根 + 其下全部文件夹）
+  function showMoveQaModal(docId, rootKey) {
+    const doc = DOCS[docId];
+    if (!doc) return;
+    const root = QA_ROOTS.find(r => r.key === rootKey) || QA_ROOTS[1];
+    // 扁平化全部目录路径
+    const paths = [];
+    (function walk(nodes, prefix) {
+      nodes.forEach(n => {
+        const rel = prefix ? prefix + "/" + n.name : n.name;
+        paths.push(rel);
+        if (n.children && n.children.length) walk(n.children, rel);
+      });
+    })(qaFolderTree(), "");
+    const cur = (doc.qa.find(q => q.type === rootKey && q.folderPath) || {}).folderPath || doc.qaFolderPath || "";
+    const opts = [{ rel: "", label: root.name }].concat(paths.map(p => ({ rel: p, label: root.name + "/" + p })));
+    const mask = document.createElement("div");
+    mask.className = "up-modal-mask";
+    mask.innerHTML = `<div class="up-modal">` +
+      `<div class="up-modal-head"><span>移动「${doc.name}」到目标目录</span><button class="up-close" title="关闭">×</button></div>` +
+      `<div class="up-modal-body"><div class="up-tree">` +
+      opts.map(o => `<label class="up-node mv-opt" style="display:flex;align-items:center;gap:8px;cursor:pointer">
+          <input type="radio" name="mvQa" value="${o.rel}"${o.rel === cur ? " checked" : ""}>
+          <i data-lucide="folder"></i><span>${o.label}</span>${o.rel === cur ? '<span class="muted">（当前）</span>' : ""}
+        </label>`).join("") +
+      `</div></div>` +
+      `<div class="up-modal-foot"><button class="up-confirm">移动到此处</button></div>` +
+      `<div class="up-hint">问答对集将移动到所选目录，目录归属会持久化到后端；拖拽问答对集到左侧目录树同样可以移动。</div>` +
+      `</div>`;
+    document.body.appendChild(mask);
+    icons();
+    const close = () => mask.remove();
+    mask.querySelector(".up-close").onclick = close;
+    mask.addEventListener("click", (e) => { if (e.target === mask) close(); });
+    mask.querySelector(".up-confirm").onclick = async () => {
+      const picked = mask.querySelector('input[name="mvQa"]:checked');
+      const target = picked ? picked.value : "";
+      close();
+      await moveQaSetToFolder(docId, rootKey, target);
+    };
   }
   function reviewBadge(r) {
     const map = { "已通过": "ok", "已驳回": "bad", "待审核": "warn" };

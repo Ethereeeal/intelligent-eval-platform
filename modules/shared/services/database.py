@@ -312,6 +312,14 @@ class DatabaseService:
                     conn.execute(text("ALTER TABLE document ADD COLUMN folder_path VARCHAR(512) NULL"))
                 if "purpose" not in cols:
                     conn.execute(text("ALTER TABLE document ADD COLUMN purpose VARCHAR(16) NULL"))
+        # generated_case.folder_path / purpose：问答对库目录结构（与 document 同构）
+        if "generated_case" in inspector.get_table_names():
+            gcols = {c["name"] for c in inspector.get_columns("generated_case")}
+            with engine.begin() as conn:
+                if "folder_path" not in gcols:
+                    conn.execute(text("ALTER TABLE generated_case ADD COLUMN folder_path VARCHAR(512) NULL"))
+                if "purpose" not in gcols:
+                    conn.execute(text("ALTER TABLE generated_case ADD COLUMN purpose VARCHAR(16) NULL"))
         # eiu.document_id：冗余存储归属文件，使 EIU 可按文件目录组织（去掉 corpus 维度）
         if "eiu" in inspector.get_table_names():
             eiu_cols = {c["name"] for c in inspector.get_columns("eiu")}
@@ -714,6 +722,13 @@ class DatabaseService:
                     doc.folder_path = tp
                 elif dfp.startswith(fp + "/"):
                     doc.folder_path = tp + dfp[len(fp):]
+            # 同构：问答对库（generated_case）folder_path 也随目录变更重写
+            for gc in session.query(GeneratedCaseRow).all():
+                gfp = gc.folder_path or ""
+                if gfp == fp:
+                    gc.folder_path = tp
+                elif gfp.startswith(fp + "/"):
+                    gc.folder_path = tp + gfp[len(fp):]
             session.commit()
             return {
                 "folder_id": row.folder_id,
@@ -723,8 +738,14 @@ class DatabaseService:
             }
 
     def delete_folder(self, *, owner: str | None, path: str) -> dict:
-        """删除文件夹（递归子孙）：其下文档 folder_path 上移到被删文件夹的父目录，
-        不丢失文档；再物理删除文件夹行。"""
+        """删除文件夹（递归子孙）。
+
+        - 文档（DocumentRow）：上移到父目录（仅调整 folder_path，不丢文档，
+          文档的物理删除由 DELETE /api/documents/{id} 单独负责）。
+        - 问答对（GeneratedCaseRow）：本文件夹及子孙目录下归属的问答对**一并物理删除**
+          （与「删除文档会连带删除其问答对」的语义保持一致：文件夹在问答对库中是数据容器）。
+        - 最后物理删除文件夹行本身。
+        """
         fp = self._normalize_path(path)
         if not fp:
             raise ValueError("文件夹路径不能为空")
@@ -742,7 +763,7 @@ class DatabaseService:
                     collect(c.folder_id)
 
             collect(row.folder_id)
-            # 文档上移到父目录：去掉被删文件夹前缀段
+            # 文档上移到父目录：去掉被删文件夹前缀段（不丢文档）
             for doc in session.query(DocumentRow).all():
                 dfp = doc.folder_path or ""
                 if dfp == fp:
@@ -751,11 +772,20 @@ class DatabaseService:
                     doc.folder_path = (
                         (parent_path + "/" + dfp[len(fp) + 1:]) if parent_path else dfp[len(fp) + 1:]
                     )
+            # 问答对：本目录及子孙目录下归属的问答对一并物理删除
+            deleted_cases = (
+                session.query(GeneratedCaseRow)
+                .filter(
+                    (GeneratedCaseRow.folder_path == fp)
+                    | (GeneratedCaseRow.folder_path.like(fp + "/%"))
+                )
+                .delete(synchronize_session=False)
+            )
             session.query(FolderRow).filter(FolderRow.folder_id.in_(ids)).delete(
                 synchronize_session=False
             )
             session.commit()
-            return {"deleted_folders": len(ids), "document_ids_kept": True}
+            return {"deleted_folders": len(ids), "deleted_cases": deleted_cases}
 
     def get_document_blocks(self, document_id: int) -> list[dict]:
         with SessionLocal() as session:
@@ -1374,11 +1404,14 @@ class DatabaseService:
         content_priority: str = "P2",
         review_status: str = "candidate",
         statement_norm: str | None = None,
+        folder_path: str | None = None,
+        purpose: str | None = None,
     ) -> dict:
         """保存一条 m03 生成的评测样本（按文档维度组织）。
 
         statement_norm: 源 EIU statement 的归一化值（跨文件复用匹配键）。
         不传时留空（旧调用兼容）；调用方应在生成/复用落库时显式传入。
+        folder_path / purpose：问答对库目录归属，默认继承源文档目录与用途。
         """
         with SessionLocal() as session:
             row = GeneratedCaseRow(
@@ -1396,6 +1429,8 @@ class DatabaseService:
                 content_priority=content_priority,
                 review_status=review_status,
                 statement_norm=statement_norm,
+                folder_path=folder_path,
+                purpose=purpose,
             )
             session.add(row)
             session.commit()
@@ -1494,12 +1529,18 @@ class DatabaseService:
         question_type: str | None = None,
         difficulty: str | None = None,
         status: str | None = None,
+        folder_path: str | None = None,
+        purpose: str | None = None,
     ) -> list[dict]:
-        """查询 m03 生成的评测样本；默认排除 retired。按 document（文件目录维度）过滤。"""
+        """查询 m03 生成的评测样本；默认排除 retired。按 document / 目录 / 用途过滤。"""
         with SessionLocal() as session:
             query = session.query(GeneratedCaseRow)
             if document_id is not None:
                 query = query.filter(GeneratedCaseRow.document_id == document_id)
+            if folder_path is not None:
+                query = query.filter(GeneratedCaseRow.folder_path == folder_path)
+            if purpose is not None:
+                query = query.filter(GeneratedCaseRow.purpose == purpose)
             if priority is not None:
                 query = query.filter(GeneratedCaseRow.content_priority == priority)
             if question_type is not None:
@@ -1533,8 +1574,10 @@ class DatabaseService:
         content_priority: str | None = None,
         review_status: str | None = None,
         review_tag: str | None = None,
+        folder_path: str | None = None,
+        purpose: str | None = None,
     ) -> dict | None:
-        """更新单条 m03 评测样本（含 m04 状态机字段）。"""
+        """更新单条 m03 评测样本（含 m04 状态机字段与目录归属）。"""
         with SessionLocal() as session:
             row = session.get(GeneratedCaseRow, case_id)
             if not row:
@@ -1559,6 +1602,10 @@ class DatabaseService:
                 row.review_status = review_status
             if review_tag is not None:
                 row.review_tag = review_tag
+            if folder_path is not None:
+                row.folder_path = folder_path
+            if purpose is not None:
+                row.purpose = purpose
             session.commit()
             session.refresh(row)
             return self._generated_case_to_dict(row)
@@ -1670,6 +1717,8 @@ class DatabaseService:
             "acceptable_answers": row.acceptable_answers,
             "evidence": row.evidence,
             "content_priority": row.content_priority,
+            "folder_path": row.folder_path,
+            "purpose": row.purpose,
             "review_status": row.review_status,
             "review_tag": row.review_tag,
             "statement_norm": row.statement_norm,
@@ -1696,6 +1745,10 @@ class GeneratedCaseRow(Base):
     acceptable_answers: Mapped[list | None] = mapped_column(JSON, nullable=True)
     evidence: Mapped[list | None] = mapped_column(JSON, nullable=True)
     content_priority: Mapped[str] = mapped_column(String(8), nullable=False)
+    # 目录结构：相对「问答对库」根路径（如「基础问题/子A」），根目录为空
+    folder_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    # 业务用途：basic=基础问题，gen=泛化问题；与 document.purpose 同语义
+    purpose: Mapped[str | None] = mapped_column(String(16), nullable=True)
     review_status: Mapped[str] = mapped_column(
         String(64), nullable=False, default="candidate"
     )

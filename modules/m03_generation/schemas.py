@@ -83,6 +83,10 @@ class CaseOut(BaseModel):
     evidence: list[dict] | None = None
     content_priority: str
     review_status: str
+    # 问答对库目录归属（与输入文档库同构）：folder_path 相对「问答对库」根，
+    # purpose=basic 归「基础问题」系统目录，gen 归「泛化问题」系统目录。
+    folder_path: str | None = None
+    purpose: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
 
