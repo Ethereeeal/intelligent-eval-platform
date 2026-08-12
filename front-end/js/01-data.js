@@ -84,8 +84,8 @@
      后端 demo 未实现的字段（文档全文预览 preview、版本记录 versions、人工复核 review、泛化问题 gen 来源）
      一律留空（空数组/空串），由原有 UI 的空态逻辑自然呈现，不编造数据。 */
 
-  // 后端基础地址（demo 后端运行在 8000 端口；如需跨机访问可改为对应 IP）
-  const API_BASE = (location.port === "8000") ? "" : "http://localhost:8000";
+  // 后端基础地址：studio nginx 已对 /api/ 做反向代理到 backend，前后端同源（均走 8080），无需跨域
+  const API_BASE = "";
   // 当前用户：无真实登录体系，统一为 web（与上传 upload_user 一致）；
   // 文件夹按 owner 记录归属，为后续真实账号隔离预留
   const CURRENT_USER = "web";

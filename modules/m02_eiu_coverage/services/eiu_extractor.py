@@ -414,7 +414,7 @@ class EiuExtractorService:
             else:
                 block_error = None
             # 语义去重：与本次已插入的知识点比对，同义（措辞不同但同义）者标记排除
-            items = self._dedup_semantic(items, _sem_vecs)
+            items = _dedup_semantic(items, _sem_vecs)
             if items:
                 inserted += len(self.database.save_eius(items=items))
                 # 记录已插入可出题 EIU 的归一化 statement 向量，供后续块比对

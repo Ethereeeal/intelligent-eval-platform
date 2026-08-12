@@ -348,7 +348,7 @@ class DatabaseService:
                     conn.execute(text("DROP TABLE corpus"))
             except Exception:
                 pass
-        for tbl in ("doc_update_job", "chat_session", "dataset_version", "coverage_report"):
+        for tbl in ("generated_case", "doc_update_job", "chat_session", "dataset_version", "coverage_report"):
             if tbl in inspector.get_table_names():
                 tcols = {c["name"] for c in inspector.get_columns(tbl)}
                 if "corpus_id" in tcols:
