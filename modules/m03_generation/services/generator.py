@@ -10,22 +10,15 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from typing import Any
 
-from modules.m01_data_foundation.services.embedding import EmbeddingService
-from modules.m01_data_foundation.services.indexer import (
-    FaissIndexService,
-    IndexedItem,
-)
 from modules.m03_generation.models import BlockEvidence, GeneratedCase
 from modules.m03_generation.services.llm_service import LLMService
 from modules.m03_generation.services.prompts import (
     CONTEXT_WINDOW,
     EIU_TYPE_TO_QUESTION_TYPE,
     MAX_CONTEXT_BLOCKS,
-    SEMANTIC_TOP_K,
     build_qa_prompt,
 )
 from modules.shared.core.config import settings
@@ -35,9 +28,6 @@ from modules.shared.services.database import (
     normalize_statement,
 )
 
-# 语义复用阈值：余弦相似度 ≥ 该值视为"同一知识点"，复用历史问答对
-SEMANTIC_REUSE_THRESHOLD = float(os.getenv("SEMANTIC_REUSE_THRESHOLD", "0.92"))
-
 logger = get_logger(__name__)
 
 
@@ -45,9 +35,6 @@ class CaseGenerator:
     def __init__(self) -> None:
         self.database = DatabaseService()
         self.llm = LLMService()
-        # 语义检索能力：无本地模型且离线时优雅降级为纯位置窗口
-        self._embedder = EmbeddingService()
-        self._index_cache: dict[int, FaissIndexService | None] = {}
 
     # ------------------------------------------------------------------
     # 对外入口：单 EIU 生成一道题
@@ -66,16 +53,6 @@ class CaseGenerator:
         """
         if not eiu.get("is_questionable", True):
             raise ValueError(f"EIU {eiu['eiu_id']} 不可出题：{eiu.get('exclusion_reason')}")
-
-        # 0. 两级复用（省 LLM）：①归一化精确匹配 ②BGE 语义相似匹配
-        reused = self._try_reuse(eiu)
-        if reused is not None:
-            logger.info(
-                "EIU %s 命中复用（%s），跳过 LLM 生成",
-                eiu["eiu_id"],
-                reused["_reuse_kind"],
-            )
-            return reused["case"]
 
         # 1. 定位原文证据 Block 与动态筛选的上下文
         block = block or self._resolve_source_block(eiu)
@@ -159,51 +136,6 @@ class CaseGenerator:
         )
 
     # ------------------------------------------------------------------
-    # 两级复用：精确（哈希归一化）→ 语义（BGE 余弦），均命中则跳过 LLM
-    # ------------------------------------------------------------------
-    def _try_reuse(self, eiu: dict[str, Any]) -> dict | None:
-        """尝试复用历史生成的问答对。命中返回 {"case": GeneratedCase, "_reuse_kind": str}。"""
-        statement = eiu.get("statement", "")
-        norm = normalize_statement(statement)
-
-        # ① 精确复用：归一化 statement 完全一致
-        exact = self.database.find_cases_by_statement(norm)
-        if exact:
-            src = exact[0]
-            case = self._case_from_reused(src, eiu, norm)
-            return {"case": case, "_reuse_kind": "exact"}
-
-        # ② 语义复用：BGE 余弦相似度 ≥ 阈值（措辞不同但同义）
-        similar = self.database.find_similar_cases(statement, SEMANTIC_REUSE_THRESHOLD)
-        if similar:
-            src = similar[0]
-            case = self._case_from_reused(src, eiu, norm)
-            case.statement_norm = norm  # 仍用本次归一化键，便于后续精确匹配
-            return {"case": case, "_reuse_kind": f"semantic@{src.get('similarity')}"}
-
-        return None
-
-    @staticmethod
-    def _case_from_reused(src: dict, eiu: dict[str, Any], norm: str) -> GeneratedCase:
-        """将复用的历史 case 映射为本 EIU 的新 GeneratedCase（review_status=reused）。"""
-        return GeneratedCase(
-            intent_id=f"intent_{eiu['eiu_id']}_reused",
-            eiu_id=eiu["eiu_id"],
-            document_id=eiu["document_id"],
-            question=src.get("question", ""),
-            question_type=src.get("question_type", "rule"),
-            difficulty=src.get("difficulty", "L1"),
-            scope_type=src.get("scope_type", "single_segment"),
-            gold_answer=src.get("gold_answer", ""),
-            must_have_points=src.get("must_have_points") or [eiu.get("statement", "")],
-            acceptable_answers=src.get("acceptable_answers") or [],
-            evidence=src.get("evidence") or [],
-            content_priority=eiu.get("content_priority", "P2"),
-            review_status="reused",
-            statement_norm=norm,
-        )
-
-    # ------------------------------------------------------------------
     # 原文定位与上下文
     # ------------------------------------------------------------------
     def _resolve_source_block(self, eiu: dict[str, Any]) -> dict[str, Any]:
@@ -219,14 +151,12 @@ class CaseGenerator:
     def _resolve_context(
         self, eiu: dict[str, Any], block: dict[str, Any]
     ) -> list[dict[str, Any]]:
-        """动态筛选上下文：语义召回（按 EIU 内容相关性）+ 位置兜底（同章节相邻块）。
+        """筛选上下文：仅用位置窗口（源块前后各 CONTEXT_WINDOW 个相邻块）。
 
-        较原固定窗口（前后各 1 块）更贴合"AI 在该任务下应看到什么信息"：
-        - 语义召回：以 EIU statement + constraints 为 query，对该文档块向量索引检索
-          Top-K 最相关块（与题目主题相关，未必物理相邻）；
-        - 位置兜底：保留源块前后 CONTEXT_WINDOW 个相邻块（术语延续性）；
-        - 预算裁剪：合并去重后按相关性优先、位置其次截断到 MAX_CONTEXT_BLOCKS。
-        embedding 向量取自 DB 存量，仅 query 侧编码一次；检索不可用时降级为纯位置窗口。
+        P0 改造：移除块向量语义召回（_build_document_index）。理由：
+          - 单 EIU 出题只需「源块 + 相邻块」处理术语延续/指代，无需语义相近但
+            不相邻的块（会引入干扰证据，且块向量层属冗余）。
+          - 跨块题将走 EIU 向量 + 类型关系（后续），不在块层做。
         """
         document_id = eiu["document_id"]
         block_id = block["block_id"]
@@ -234,7 +164,6 @@ class CaseGenerator:
         by_id = {b["block_id"]: b for b in blocks}
         ordered = sorted(blocks, key=lambda b: b.get("block_id") or 0)
 
-        # 1) 位置兜底：源块前后各 CONTEXT_WINDOW 个相邻块
         pos_index = next(
             (i for i, b in enumerate(ordered) if b["block_id"] == block_id), None
         )
@@ -247,75 +176,12 @@ class CaseGenerator:
                 if ordered[i]["block_id"] != block_id:
                     neighbor_ids.add(ordered[i]["block_id"])
 
-        # 2) 语义召回：以 EIU 内容为 query 检索最相关块
-        semantic_ids: list[tuple[int, float]] = []
-        index = self._build_document_index(document_id)
-        if index is not None:
-            try:
-                query_text = eiu.get("statement", "")
-                constraints = eiu.get("constraints_json")
-                if isinstance(constraints, dict):
-                    constraints = " ".join(str(v) for v in constraints.values() if v)
-                if constraints:
-                    query_text = f"{query_text} {constraints}"
-                (qvec,) = self._embedder.embed_texts([query_text], is_query=True)
-                hits = index.search(qvec, top_k=SEMANTIC_TOP_K + len(neighbor_ids))
-                for hit in hits:
-                    hid = hit["block_id"]
-                    if hid != block_id:
-                        semantic_ids.append((hid, float(hit.get("score", 0.0))))
-            except Exception as exc:  # noqa: BLE001 — 降级但不静默，需排查离线/编码根因
-                logger.warning("语义检索降级为位置窗口（EIU id=%s）: %s", eiu.get("id"), exc)
-                # 无模型/离线/编码失败：降级为纯位置窗口，不阻塞生成
-                semantic_ids = []
-
-        # 3) 合并去重 + 预算裁剪：语义优先，位置兜底其次
-        ranked: list[tuple[int, float]] = []
-        seen: set[int] = set()
-        for hid, score in semantic_ids:
-            if hid not in seen:
-                ranked.append((hid, score))
-                seen.add(hid)
-        for nid in neighbor_ids:
-            if nid not in seen:
-                ranked.append((nid, 0.0))  # 位置兜底排在语义块之后
-                seen.add(nid)
-
-        selected = ranked[:MAX_CONTEXT_BLOCKS]
         context_blocks = []
-        for bid, _score in selected:
-            blk = by_id.get(bid)
+        for nid in list(neighbor_ids)[:MAX_CONTEXT_BLOCKS]:
+            blk = by_id.get(nid)
             if blk:
                 context_blocks.append(blk)
         return context_blocks
-
-    def _build_document_index(
-        self, document_id: int
-    ) -> FaissIndexService | None:
-        """构建（并缓存）该文档的块向量语义索引；无向量时返回 None。"""
-        if document_id in self._index_cache:
-            return self._index_cache[document_id]
-        blocks = self.database.get_document_blocks(document_id)
-        items: list[IndexedItem] = []
-        for b in blocks:
-            vec = b.get("embedding_vector")
-            if vec and isinstance(vec, list) and len(vec) > 0:
-                items.append(
-                    IndexedItem(
-                        block_id=b["block_id"],
-                        vector=vec,
-                        document_id=document_id,
-                        section_path=b.get("section_path", ""),
-                        source_text=b.get("block_text", ""),
-                    )
-                )
-        if not items:
-            self._index_cache[document_id] = None
-            return None
-        svc = FaissIndexService(dimension=len(items[0].vector))
-        svc.add(items)
-        self._index_cache[document_id] = svc
-        return svc
 
     # ------------------------------------------------------------------
     # LLM 调用与解析

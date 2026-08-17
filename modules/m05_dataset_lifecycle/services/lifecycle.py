@@ -50,7 +50,7 @@ class DatasetLifecycleService:
     # ------------------------------------------------------------------
     # 无问题判定（FR-DS-EMPTY）
     # ------------------------------------------------------------------
-    def _empty_reason(self) -> str | None:
+    def _empty_reason(self, document_ids: list[int] | None = None) -> str | None:
         """返回 None 表示可生成；否则返回"无问题"原因（不发布空集）。"""
         eius = self.db.list_eius(include_blocked=False)
         if not eius:
@@ -59,21 +59,32 @@ class DatasetLifecycleService:
         if not questionable:
             return "全部 EIU 均标记为不可出题（is_questionable=false），无未处理文段"
         # 有可出题 EIU，再确认 m03 是否产出可纳入样本
-        cases = self._publishable_cases()
+        cases = self._publishable_cases(document_ids=document_ids)
         if not cases:
             return "有可出题 EIU，但尚无通过质量门禁的生成样本（请先跑 m03 生成 + m04 校验）"
         return None
 
-    def _publishable_cases(self) -> list[dict]:
-        """取 m03 生成、且 m04 审核达到可发布态的 generated_case。"""
+    def _publishable_cases(self, document_ids: list[int] | None = None) -> list[dict]:
+        """取 m03 生成、且 m04 审核达到可发布态的 generated_case。
+
+        document_ids 非空时仅返回所选文档的可发布 case（评测集按选择合并）。
+        """
         all_cases = self.db.list_generated_cases()
+        if document_ids:
+            doc_set = set(document_ids)
+            all_cases = [c for c in all_cases if c.get("document_id") in doc_set]
         return [c for c in all_cases if c.get("review_status") in PUBLISHABLE_STATUSES]
 
     # ------------------------------------------------------------------
     # 版本冻结
     # ------------------------------------------------------------------
-    def freeze_version(self, *, created_by: str | None = None) -> dict:
-        reason = self._empty_reason()
+    def freeze_version(
+        self,
+        *,
+        created_by: str | None = None,
+        document_ids: list[int] | None = None,
+    ) -> dict:
+        reason = self._empty_reason(document_ids=document_ids)
         if reason:
             # 不创建空集、不进入发布流程（FR-DS-EMPTY-002）
             raise ValueError(f"无问题可生成：{reason}")
@@ -101,15 +112,24 @@ class DatasetLifecycleService:
             split_config={"format": "full", "include_retired": False},
             snapshot_metadata=snapshot_metadata,
         )
-        # 把通过门禁的 generated_case 快照为不可变 eval_case 副本
-        case_count = self._snapshot_cases(version_id=version_id)
+        # 把通过门禁的 generated_case 快照为不可变 eval_case 副本（按选择合并 + 精确去重）
+        case_count = self._snapshot_cases(version_id=version_id, document_ids=document_ids)
         self.db.update_dataset_version(version_id, case_count=case_count, freeze=True)
         return self.db.get_dataset_version(version_id)
 
-    def _snapshot_cases(self, *, version_id: int) -> int:
-        """将可发布态的 generated_case 复制为 eval_case 快照（冻结后不可变）。"""
+    def _snapshot_cases(
+        self, *, version_id: int, document_ids: list[int] | None = None
+    ) -> int:
+        """将可发布态的 generated_case 复制为 eval_case 快照（冻结后不可变）。
+
+        冻结时自动做精确去重：按归一化 question 哈希去掉"一模一样"的问题
+        （前端按选择合并评测集时，跨文档/跨来源的重复题在此清理）。
+        document_ids 非空时仅快照所选文档的可发布 case。
+        """
+        cases = self._publishable_cases(document_ids=document_ids)
+        dedup = self.db.dedup_exact_cases(cases)
         count = 0
-        for case in self._publishable_cases():
+        for case in dedup["keep"]:
             self.db.save_eval_case(
                 version_id=version_id,
                 case_uid=f"case_{version_id:04d}_{case['case_id']:06d}",

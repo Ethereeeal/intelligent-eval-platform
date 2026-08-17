@@ -15,9 +15,12 @@ _service = DatasetLifecycleService(DatabaseService())
 # 版本
 # ----------------------------------------------------------------------
 @router.post("/freeze")
-def freeze_version(created_by: str | None = None):
+def freeze_version(
+    created_by: str | None = None,
+    document_ids: list[int] | None = Query(default=None, description="按选择合并：仅冻结所选文档的可发布评测项，并在合并时精确去重。"),
+):
     try:
-        return _service.freeze_version(created_by=created_by)
+        return _service.freeze_version(created_by=created_by, document_ids=document_ids)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

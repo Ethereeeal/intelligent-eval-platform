@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any
 
+from modules.m01_data_foundation.services.eiu_indexer import EiuFaissIndex
 from modules.m02_eiu_coverage.services.llm_client import LLMClient, LLMError
 from modules.shared.services.database import EIU_TYPES, PRIORITY_WEIGHT, DatabaseService
 
@@ -275,11 +277,16 @@ def _encode_one(text: str) -> list[float] | None:
         return None
 
 
-def _dedup_semantic(items: list[dict], seen: list[tuple[str, list[float]]]) -> list[dict]:
+def _dedup_semantic(
+    items: list[dict],
+    seen: list[tuple[str, list[float]]],
+    faiss_idx: Any | None = None,
+) -> list[dict]:
     """对一批抽出的 EIU 做语义去重（跨 Block 同义合并）。
 
     - 精确层：归一化 statement 与已插入者完全一致 → 重复；
-    - 语义层：BGE 余弦相似度 ≥ SEMANTIC_DEDUP_THRESHOLD → 同义重复；
+    - 语义层：BGE 余弦相似度 ≥ SEMANTIC_DEDUP_THRESHOLD → 同义重复。
+      faiss_idx 传入时用 FAISS 检索判重（EIU 向量索引）；否则回退线性扫描。
     重复者不入库，改为 is_questionable=False + 排除原因，仍计入对账率。
     无本地 BGE 模型时仅做精确去重，不阻断主流程。
     """
@@ -293,17 +300,26 @@ def _dedup_semantic(items: list[dict], seen: list[tuple[str, list[float]]]) -> l
         stmt = (it.get("statement") or "").strip()
         k = _norm(stmt)
         dup = False
-        for seen_k, seen_vec in seen:
+        # 精确层：归一化 key 一致
+        for seen_k, _seen_vec in seen:
             if seen_k == k:
                 dup = True
                 break
-            if seen_vec is not None:
-                vec = _encode_one(stmt)
-                if vec is not None:
-                    sim = sum(a * b for a, b in zip(vec, seen_vec))
-                    if sim >= SEMANTIC_DEDUP_THRESHOLD:
+        # 语义层：FAISS 检索（或线性）余弦 ≥ 阈值
+        if not dup:
+            vec = _encode_one(stmt)
+            if vec is not None:
+                if faiss_idx is not None and faiss_idx.search_by_vector:
+                    hits = faiss_idx.search_by_vector(vec, top_k=1)
+                    if hits and hits[0].get("score", 0.0) >= SEMANTIC_DEDUP_THRESHOLD:
                         dup = True
-                        break
+                else:
+                    for _seen_k, seen_vec in seen:
+                        if seen_vec is not None:
+                            sim = sum(a * b for a, b in zip(vec, seen_vec))
+                            if sim >= SEMANTIC_DEDUP_THRESHOLD:
+                                dup = True
+                                break
         if dup:
             it = dict(it)
             it["is_questionable"] = False
@@ -405,6 +421,8 @@ class EiuExtractorService:
         inserted = 0
         excluded = 0
         _sem_vecs: list[tuple[str, list[float]]] = []  # 已插入 EIU 的 (归一化statement, 向量)
+        # P1：EIU 向量 FAISS 索引，语义去重用（与 _sem_vecs 精确层互补）
+        _faiss_idx = EiuFaissIndex()
         for index, block in enumerate(substantive, start=1):
             try:
                 items = self._extract_block(block, document_map[block["document_id"]], neighbors[block["block_id"]])
@@ -413,16 +431,24 @@ class EiuExtractorService:
                 block_error = f"抽取失败: {str(exc)[:60]}"
             else:
                 block_error = None
-            # 语义去重：与本次已插入的知识点比对，同义（措辞不同但同义）者标记排除
-            items = _dedup_semantic(items, _sem_vecs)
+            # 语义去重：精确层（归一化 key）+ 语义层（FAISS 检索），同义者标记排除
+            items = _dedup_semantic(items, _sem_vecs, _faiss_idx)
             if items:
+                # P0：EIU 为核心实体，抽取时写入 statement 向量，落库供复用/跨块检索
+                for it in items:
+                    if it.get("is_questionable"):
+                        stmt = (it.get("statement") or "").strip()
+                        if stmt:
+                            it["embedding_vector"] = _encode_one(stmt)
                 inserted += len(self.database.save_eius(items=items))
-                # 记录已插入可出题 EIU 的归一化 statement 向量，供后续块比对
+                # 记录已插入可出题 EIU 的归一化 statement 向量，供后续块比对（精确层）
                 for it in items:
                     if it.get("is_questionable"):
                         stmt = (it.get("statement") or "").strip()
                         if stmt:
                             _sem_vecs.append((_norm(stmt), _encode_one(stmt)))
+                # 增量加入 FAISS 索引（语义层）
+                _faiss_idx.add_items([it for it in items if it.get("embedding_vector")])
             else:
                 self.database.save_eius(
                     items=[exclusion_item(block, block_error or "段落无实质内容，未抽取到 EIU")],

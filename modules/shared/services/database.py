@@ -58,6 +58,28 @@ def normalize_statement(text: str) -> str:
     return text.lower()
 
 
+def normalize_question(text: str) -> str:
+    """归一化问句为查重 key（精确查重）。
+
+    只去「不影响同一问题判定的」噪声，保留实质内容：
+      - 统一全半角（中文全角 ，。？ 与半角 ,.? 视为同一）
+      - 去掉所有空白（空格/换行）
+      - 去掉尾部标点（？。！？;；等）
+      - 统一小写
+    不归一数字/同义词——保证只抓"一模一样（去除格式差异后相同）"的问题，
+    不误伤相似但不同的问题。
+    """
+    if not text:
+        return ""
+    # 去所有空白（空格/换行/全角空格）
+    text = re.sub(r"\s+", "", text)
+    # 去所有中英文标点（中文问句中逗号/句号/问号等不改变实质语义）；
+    # 保留 % 与 ％（数值的一部分，如 70% vs 70 不应视为同一）
+    text = re.sub(r"[，。？、；：,\.\?!;:\"'“”‘’（）()【】\[\]·…—\-_/\\~`@#$^&*+=<>|]", "", text)
+    text = text.replace("％", "%")  # 全角百分号统一为半角，仍是数值一部分
+    return text.lower()
+
+
 class Base(DeclarativeBase):
     pass
 
@@ -146,6 +168,8 @@ class EiuRow(Base):
     extraction_model: Mapped[str | None] = mapped_column(String(64), nullable=True)
     extraction_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     review_status: Mapped[str] = mapped_column(String(32), nullable=False, default="candidate")
+    # EIU 级向量（P0：EIU 为核心实体；用于语义去重/复用/未来跨块检索）
+    embedding_vector: Mapped[list | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -326,6 +350,9 @@ class DatabaseService:
             with engine.begin() as conn:
                 if "document_id" not in eiu_cols:
                     conn.execute(text("ALTER TABLE eiu ADD COLUMN document_id INTEGER NULL"))
+                # eiu.embedding_vector：EIU 级向量（P0 改造，EIU 为核心实体，支持去重/复用/跨块检索）
+                if "embedding_vector" not in eiu_cols:
+                    conn.execute(text("ALTER TABLE eiu ADD COLUMN embedding_vector JSON NULL"))
                 # 回填历史 EIU：经 block_id -> document_id 反查（仅更新尚未回填的）
                 # 使用跨数据库兼容的子查询写法（MySQL JOIN UPDATE 在 SQLite 下不支持）
                 conn.execute(
@@ -893,6 +920,7 @@ class DatabaseService:
             "extraction_model": eiu.extraction_model,
             "extraction_confidence": eiu.extraction_confidence,
             "review_status": eiu.review_status,
+            "embedding_vector": eiu.embedding_vector,
             "created_at": eiu.created_at.isoformat() if eiu.created_at else None,
         }
 
@@ -937,6 +965,7 @@ class DatabaseService:
                     extraction_model=item.get("extraction_model"),
                     extraction_confidence=item.get("extraction_confidence"),
                     review_status=item.get("review_status", "candidate"),
+                    embedding_vector=item.get("embedding_vector"),
                 )
                 session.add(row)
                 rows.append(row)
@@ -1520,6 +1549,34 @@ class DatabaseService:
             best = dict(best)
             best["similarity"] = round(best_score, 4)
         return [best] if best else []
+
+    def dedup_exact_cases(self, cases: list[dict]) -> dict:
+        """精确查重：按归一化 question 哈希，去掉「一模一样」的问题。
+
+        与 find_similar_cases（语义）不同，本方法只抓"去除格式差异后完全相同"的
+        问题（空格/全半角/尾部标点/大小写不同视为同一题），不误伤相似但不同的问题。
+
+        返回：
+          keep: 保留的 case（同 key 只留第一个）
+          duplicate: 被判定为重复的 case（含 reason）
+        """
+        seen: dict[str, int] = {}  # norm_key -> 保留的 case index
+        keep: list[dict] = []
+        duplicate: list[dict] = []
+        for case in cases:
+            q = (case.get("question") or "").strip()
+            key = normalize_question(q) if q else ""
+            if not key:
+                keep.append(case)
+                continue
+            if key in seen:
+                dup = dict(case)
+                dup["duplicate_reason"] = "问题与已有评测项重复（归一化一致）"
+                duplicate.append(dup)
+            else:
+                seen[key] = len(keep)
+                keep.append(case)
+        return {"keep": keep, "duplicate": duplicate}
 
     def list_generated_cases(
         self,

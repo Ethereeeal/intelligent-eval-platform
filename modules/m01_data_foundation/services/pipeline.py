@@ -1,14 +1,10 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 from pathlib import Path
 
-import numpy as np
-
 from modules.m01_data_foundation.services.embedding import EmbeddingService
-from modules.m01_data_foundation.services.indexer import FaissIndexService, IndexedItem
 from modules.m01_data_foundation.services.parser import DocumentParser
 from modules.m01_data_foundation.services.storage import StorageService
 from modules.shared.core.config import settings
@@ -27,12 +23,9 @@ class PipelineService:
     def __init__(self) -> None:
         self.database = DatabaseService()
         self.embedding = EmbeddingService()
-        self.indexer = FaissIndexService(dimension=512)
         self.parser = DocumentParser()
         self.storage = StorageService()
-        self._state_path = settings.state_file
         self._ensure_storage()
-        self.load_index()
 
     # ------------------------------------------------------------------
     # 文档接入
@@ -90,17 +83,14 @@ class PipelineService:
             blocks = self.parser.parse_document(parse_path, suffix)
             indexed = self.embed_blocks(blocks)
             block_ids = self.database.save_blocks(document_id=document_id, blocks=indexed)
-            self.indexer.add(self._to_indexed(indexed, block_ids, document_id))
+            # P0：块不再构建 FAISS 索引，块向量已废弃，仅保留块作定位分片
             self.database.update_document(document_id, parse_status="completed")
-            self._save_index()
             return {"document_id": document_id, "duplicate": False, "blocks": len(block_ids)}
         except Exception as exc:  # 解析/入库失败：整体回滚，不在库里留下残句，避免重新上传误判
             logger.warning("文档 %s 接入失败，执行回滚清理: %s", document_id, exc)
             try:
-                self.indexer.remove_by_document(document_id)
                 self.database.delete_document(document_id)
                 self.storage.delete_raw_document(minio_path)
-                self._save_index()
             except Exception as cleanup_exc:
                 logger.error("回滚清理失败 document=%s: %s", document_id, cleanup_exc)
             raise
@@ -140,12 +130,9 @@ class PipelineService:
             upload_user=upload_user,
         )
         new_document_id = result["document_id"]
-        # 旧文档向量从内存索引移除，并物理删除旧文档（块 + 知识点 + 落盘文件）
-        self.indexer.remove_by_document(old_document_id)
+        # P0：块向量索引已废弃，仅物理删除旧文档（块 + 知识点 + 落盘文件）
         self.database.delete_document(old_document_id)
         self.storage.delete_raw_document(old_minio_path)
-        # 重写索引落盘，确保被删除的旧文档向量不再持久化（释放空间、避免脏数据）
-        self._save_index()
         self.database.update_job(
             job_id,
             status="completed",
@@ -172,7 +159,7 @@ class PipelineService:
         return self.database.get_job(job_id)
 
     def delete_document(self, document_id: int) -> None:
-        """彻底删除一个文档：向量索引移除 + 库表清理 + 落盘文件清理 + 索引落盘。
+        """彻底删除一个文档：库表清理 + 落盘文件清理。
 
         与 reupload 的回滚清理逻辑一致，但此处不创建新文档。
         """
@@ -180,10 +167,8 @@ class PipelineService:
         if existing is None:
             return
         minio_path = existing.get("minio_path")
-        self.indexer.remove_by_document(document_id)
         self.database.delete_document(document_id)
         self.storage.delete_raw_document(minio_path)
-        self._save_index()
 
     # ------------------------------------------------------------------
     # 内部工具
@@ -195,11 +180,14 @@ class PipelineService:
             raise ValueError(f"文件大小 {len(content)} 超过上限 {settings.max_file_size} 字节")
 
     def embed_blocks(self, blocks: list) -> list[dict]:
-        vectors = self.embedding.embed_texts([block.block_text for block in blocks])
+        """将解析出的块转为落库 dict。
+
+        P0 改造：块不再做 BGE 向量化。embedding 只针对 EIU（m02 抽取阶段），
+        块仅作为「定位分片」承载原文片段，消除冗余的块向量层。
+        embedding_vector 一律置 None，节省存储与上传耗时。
+        """
         result: list[dict] = []
-        for block, vector in zip(blocks, vectors, strict=True):
-            # 强制转为普通 list，避免 numpy ndarray 落入 JSON 列导致序列化失败
-            vec_list = np.asarray(vector, dtype="float32").tolist()
+        for block in blocks:
             result.append(
                 {
                     "section_path": block.section_path,
@@ -210,60 +198,11 @@ class PipelineService:
                     "start_offset": block.start_offset,
                     "end_offset": block.end_offset,
                     "metadata_json": block.metadata_json,
-                    "embedding_vector": vec_list,
+                    "embedding_vector": None,
                 }
             )
         return result
 
-    def _to_indexed(self, indexed: list[dict], block_ids: list[int], document_id: int) -> list[IndexedItem]:
-        items: list[IndexedItem] = []
-        for block_id, block in zip(block_ids, indexed, strict=True):
-            items.append(
-                IndexedItem(
-                    block_id=block_id,
-                    document_id=document_id,
-                    section_path=block["section_path"],
-                    vector=np.asarray(block["embedding_vector"], dtype="float32").tolist(),
-                    source_text=block["block_text"],
-                )
-            )
-        return items
-
     def _ensure_storage(self) -> None:
-        for directory in (settings.raw_dir, settings.parsed_dir, settings.index_dir):
+        for directory in (settings.raw_dir, settings.parsed_dir):
             directory.mkdir(parents=True, exist_ok=True)
-
-    def _save_index(self) -> None:
-        state = {
-            "items": [
-                {
-                    "block_id": item.block_id,
-                    "document_id": item.document_id,
-                    "section_path": item.section_path,
-                    "vector": np.asarray(item.vector, dtype="float32").tolist(),
-                    "source_text": item.source_text,
-                }
-                for item in self.indexer._items
-            ]
-        }
-        self._state_path.write_text(json.dumps(state, ensure_ascii=False), encoding="utf-8")
-
-    def load_index(self) -> None:
-        if not self._state_path.exists():
-            return
-        try:
-            state = json.loads(self._state_path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
-            return
-        items = [
-            IndexedItem(
-                block_id=entry["block_id"],
-                document_id=entry["document_id"],
-                section_path=entry["section_path"],
-                vector=np.asarray(entry["vector"], dtype="float32"),
-                source_text=entry["source_text"],
-            )
-            for entry in state.get("items", [])
-        ]
-        if items:
-            self.indexer.add(items)
