@@ -1,6 +1,6 @@
 # 05 — 数据集生命周期：版本、编辑、导出、回流、无问题提示
 
-> 覆盖 BRD：8.10 评测集版本与数据划分 / 8.12 评测集事后编辑 / 8.13 目录架构浏览与导出 / 8.14 增量更新 / 8.15 泛化 / 8.16 评测集回流 / 8.17 无问题提示 / 8.22 三类评测集来源统一管理（BRD V1.3，预留）
+> 覆盖 BRD：8.10 评测集版本与数据划分 / 8.12 评测集事后编辑 / 8.13 目录架构浏览与导出 / 8.14 增量更新 / 8.15 泛化 / 8.16 评测集回流 / 8.17 无问题提示 / 8.22 三类评测集来源统一管理（已实现）
 > Demo 状态：必做（基础版本冻结 + 导出）；其余延后
 
 ---
@@ -76,18 +76,22 @@
 | FR-DS-EMPTY-003 | 后续：可追加文档 / 调整排除规则 → 重新触发解析→EIU→补题 → 产出含题新版本 |
 | FR-DS-EMPTY-004 | 门禁衔接：EIU>0 时覆盖率门禁生效；EIU=0 时不阻断（直接提示，不生成空集） |
 
-### 8.22 三类评测集来源统一管理（BRD V1.3，预留）
+### 8.22 三类评测集来源统一管理（BRD V1.3，已实现）
 
 | 需求编号 | 需求 | 当前状态 |
 |---|---|---|
-| FR-DS-SRC-001 | 直接上传评测集（单轮模板 `q/a/evidence/dimension`，`evidence` 不填标记"无证据样本"）→ 格式校验 → 质量评估 → 治理审核 → 入库 | 预留（m03 路径 2 上传问答对已落地单轮 `q/a/evidence` 种子，完整模板与入库流程未实现） |
-| FR-DS-SRC-002 | 多轮评测集模板（`session_id` + `turns[]`，`key_turn` 类型 `memory`/`coherence`，`depends_on_turns`，最终轮 `a` 必填） | 预留 |
-| FR-DS-SRC-003 | 评分口径（运行侧配置）：短答案规范化精确匹配；长答案语义相似度 + 固定校准集 | 预留（评分策略配置见 m03 §2.7） |
-| FR-DS-SRC-004 | 公共评测集库：组织方预置、用户只查看与选择使用、不开放共享入库；条目经质量评估与治理审核、版本化；维度体系可配置、暂不写死 | 预留 |
-| FR-DS-SRC-005 | Agent 评测前评测集组合选择：指定单个评测集 / 勾选公共库维度 / 多来源合并成临时标准化评测集 | 预留 |
-| FR-DS-SRC-006 | 无证据样本降级标注，不参与证据回溯率统计 | 预留 |
+| FR-DS-SRC-001 | 直接上传评测集（单轮模板 `q/a/evidence/dimension`，`evidence` 不填标记"无证据样本"）→ 格式校验 → 质量评估 → 入库 | 已实现（`services/uploaded_set.py` + POST /api/eval-sets/upload） |
+| FR-DS-SRC-002 | 多轮评测集模板（`session_id` + `turns[]`，`key_turn` 类型 `memory`/`coherence`，`depends_on_turns`，最终轮 `a` 必填） | 已实现字段校验；完整评分（memory/coherence）阶段 2 |
+| FR-DS-SRC-003 | 评分口径（运行侧配置）：短答案规范化精确匹配；长答案语义相似度 + 固定校准集 | 已实现（`services/scoring.py`，m08 评测时使用） |
+| FR-DS-SRC-004 | 公共评测集库：组织方预置、用户只查看与选择使用、不开放共享入库；条目经质量评估与治理审核、版本化；维度体系可配置、暂不写死 | 已实现（`services/public_set.py` + /api/public-sets、/api/dimensions） |
+| FR-DS-SRC-005 | Agent 评测前评测集组合选择：指定单个评测集 / 勾选公共库维度 / 多来源合并成临时标准化评测集 | 已实现（`services/composition.py` + /api/compositions） |
+| FR-DS-SRC-006 | 无证据样本降级标注，不参与证据回溯率统计 | 已实现（`no_evidence` 标记） |
 
 > **覆盖率适用范围（决策 3）**：EIU 覆盖率、85% 门禁与 P0 全覆盖仅适用于**文档生成评测集**；上传评测集与公共评测集库不产生 EIU、不参与覆盖率计算，只做质量评估与组合选择。
+
+> **治理审核说明（Demo 简化）**：上传评测集入库状态为 `quality_checked`（格式校验 + 质量评估通过）；
+> S0 治理审核（内容安全 / 隐私 / 证据核验）与"低分提示确认后发布"随 m04 治理审核 Skill 一起在后续版本落地，
+> Demo 阶段由前端在发布/组合前向用户提示质量评估结果确认。
 
 ---
 
@@ -216,9 +220,11 @@
 注：平台不重新评测、不做失败归因，重评由外部评测系统负责；详见 06。
 ```
 
-### 3.6 评测集组合选择与三类来源统一管理（BRD V1.3 §8.22，预留）
+### 3.6 评测集组合选择与三类来源统一管理（BRD V1.3 §8.22，已实现）
 
-Agent 评测前（自动运行阶段）用户可选择：指定单个评测集、勾选公共评测集库维度、或合并多来源（文档生成 / 上传 / 公共库）形成**临时标准化评测集**；组合结果作为评测运行配置记录、版本化并参与审计。当前 Demo 仅支持"文档生成评测集"单一来源的版本冻结与导出，上传评测集、公共评测集库与组合选择为后续版本（见 §8.22 预留表）。
+Agent 评测前（自动运行阶段）用户可选择：指定单个评测集、勾选公共评测集库维度、或合并多来源（文档生成 / 上传 / 公共库）形成**临时标准化评测集**；组合结果作为评测运行配置记录、版本化并参与审计。三类来源与组合选择均已实现（见 §8.22 表），组合解析结果直接作为 m08 EvaluationRun 的输入。
+
+实现：`services/composition.py` 提供 `create_composition`（组合校验 + 审计）与 `resolve_composition`（组合解析为统一运行输入，供 m08 EvaluationRun 消费）；来源支持 `doc_generated`（冻结版本 eval_case）/ `uploaded`（上传评测集）/ `public`（公共库），公共库可按维度勾选过滤。
 
 ---
 
@@ -367,6 +373,17 @@ GET /api/tree
 | GET | `/api/versions/{version_id}/stats` | 当前筛选下的聚合统计与分布（供可视化） |
 | PUT | `/api/cases/{case_id}` | 手动编辑样本（表格视图就地编辑复用） |
 | DELETE | `/api/cases/{case_id}` | 删除样本（标记 retired，保留审计） |
+| POST | `/api/eval-sets/upload` | 上传评测集（单轮/多轮）：格式校验 + 质量评估 + 入库 |
+| GET | `/api/eval-sets/uploaded` | 上传评测集列表 |
+| GET | `/api/eval-sets/uploaded/{set_id}` | 上传评测集详情（含样本） |
+| DELETE | `/api/eval-sets/uploaded/{set_id}` | 删除上传评测集（含样本） |
+| POST | `/api/public-sets` | 公共评测集库预置导入（组织方） |
+| GET | `/api/public-sets` / `/api/public-sets/{set_id}` | 公共库列表 / 详情 |
+| PUT/DELETE | `/api/public-sets/{set_id}` | 公共库更新 / 停用（版本化留痕） |
+| GET | `/api/dimensions` | 评测维度体系（可配置） |
+| POST | `/api/compositions` | 创建评测集组合（指定单个 / 勾选维度 / 多来源合并） |
+| GET | `/api/compositions` / `/api/compositions/{composition_id}` | 组合列表 / 详情（含解析样本） |
+| DELETE | `/api/compositions/{composition_id}` | 删除组合 |
 
 ---
 
@@ -379,6 +396,10 @@ GET /api/tree
 - [x] 基础手动编辑 API（PUT /api/cases/{case_id}）+ 删除（DELETE 标记 retired）
 - [x] 评测集表格视图：筛选/排序/聚合统计/就地编辑（GET cases + PUT cases 复用；前端网格待补）
 - [x] 参数可视化统计图：GET /api/versions/{version_id}/stats 已按维度聚合，前端图表待补
+- [x] 上传评测集（单轮/多轮模板校验 + 质量评估 + 入库，`uploaded_set.py`）
+- [x] 公共评测集库（预置导入 + 维度体系 + 版本化停用，`public_set.py`）
+- [x] 评测集组合选择（校验 + 审计 + 解析为统一运行输入，`composition.py`）
+- [x] 评分口径（短答案规范化精确匹配 / 长答案语义相似度，`scoring.py`）
 - [ ] （可选）编辑批次与版本草案（FR-DS-EDIT-003/004）
 - [x] 文档重传采用覆盖式整体作废 + 全量重算（见 §3.3 与 §8.14）；增量更新（FR-DS-INC）已废弃，不再实现
 - [ ] 泛化（输出模式 B，基于种子问答对扩写更多相关问题对）

@@ -136,3 +136,9 @@ document ──1:N──> task_job
 | EvalSetComposition | Agent 评测前的评测集组合（单个/维度/多来源合并） | 关联评测运行与审计记录（FR-DS-SRC-005，预留） |
 
 > 说明：以上对象为 BRD V1.3 新增需求的预留设计，尚未建表；落地时以数据库迁移为准。
+
+> 更新（2026-08-18）：评测平台架构调整已落地，新增 8 张表——
+> `uploaded_eval_set` / `uploaded_eval_case` / `public_eval_set` / `public_eval_case` / `eval_set_dimension` /
+> `eval_set_composition` / `evaluation_run` / `evaluation_case_result` / `error_book_item`，
+> 字段定义以 `modules/shared/services/database.py` 为准；上文"预留"表项对应的 UploadedEvalSet /
+> PublicEvalSet / EvalSetComposition 等对象已由此实现。

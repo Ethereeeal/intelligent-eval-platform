@@ -27,9 +27,10 @@
 | m02_eiu_coverage | [README](./m02_eiu_coverage/README.md) | 8.3 语义理解与知识编译、8.5 覆盖规划 | 必做 |
 | m03_generation | [README](./m03_generation/README.md) | 8.6 单段问题生成、8.7 跨段、8.8 改写与泛化、8.11 难度体系 | 必做（单段 + 泛化输出） |
 | m04_quality_governance | [README](./m04_quality_governance/README.md) | 8.9 问题质量门禁与治理审核 | 必做（5项基础检查） |
-| m05_dataset_lifecycle | [README](./m05_dataset_lifecycle/README.md) | 8.10 版本与数据划分、8.12 事后编辑、8.13 目录浏览与导出、8.14 增量更新、8.15 泛化、8.16 评测集回流、8.17 空评测集处理、8.22 三类来源统一管理（预留） | 必做（基础版本+导出） |
+| m05_dataset_lifecycle | [README](./m05_dataset_lifecycle/README.md) | 8.10 版本与数据划分、8.12 事后编辑、8.13 目录浏览与导出、8.14 增量更新、8.15 泛化、8.16 评测集回流、8.17 空评测集处理、8.22 三类来源统一管理（上传评测集 / 公共库 / 组合选择，已实现） | 必做 |
 | m06_feedback_loop | [README](./m06_feedback_loop/README.md) | 9.（仅回流部分，自动评测不在本平台范围） | Demo 不做（后续版本） |
 | m07_smart_qa | [README](./m07_smart_qa/README.md) | 8.19 智能问答交互 | Demo 不做（后续版本） |
+| m08_auto_evaluation | [README](./m08_auto_evaluation/README.md) | 9. 自动运行与后评估（待测系统适配 / 分层指标 / D1–D9 归因 / ErrorBook） | 必做（mock + OpenAI 兼容适配器，基础指标与归因） |
 
 ## 技术栈
 
@@ -46,19 +47,20 @@
 ## Demo 阶段全局边界
 
 **必做：**
-- 文档上传解析 + EIU 抽取（LLM 单通道） + 覆盖清单
+- 文档上传解析 + EIU 抽取（规则优先 + LLM 兜底） + 覆盖清单
 - EIU 向量化（FAISS，EIU 为核心向量化对象）
 - 单段题目生成 + 标准答案 + 证据绑定
 - 5 项基础质量校验（含问题相关性） + 覆盖率计算
 - 版本冻结 + JSON/JSONL 导出
 - 两种输出模式：① 文档知识点（EIU 自然语言版本） ② 问答对（支持泛化扩写）
+- 直接上传评测集（单轮模板）+ 质量评估；公共评测集库（预置条目）+ 维度选择；评测集组合选择（m05 §8.22）
+- Agent 评测（m08）：mock / OpenAI 兼容适配器批量运行 + 基础指标 + D1–D9 基础归因
 
 **不做：**
 - 跨文档题目（Demo 不做，方案预留）
 - 跨段题目（Demo 延后）；反例/对抗题（延后）
 - EIU 双通道校验、语义关系抽取（明确不做）、治理审核 Skill
-- 直接上传评测集、公共评测集库、Agent 评测前评测集组合选择（BRD V1.3 新增，后续版本预留）
-- 自动评测、失败归因、优化建议（均不在本平台范围）
+- 多轮评测集完整评分（memory/coherence，阶段 2）；语义评分固定校准集（待确认）
 - 评测后数据回流（06，后续版本）
 - 智能问答交互（07，Demo 不做）
 

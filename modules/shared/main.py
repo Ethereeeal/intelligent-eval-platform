@@ -21,6 +21,7 @@ from modules.m03_generation.api import (
 )
 from modules.m04_quality_governance.api import quality_router
 from modules.m05_dataset_lifecycle.api import router as dataset_lifecycle_router
+from modules.m08_auto_evaluation.api import evaluation_router
 from modules.m07_smart_qa.api import router as chat_router
 from modules.shared.core.config import settings
 from modules.shared.core.logging_config import configure_logging
@@ -83,6 +84,7 @@ app.include_router(generation_eiu_router)
 app.include_router(cases_router)
 app.include_router(quality_router)
 app.include_router(dataset_lifecycle_router)
+app.include_router(evaluation_router)
 app.include_router(chat_router)
 
 

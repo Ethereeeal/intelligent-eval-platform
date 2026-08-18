@@ -1877,6 +1877,481 @@ class DatabaseService:
             "updated_at": row.updated_at.isoformat() if row.updated_at else None,
         }
 
+    # ------------------------------------------------------------------
+    # m05 — 上传评测集（BRD §8.22 FR-DS-SRC-001/002/003/006）
+    # ------------------------------------------------------------------
+    def save_uploaded_set(
+        self,
+        *,
+        name: str,
+        template_type: str = "single",
+        source_file: str | None = None,
+        dimension: str | None = None,
+    ) -> int:
+        with SessionLocal() as session:
+            row = UploadedEvalSetRow(
+                name=name,
+                template_type=template_type,
+                source_file=source_file,
+                dimension=dimension,
+            )
+            session.add(row)
+            session.commit()
+            session.refresh(row)
+            return row.set_id
+
+    def list_uploaded_sets(self) -> list[dict]:
+        with SessionLocal() as session:
+            rows = (
+                session.query(UploadedEvalSetRow)
+                .order_by(UploadedEvalSetRow.set_id.desc())
+                .all()
+            )
+            return [self._uploaded_set_to_dict(r) for r in rows]
+
+    def get_uploaded_set(self, set_id: int) -> dict | None:
+        with SessionLocal() as session:
+            row = session.get(UploadedEvalSetRow, set_id)
+            return self._uploaded_set_to_dict(row) if row else None
+
+    def update_uploaded_set(self, set_id: int, **updates: object) -> dict | None:
+        with SessionLocal() as session:
+            row = session.get(UploadedEvalSetRow, set_id)
+            if not row:
+                return None
+            for key, value in updates.items():
+                if hasattr(row, key) and value is not None:
+                    setattr(row, key, value)
+            session.commit()
+            session.refresh(row)
+            return self._uploaded_set_to_dict(row)
+
+    def delete_uploaded_set(self, set_id: int) -> None:
+        with SessionLocal() as session:
+            session.query(UploadedEvalCaseRow).filter(
+                UploadedEvalCaseRow.set_id == set_id
+            ).delete(synchronize_session=False)
+            session.query(UploadedEvalSetRow).filter(
+                UploadedEvalSetRow.set_id == set_id
+            ).delete(synchronize_session=False)
+            session.commit()
+
+    def save_uploaded_cases(self, *, set_id: int, cases: list[dict]) -> int:
+        with SessionLocal() as session:
+            for case in cases:
+                session.add(
+                    UploadedEvalCaseRow(
+                        set_id=set_id,
+                        q=str(case["q"]),
+                        a=str(case["a"]),
+                        evidence=case.get("evidence"),
+                        dimension=case.get("dimension"),
+                        session_id=case.get("session_id"),
+                        turns=case.get("turns"),
+                        key_turn=case.get("key_turn"),
+                        turn_type=case.get("turn_type"),
+                        depends_on_turns=case.get("depends_on_turns"),
+                        no_evidence=1 if not case.get("evidence") else 0,
+                        quality=case.get("quality"),
+                        review_status=case.get("review_status", "pending"),
+                    )
+                )
+            session.commit()
+            return len(cases)
+
+    def list_uploaded_cases(self, set_id: int) -> list[dict]:
+        with SessionLocal() as session:
+            rows = (
+                session.query(UploadedEvalCaseRow)
+                .filter(UploadedEvalCaseRow.set_id == set_id)
+                .order_by(UploadedEvalCaseRow.case_id)
+                .all()
+            )
+            return [self._uploaded_case_to_dict(r) for r in rows]
+
+    @staticmethod
+    def _uploaded_set_to_dict(row: "UploadedEvalSetRow") -> dict:
+        return {
+            "set_id": row.set_id,
+            "name": row.name,
+            "template_type": row.template_type,
+            "source_file": row.source_file,
+            "dimension": row.dimension,
+            "review_status": row.review_status,
+            "quality_snapshot": row.quality_snapshot,
+            "total_cases": row.total_cases,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        }
+
+    @staticmethod
+    def _uploaded_case_to_dict(row: "UploadedEvalCaseRow") -> dict:
+        return {
+            "case_id": row.case_id,
+            "set_id": row.set_id,
+            "q": row.q,
+            "a": row.a,
+            "evidence": row.evidence,
+            "dimension": row.dimension,
+            "session_id": row.session_id,
+            "turns": row.turns,
+            "key_turn": row.key_turn,
+            "turn_type": row.turn_type,
+            "depends_on_turns": row.depends_on_turns,
+            "no_evidence": bool(row.no_evidence),
+            "quality": row.quality,
+            "review_status": row.review_status,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        }
+
+    # ------------------------------------------------------------------
+    # m05 — 公共评测集库 / 维度（BRD §8.22 FR-DS-SRC-004）
+    # ------------------------------------------------------------------
+    def save_public_set(
+        self,
+        *,
+        name: str,
+        version: str = "v1.0.0",
+        dimensions: list | None = None,
+        review_status: str = "governance_passed",
+    ) -> int:
+        with SessionLocal() as session:
+            row = PublicEvalSetRow(
+                name=name,
+                version=version,
+                dimensions=dimensions,
+                review_status=review_status,
+            )
+            session.add(row)
+            session.commit()
+            session.refresh(row)
+            return row.set_id
+
+    def list_public_sets(self, *, include_retired: bool = False) -> list[dict]:
+        with SessionLocal() as session:
+            query = session.query(PublicEvalSetRow).order_by(PublicEvalSetRow.set_id.desc())
+            if not include_retired:
+                query = query.filter(PublicEvalSetRow.status == "active")
+            return [self._public_set_to_dict(r) for r in query.all()]
+
+    def get_public_set(self, set_id: int) -> dict | None:
+        with SessionLocal() as session:
+            row = session.get(PublicEvalSetRow, set_id)
+            return self._public_set_to_dict(row) if row else None
+
+    def update_public_set(self, set_id: int, **updates: object) -> dict | None:
+        with SessionLocal() as session:
+            row = session.get(PublicEvalSetRow, set_id)
+            if not row:
+                return None
+            for key, value in updates.items():
+                if hasattr(row, key) and value is not None:
+                    setattr(row, key, value)
+            session.commit()
+            session.refresh(row)
+            return self._public_set_to_dict(row)
+
+    def save_public_cases(self, *, set_id: int, cases: list[dict]) -> int:
+        with SessionLocal() as session:
+            for case in cases:
+                session.add(
+                    PublicEvalCaseRow(
+                        set_id=set_id,
+                        q=str(case["q"]),
+                        a=str(case["a"]),
+                        evidence=case.get("evidence"),
+                        dimension=case.get("dimension"),
+                        no_evidence=1 if not case.get("evidence") else 0,
+                        review_status=case.get("review_status", "governance_passed"),
+                    )
+                )
+            session.commit()
+            return len(cases)
+
+    def list_public_cases(self, set_id: int) -> list[dict]:
+        with SessionLocal() as session:
+            rows = (
+                session.query(PublicEvalCaseRow)
+                .filter(PublicEvalCaseRow.set_id == set_id)
+                .order_by(PublicEvalCaseRow.case_id)
+                .all()
+            )
+            return [self._public_case_to_dict(r) for r in rows]
+
+    @staticmethod
+    def _public_set_to_dict(row: "PublicEvalSetRow") -> dict:
+        return {
+            "set_id": row.set_id,
+            "name": row.name,
+            "version": row.version,
+            "dimensions": row.dimensions,
+            "review_status": row.review_status,
+            "quality_snapshot": row.quality_snapshot,
+            "status": row.status,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        }
+
+    @staticmethod
+    def _public_case_to_dict(row: "PublicEvalCaseRow") -> dict:
+        return {
+            "case_id": row.case_id,
+            "set_id": row.set_id,
+            "q": row.q,
+            "a": row.a,
+            "evidence": row.evidence,
+            "dimension": row.dimension,
+            "no_evidence": bool(row.no_evidence),
+            "review_status": row.review_status,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        }
+
+    def list_dimensions(self) -> list[dict]:
+        with SessionLocal() as session:
+            rows = (
+                session.query(EvalSetDimensionRow)
+                .filter(EvalSetDimensionRow.enabled == 1)
+                .order_by(EvalSetDimensionRow.dimension_id)
+                .all()
+            )
+            return [self._dimension_to_dict(r) for r in rows]
+
+    def save_dimension(self, *, code: str, name: str, description: str | None = None) -> int:
+        with SessionLocal() as session:
+            row = EvalSetDimensionRow(code=code, name=name, description=description)
+            session.add(row)
+            session.commit()
+            session.refresh(row)
+            return row.dimension_id
+
+    @staticmethod
+    def _dimension_to_dict(row: "EvalSetDimensionRow") -> dict:
+        return {
+            "dimension_id": row.dimension_id,
+            "code": row.code,
+            "name": row.name,
+            "description": row.description,
+            "enabled": bool(row.enabled),
+        }
+
+    # ------------------------------------------------------------------
+    # m05 — 评测集组合选择（BRD §8.22 FR-DS-SRC-005）
+    # ------------------------------------------------------------------
+    def save_composition(self, *, name: str, items: list[dict], created_by: str | None = None) -> int:
+        with SessionLocal() as session:
+            row = EvalSetCompositionRow(name=name, items=items, created_by=created_by)
+            session.add(row)
+            session.commit()
+            session.refresh(row)
+            return row.composition_id
+
+    def list_compositions(self) -> list[dict]:
+        with SessionLocal() as session:
+            rows = (
+                session.query(EvalSetCompositionRow)
+                .order_by(EvalSetCompositionRow.composition_id.desc())
+                .all()
+            )
+            return [self._composition_to_dict(r) for r in rows]
+
+    def get_composition(self, composition_id: int) -> dict | None:
+        with SessionLocal() as session:
+            row = session.get(EvalSetCompositionRow, composition_id)
+            return self._composition_to_dict(row) if row else None
+
+    def delete_composition(self, composition_id: int) -> None:
+        with SessionLocal() as session:
+            session.query(EvalSetCompositionRow).filter(
+                EvalSetCompositionRow.composition_id == composition_id
+            ).delete(synchronize_session=False)
+            session.commit()
+
+    @staticmethod
+    def _composition_to_dict(row: "EvalSetCompositionRow") -> dict:
+        return {
+            "composition_id": row.composition_id,
+            "name": row.name,
+            "items": row.items,
+            "created_by": row.created_by,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        }
+
+    # ------------------------------------------------------------------
+    # m08 — Agent 评测运行 / 单题结果 / ErrorBook（BRD §9）
+    # ------------------------------------------------------------------
+    def save_evaluation_run(
+        self,
+        *,
+        composition_id: int | None,
+        name: str | None,
+        adapter: str,
+        adapter_config: dict | None = None,
+    ) -> int:
+        with SessionLocal() as session:
+            row = EvaluationRunRow(
+                composition_id=composition_id,
+                name=name,
+                adapter=adapter,
+                adapter_config=adapter_config,
+            )
+            session.add(row)
+            session.commit()
+            session.refresh(row)
+            return row.run_id
+
+    def get_evaluation_run(self, run_id: int) -> dict | None:
+        with SessionLocal() as session:
+            row = session.get(EvaluationRunRow, run_id)
+            return self._evaluation_run_to_dict(row) if row else None
+
+    def list_evaluation_runs(self) -> list[dict]:
+        with SessionLocal() as session:
+            rows = (
+                session.query(EvaluationRunRow)
+                .order_by(EvaluationRunRow.run_id.desc())
+                .all()
+            )
+            return [self._evaluation_run_to_dict(r) for r in rows]
+
+    def update_evaluation_run(self, run_id: int, **updates: object) -> dict | None:
+        with SessionLocal() as session:
+            row = session.get(EvaluationRunRow, run_id)
+            if not row:
+                return None
+            for key, value in updates.items():
+                if hasattr(row, key) and value is not None:
+                    setattr(row, key, value)
+            session.commit()
+            session.refresh(row)
+            return self._evaluation_run_to_dict(row)
+
+    def save_evaluation_case_result(self, *, run_id: int, **fields: object) -> int:
+        with SessionLocal() as session:
+            row = EvaluationCaseResultRow(run_id=run_id, **fields)
+            session.add(row)
+            session.commit()
+            session.refresh(row)
+            return row.result_id
+
+    def list_evaluation_results(self, run_id: int) -> list[dict]:
+        with SessionLocal() as session:
+            rows = (
+                session.query(EvaluationCaseResultRow)
+                .filter(EvaluationCaseResultRow.run_id == run_id)
+                .order_by(EvaluationCaseResultRow.result_id)
+                .all()
+            )
+            return [self._evaluation_result_to_dict(r) for r in rows]
+
+    def save_error_book_item(
+        self,
+        *,
+        run_id: int | None,
+        case_uid: str | None,
+        diagnosis: str,
+        root_cause: str | None = None,
+        optimization: str | None = None,
+        regression: list | None = None,
+    ) -> int:
+        with SessionLocal() as session:
+            row = ErrorBookItemRow(
+                run_id=run_id,
+                case_uid=case_uid,
+                diagnosis=diagnosis,
+                root_cause=root_cause,
+                optimization=optimization,
+                regression=regression,
+            )
+            session.add(row)
+            session.commit()
+            session.refresh(row)
+            return row.item_id
+
+    def list_error_book(
+        self,
+        *,
+        run_id: int | None = None,
+        diagnosis: str | None = None,
+        status: str | None = None,
+    ) -> list[dict]:
+        with SessionLocal() as session:
+            query = session.query(ErrorBookItemRow).order_by(ErrorBookItemRow.item_id.desc())
+            if run_id is not None:
+                query = query.filter(ErrorBookItemRow.run_id == run_id)
+            if diagnosis:
+                query = query.filter(ErrorBookItemRow.diagnosis == diagnosis)
+            if status:
+                query = query.filter(ErrorBookItemRow.status == status)
+            return [self._error_book_to_dict(r) for r in query.all()]
+
+    def update_error_book_item(self, item_id: int, **updates: object) -> dict | None:
+        with SessionLocal() as session:
+            row = session.get(ErrorBookItemRow, item_id)
+            if not row:
+                return None
+            for key, value in updates.items():
+                if hasattr(row, key) and value is not None:
+                    setattr(row, key, value)
+            session.commit()
+            session.refresh(row)
+            return self._error_book_to_dict(row)
+
+    @staticmethod
+    def _evaluation_run_to_dict(row: "EvaluationRunRow") -> dict:
+        adapter_config = dict(row.adapter_config or {})
+        # 安全：不回显 API Key 等敏感配置
+        if "api_key" in adapter_config:
+            adapter_config["api_key"] = "***"
+        return {
+            "run_id": row.run_id,
+            "composition_id": row.composition_id,
+            "name": row.name,
+            "adapter": row.adapter,
+            "adapter_config": adapter_config,
+            "status": row.status,
+            "progress": row.progress,
+            "total": row.total,
+            "finished": row.finished,
+            "started_at": row.started_at.isoformat() if row.started_at else None,
+            "finished_at": row.finished_at.isoformat() if row.finished_at else None,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        }
+
+    @staticmethod
+    def _evaluation_result_to_dict(row: "EvaluationCaseResultRow") -> dict:
+        return {
+            "result_id": row.result_id,
+            "run_id": row.run_id,
+            "case_uid": row.case_uid,
+            "question": row.question,
+            "gold_answer": row.gold_answer,
+            "difficulty": row.difficulty,
+            "dimension": row.dimension,
+            "source": row.source,
+            "answer": row.answer,
+            "turn_outputs": row.turn_outputs,
+            "retrieved": row.retrieved,
+            "scores": row.scores,
+            "diagnosis": row.diagnosis,
+            "status": row.status,
+            "error_message": row.error_message,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        }
+
+    @staticmethod
+    def _error_book_to_dict(row: "ErrorBookItemRow") -> dict:
+        return {
+            "item_id": row.item_id,
+            "run_id": row.run_id,
+            "case_uid": row.case_uid,
+            "diagnosis": row.diagnosis,
+            "root_cause": row.root_cause,
+            "optimization": row.optimization,
+            "regression": row.regression,
+            "status": row.status,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        }
+
 
 class GeneratedCaseRow(Base):
     """m03 生成的评测样本（按文档维度组织，独立于 m05 的 eval_case 表）。"""
@@ -1926,3 +2401,167 @@ class QualityCheckRow(Base):
     passed: Mapped[bool] = mapped_column(Integer, nullable=False, default=1)
     reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
     checked_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+# ----------------------------------------------------------------------
+# m05 — 评测集管理：上传评测集 / 公共评测集库 / 维度 / 组合（BRD §8.22）
+# ----------------------------------------------------------------------
+class UploadedEvalSetRow(Base):
+    """用户直接上传的 QA 评测集主记录（BRD FR-DS-SRC-001/002）。"""
+
+    __tablename__ = "uploaded_eval_set"
+
+    set_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    template_type: Mapped[str] = mapped_column(String(16), nullable=False, default="single")
+    source_file: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    dimension: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    review_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    quality_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    total_cases: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class UploadedEvalCaseRow(Base):
+    """上传评测集样本（单轮 q/a/evidence/dimension；多轮 session_id+turns[]）。"""
+
+    __tablename__ = "uploaded_eval_case"
+
+    case_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    set_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    q: Mapped[str] = mapped_column(Text, nullable=False)
+    a: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
+    dimension: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    session_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    turns: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    key_turn: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    turn_type: Mapped[str | None] = mapped_column(String(32), nullable=True)  # memory/coherence
+    depends_on_turns: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    no_evidence: Mapped[int] = mapped_column(Integer, default=0)
+    quality: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    review_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class PublicEvalSetRow(Base):
+    """公共评测集库条目（组织方预置，版本化，用户只读）。"""
+
+    __tablename__ = "public_eval_set"
+
+    set_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    version: Mapped[str] = mapped_column(String(64), nullable=False, default="v1.0.0")
+    dimensions: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    review_status: Mapped[str] = mapped_column(String(32), nullable=False, default="governance_passed")
+    quality_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
+
+
+class PublicEvalCaseRow(Base):
+    """公共评测集库样本（预置 QA 对）。"""
+
+    __tablename__ = "public_eval_case"
+
+    case_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    set_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    q: Mapped[str] = mapped_column(Text, nullable=False)
+    a: Mapped[str] = mapped_column(Text, nullable=False)
+    evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
+    dimension: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    no_evidence: Mapped[int] = mapped_column(Integer, default=0)
+    review_status: Mapped[str] = mapped_column(String(32), nullable=False, default="governance_passed")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class EvalSetDimensionRow(Base):
+    """评测维度可配置体系（BRD FR-DS-SRC-004，暂不写死示例维度）。"""
+
+    __tablename__ = "eval_set_dimension"
+
+    dimension_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    code: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False)
+    description: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    enabled: Mapped[int] = mapped_column(Integer, default=1)
+
+
+class EvalSetCompositionRow(Base):
+    """Agent 评测前组合：指定单个 / 勾选维度 / 多来源合并（FR-DS-SRC-005）。"""
+
+    __tablename__ = "eval_set_composition"
+
+    composition_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    items: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+# ----------------------------------------------------------------------
+# m08 — Agent 评测（BRD §9）：运行 / 单题结果 / ErrorBook
+# ----------------------------------------------------------------------
+class EvaluationRunRow(Base):
+    """一次批量评测运行（组合后的临时标准化评测集作为输入）。"""
+
+    __tablename__ = "evaluation_run"
+
+    run_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    composition_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    adapter: Mapped[str] = mapped_column(String(64), nullable=False)
+    adapter_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    progress: Mapped[int] = mapped_column(Integer, default=0)
+    total: Mapped[int] = mapped_column(Integer, default=0)
+    finished: Mapped[int] = mapped_column(Integer, default=0)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class EvaluationCaseResultRow(Base):
+    """单题输出 + 分层评分 + 归因（检索 / 答案 / 拒答 / 耗时成本）。"""
+
+    __tablename__ = "evaluation_case_result"
+
+    result_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    case_uid: Mapped[str] = mapped_column(String(128), nullable=False)
+    question: Mapped[str] = mapped_column(Text, nullable=False)
+    gold_answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    difficulty: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    dimension: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="doc_generated")
+    answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # 多轮运行必须保存完整对话过程，用于归因（BRD FR-DS-SRC-002 / m08）
+    turn_outputs: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    retrieved: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    scores: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    diagnosis: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class ErrorBookItemRow(Base):
+    """失败案例：根因（D1–D9）、优化建议、回归记录（FR-OPT-003）。"""
+
+    __tablename__ = "error_book_item"
+
+    item_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    run_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    case_uid: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    diagnosis: Mapped[str] = mapped_column(String(16), nullable=False)
+    root_cause: Mapped[str | None] = mapped_column(Text, nullable=True)
+    optimization: Mapped[str | None] = mapped_column(Text, nullable=True)
+    regression: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="open")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
+    )
