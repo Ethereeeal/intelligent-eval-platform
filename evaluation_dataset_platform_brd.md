@@ -5,7 +5,7 @@
 > 编写日期：2026-08-18  
 > 项目目录：`micro_innovation`  
 > 建议产品代号：EvalForge（评测集锻造平台）  
-> 关联文件：讨论收口结论 `evaluation_dataset_discussion_summary.md`、增量需求 `evaluation_dataset_brd_additions.md`、评分策略依据 `evaluation_scoring_strategy.md`  
+> 关联文件：生产化前代办与技术债收口见 `docs/production-readiness-todo.md`（历史讨论产物已归档删除，价值并入本 BRD V1.3）  
 
 ## 1. 文档摘要
 

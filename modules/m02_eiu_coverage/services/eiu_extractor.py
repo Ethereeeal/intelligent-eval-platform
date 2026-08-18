@@ -361,33 +361,73 @@ class EiuExtractorService:
         except OSError:
             return "你是一位精通银行授信政策和金融监管文件的专家。"
 
-    def extract_corpus(self, job_id: int) -> dict:
+    def extract_corpus(
+        self,
+        job_id: int,
+        *,
+        finalize_job: bool = True,
+        progress_start: int = 0,
+        progress_end: int = 100,
+    ) -> dict:
         """对全部文档的段落 Block 执行 EIU 抽取（后台线程调用）。
 
         全量重算：先清空全部旧 EIU，再逐 Block 抽取写入。
+
+        finalize_job=False 时（重传闭环编排用）：只更新进度、不把 job 置
+        completed，由编排层在版本重建完成后统一收口，保证
+        parsing → eiu_extract → rebuild → done 共用一个 job。
+        progress_start/progress_end：把本阶段进度映射到整体 0–100 刻度
+        （编排模式传 40/90，独立调用保持 0/100）。
         """
         try:
-            return self._run(job_id)
+            return self._run(
+                job_id,
+                finalize_job=finalize_job,
+                progress_start=progress_start,
+                progress_end=progress_end,
+            )
         except Exception as exc:  # noqa: BLE001 — 记录失败并置 job 状态
             self.database.update_job(
-                job_id, status="failed", phase="extracting", message=f"EIU 抽取失败: {exc}"
+                job_id, status="failed", phase="eiu_extract", message=f"EIU 抽取失败: {exc}"
             )
             return {"job_id": job_id, "status": "failed", "message": str(exc)}
 
-    def extract_document(self, document_id: int, job_id: int) -> dict:
+    def extract_document(
+        self,
+        document_id: int,
+        job_id: int,
+        *,
+        finalize_job: bool = True,
+        progress_start: int = 0,
+        progress_end: int = 100,
+    ) -> dict:
         """仅对单个文档的段落 Block 执行 EIU 抽取（单文档隔离，不清全库）。
 
         仅删除该文档自身的旧 EIU，不影响其他文档已抽取的知识点。
         """
         try:
-            return self._run(job_id, document_id=document_id)
+            return self._run(
+                job_id,
+                document_id=document_id,
+                finalize_job=finalize_job,
+                progress_start=progress_start,
+                progress_end=progress_end,
+            )
         except Exception as exc:  # noqa: BLE001
             self.database.update_job(
-                job_id, status="failed", phase="extracting", message=f"EIU 抽取失败: {exc}"
+                job_id, status="failed", phase="eiu_extract", message=f"EIU 抽取失败: {exc}"
             )
             return {"job_id": job_id, "status": "failed", "message": str(exc)}
 
-    def _run(self, job_id: int, document_id: int | None = None) -> dict:
+    def _run(
+        self,
+        job_id: int,
+        document_id: int | None = None,
+        *,
+        finalize_job: bool = True,
+        progress_start: int = 0,
+        progress_end: int = 100,
+    ) -> dict:
         documents = self.database.list_documents()
         if document_id is not None:
             documents = [d for d in documents if d["document_id"] == document_id]
@@ -399,14 +439,17 @@ class EiuExtractorService:
         substantive = [block for block in all_blocks if block["block_type"] != "title"]
         total = len(substantive)
         if total == 0:
-            self.database.update_job(
-                job_id, status="completed", phase="done", progress=100,
-                message="无可处理的段落", finished=True,
-            )
+            if finalize_job:
+                self.database.update_job(
+                    job_id, status="completed", phase="done", progress=progress_end,
+                    message="无可处理的段落", finished=True,
+                )
+            else:
+                self.database.update_job(job_id, progress=progress_end)
             return {"job_id": job_id, "status": "completed", "message": "无可处理的段落", "count": 0}
 
         self.database.update_job(
-            job_id, status="running", phase="extracting", progress=0,
+            job_id, status="running", phase="eiu_extract", progress=progress_start,
             message=f"开始 EIU 抽取，共 {total} 个段落 Block",
         )
         # 单文档模式：仅清空该文档旧 EIU；全库模式：清空全部旧 EIU
@@ -454,12 +497,16 @@ class EiuExtractorService:
                     items=[exclusion_item(block, block_error or "段落无实质内容，未抽取到 EIU")],
                 )
                 excluded += 1
-            self.database.update_job(job_id, progress=int(index / total * 100))
+            progress = progress_start + int(index / total * (progress_end - progress_start))
+            self.database.update_job(job_id, progress=progress)
 
-        self.database.update_job(
-            job_id, status="completed", phase="done", progress=100,
-            message=f"EIU 抽取完成，共 {inserted} 条（排除 {excluded} 个段落）", finished=True,
-        )
+        if finalize_job:
+            self.database.update_job(
+                job_id, status="completed", phase="done", progress=progress_end,
+                message=f"EIU 抽取完成，共 {inserted} 条（排除 {excluded} 个段落）", finished=True,
+            )
+        else:
+            self.database.update_job(job_id, progress=progress_end)
         return {
             "job_id": job_id,
             "status": "completed",

@@ -34,7 +34,7 @@
 | 后端 | Python + FastAPI（`modules/shared/main.py`） |
 | 数据库 | MySQL（docker: evalforge 库） |
 | 存储 | MinIO（docker，原始文件落盘到 `storage/raw/`） |
-| 向量索引 | FAISS 单例（进程内；EIU 向量为主，Block 向量保留用于检索，见 m01 §2.4） |
+| 向量索引 | FAISS 单例（进程内；仅 EIU 向量，Block 向量已废弃，见 m01 §2.4） |
 | Embedding | BGE-small-zh-v1.5（512 维；EIU 向量化，用于抽取去重与未来跨块/跨文档候选；问答对复用已取消，见 m03 §2.4） |
 | Reranker | BGE-reranker-v2-m3 |
 | LLM | 可配置（OpenAI 兼容 API，见 `.env`） |

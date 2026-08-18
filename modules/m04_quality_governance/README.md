@@ -221,8 +221,8 @@ published          ←── 冻结发布
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/api/corpus/{corpus_id}/quality-check` | 触发全量质量校验（或全量重跑） |
-| GET | `/api/corpus/{corpus_id}/quality-check/results` | 校验结果汇总 |
+| POST | `/api/quality-check?document_id=` | 触发质量校验（可按文档，缺省全量） |
+| GET | `/api/quality-check/results?document_id=` | 校验结果汇总（可按文档过滤） |
 | GET | `/api/cases/{case_id}/quality-check` | 单题校验详情 |
 | POST | `/api/cases/{case_id}/retry-check` | 单题重跑校验 |
 

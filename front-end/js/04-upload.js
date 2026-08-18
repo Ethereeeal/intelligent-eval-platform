@@ -157,3 +157,182 @@
     if (txt) txt.textContent = pg >= 100 ? "解析完成 ✓" : `知识点解析中 ${pg}%`;
   }
 
+  /* ---------------- 混合上传：预检 → 异常确认 → 上传 ---------------- */
+  function escHtml(s) {
+    return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    }[c]));
+  }
+
+  function fmtSizeShort(n) {
+    if (n == null) return "";
+    const kb = n / 1024;
+    return kb >= 1024 ? (kb / 1024).toFixed(1) + " MB" : Math.max(1, Math.round(kb)) + " KB";
+  }
+
+  function fmtTime(s) {
+    if (!s) return "时间未知";
+    const d = new Date(s);
+    if (isNaN(d.getTime())) return s;
+    const p = n => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  }
+
+  async function precheckFile(file, relPath) {
+    const fd = new FormData();
+    if (relPath) fd.append("folder_path", relPath);
+    fd.append("file", file);
+    const res = await fetch(API_BASE + "/api/documents/precheck", { method: "POST", body: fd });
+    if (!res.ok) {
+      let msg = "预检失败：" + res.status;
+      try { const j = await res.json(); if (j.detail) msg = j.detail; } catch (e) { /* ignore */ }
+      throw new Error(msg);
+    }
+    return res.json();
+  }
+
+  // 入口：entries = [{ file, folderPath }]；正常文件直接上传，异常文件进确认面板
+  async function handleUploadSelection(entries) {
+    const direct = [];
+    const anomaly = [];
+    const skipped = [];
+    const CONCURRENCY = 3; // 限并发预检，避免大文件夹同时打满后端（每个预检都会读全文件）
+    let cursor = 0;
+    async function worker() {
+      while (cursor < entries.length) {
+        const entry = entries[cursor++];
+        const relPath = String(entry.folderPath || "").split("/").filter(p => p && p !== TREE.name).join("/");
+        let res;
+        try {
+          res = await precheckFile(entry.file, relPath);
+        } catch (e) {
+          toast("预检失败，按正常上传处理：" + (e.message || ""), "warn");
+          direct.push(entry);
+          continue;
+        }
+        if (res.status === "duplicate") {
+          skipped.push(entry.file.name);
+        } else if (res.status === "conflict" || (res.status === "ok" && res.same_name_elsewhere && res.same_name_elsewhere.length)) {
+          anomaly.push({ entry, res });
+        } else {
+          direct.push(entry);
+        }
+      }
+    }
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, entries.length) }, () => worker()));
+    if (skipped.length) {
+      toast("已存在，未重复上传：" + [...new Set(skipped)].join("、"), "warn");
+    }
+    direct.forEach(e => handleUpload(e.file, e.folderPath));
+    if (anomaly.length) showUploadConfirmPanel(anomaly);
+  }
+
+  function showUploadConfirmPanel(anomaly) {
+    $$(".up-confirm-mask").forEach(m => m.remove());
+    const removed = new Set();
+    const rows = anomaly.map((item, idx) => {
+      const res = item.res;
+      const conflict = res.status === "conflict";
+      const detail = conflict
+        ? `将覆盖「${res.existing_folder || "文档库"}/${res.existing_name}」（上次上传 ${fmtTime(res.existing_upload_time)}，${fmtSizeShort(res.existing_size)}）`
+        : `其他位置已有同名：` + res.same_name_elsewhere
+            .map(d => `「${(d.folder_path || "文档库")}/${d.file_name}」`).join("、") + `；本次将新建，不覆盖`;
+      return `<div class="up-confirm-row" data-idx="${idx}">
+        <div class="up-confirm-info">
+          <div class="up-confirm-name">${escHtml(item.entry.file.name)} <span class="up-confirm-tag ${conflict ? "c" : "w"}">${conflict ? "将覆盖" : "弱提示"}</span></div>
+          <div class="up-confirm-detail">${escHtml(detail)}</div>
+        </div>
+        <button class="up-confirm-remove" data-idx="${idx}" type="button">移除</button>
+      </div>`;
+    }).join("");
+
+    const mask = document.createElement("div");
+    mask.className = "up-modal-mask up-confirm-mask";
+    mask.innerHTML = `<div class="up-modal">
+      <div class="up-modal-head"><span>上传确认（${anomaly.length} 个文件需确认）</span><button class="up-close" type="button" title="关闭">×</button></div>
+      <div class="up-modal-body"><div class="up-confirm-list">${rows}</div></div>
+      <div class="up-modal-foot">
+        <button class="up-confirm-cancel" type="button">取消全部</button>
+        <button class="up-confirm-ok" type="button">确认上传</button>
+      </div>
+      <div class="up-hint">确认后将覆盖同名文件并重新解析、重抽知识点、重建评测集；「移除」的文件不会上传。</div>
+    </div>`;
+    document.body.appendChild(mask);
+    const close = () => mask.remove();
+    mask.querySelector(".up-close").onclick = close;
+    mask.addEventListener("click", e => { if (e.target === mask) close(); });
+    mask.querySelector(".up-confirm-cancel").onclick = close;
+    mask.querySelector(".up-confirm-ok").onclick = () => {
+      const okBtn = mask.querySelector(".up-confirm-ok");
+      if (okBtn) { okBtn.disabled = true; okBtn.textContent = "处理中…"; }
+      close();
+      anomaly.forEach((item, idx) => {
+        if (removed.has(idx)) return;
+        if (item.res.status === "conflict") {
+          handleReuploadWithConfirm(item.entry.file, item.res.existing_document_id, item.res.confirm_token);
+        } else {
+          handleUpload(item.entry.file, item.entry.folderPath);
+        }
+      });
+    };
+    mask.querySelectorAll(".up-confirm-remove").forEach(btn => {
+      btn.onclick = () => {
+        const idx = Number(btn.dataset.idx);
+        removed.add(idx);
+        const row = btn.closest(".up-confirm-row");
+        if (row) row.remove();
+        const left = anomaly.filter((_, i) => !removed.has(i)).length;
+        const okBtn = mask.querySelector(".up-confirm-ok");
+        if (okBtn) okBtn.textContent = left ? `确认上传（剩余 ${left} 个）` : "确认上传（无）";
+        if (okBtn) okBtn.disabled = !left;
+      };
+    });
+  }
+
+  async function handleReuploadWithConfirm(file, docId, token) {
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("confirm_token", token);
+    const up = await fetch(API_BASE + `/api/documents/${docId}/reupload`, { method: "POST", body: fd });
+    if (!up.ok) {
+      let msg = "覆盖更新失败：" + up.status;
+      try { const j = await up.json(); if (j.detail) msg = j.detail; } catch (e) { /* ignore */ }
+      toast(msg, "warn");
+      return;
+    }
+    const res = await up.json();
+    toast("已开始覆盖更新：重解析 → EIU 重抽 → 版本重建");
+    pollReuploadJob(res.job_id);
+  }
+
+  function pollReuploadJob(jobId) {
+    const statusEl = document.createElement("div");
+    statusEl.className = "up-reupload-status";
+    statusEl.textContent = "覆盖更新中…";
+    document.body.appendChild(statusEl);
+    const finish = (msg, failed) => {
+      statusEl.textContent = msg;
+      statusEl.classList.toggle("err", !!failed);
+      setTimeout(() => statusEl.remove(), 4000);
+    };
+    const poll = setInterval(async () => {
+      try {
+        const jr = await fetch(API_BASE + `/api/jobs/${jobId}`);
+        if (!jr.ok) return;
+        const job = await jr.json();
+        if (job.progress != null) statusEl.textContent = `覆盖更新中 ${job.progress}%（${job.phase || ""}）`;
+        if (job.finished || job.status === "completed" || job.status === "done" || job.status === "failed") {
+          clearInterval(poll);
+          await loadData();
+          if (job.status === "failed") {
+            finish("覆盖更新失败：" + (job.message || ""), true);
+            toast("覆盖更新失败：" + (job.message || ""), "warn");
+          } else {
+            finish(job.message || "已更新完成");
+            toast(job.message || "已更新完成");
+          }
+        }
+      } catch (e) { /* 忽略单次轮询错误 */ }
+    }, 1500);
+  }
+

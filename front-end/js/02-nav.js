@@ -122,7 +122,7 @@
               moveDocToFolder(movedDoc, targetPath);
             } else if (files && files.length) {
               setUploadTarget(targetPath);
-              [...files].forEach(f => handleUpload(f, targetPath));
+              handleUploadSelection([...files].map(f => ({ file: f, folderPath: targetPath })));
             }
           });
         }

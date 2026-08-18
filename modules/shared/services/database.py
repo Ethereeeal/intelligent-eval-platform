@@ -15,6 +15,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     create_engine,
+    or_,
     text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column, sessionmaker
@@ -423,6 +424,53 @@ class DatabaseService:
         with SessionLocal() as session:
             row = session.query(DocumentRow).filter(DocumentRow.file_hash == file_hash).first()
             return row.document_id if row else None
+
+    def find_document_by_name_in_folder(self, file_name: str, folder_path: str | None) -> dict | None:
+        """按「文件名 + 目标文件夹」查找文档（上传预检同名覆盖判定用）。
+
+        根目录兼容两种历史写法：folder_path 为 None 或空串均视为文档库根。
+        """
+        fp = str(folder_path or "").strip("/")
+        with SessionLocal() as session:
+            condition = (
+                or_(DocumentRow.folder_path.is_(None), DocumentRow.folder_path == "")
+                if fp == ""
+                else DocumentRow.folder_path == fp
+            )
+            row = (
+                session.query(DocumentRow)
+                .filter(DocumentRow.file_name == file_name, condition)
+                .first()
+            )
+            if row is None:
+                return None
+            return {
+                "document_id": row.document_id,
+                "file_name": row.file_name,
+                "file_size": row.file_size,
+                "file_hash": row.file_hash,
+                "folder_path": row.folder_path,
+                "upload_time": row.created_at.isoformat() if row.created_at else None,
+            }
+
+    def find_documents_by_name(self, file_name: str) -> list[dict]:
+        """全库按文件名查找文档（上传预检弱提示：其他位置同名）。"""
+        with SessionLocal() as session:
+            rows = (
+                session.query(DocumentRow)
+                .filter(DocumentRow.file_name == file_name)
+                .order_by(DocumentRow.document_id.desc())
+                .all()
+            )
+            return [
+                {
+                    "document_id": row.document_id,
+                    "file_name": row.file_name,
+                    "folder_path": row.folder_path,
+                    "upload_time": row.created_at.isoformat() if row.created_at else None,
+                }
+                for row in rows
+            ]
 
     def save_blocks(self, *, document_id: int, blocks: list[dict]) -> list[int]:
         rows: list[BlockRow] = []

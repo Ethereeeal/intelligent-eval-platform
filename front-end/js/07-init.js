@@ -231,7 +231,7 @@
       // 单文件上传：按已选 folder_path 上传
       uploadInput.addEventListener("change", e => {
         if (state._uploadFolderPath) {
-          [...e.target.files].forEach(f => handleUpload(f, state._uploadFolderPath));
+          handleUploadSelection([...e.target.files].map(f => ({ file: f, folderPath: state._uploadFolderPath })));
         }
         uploadInput.value = "";
       });
@@ -240,11 +240,12 @@
         folderInput.addEventListener("change", e => {
           if (!state._uploadFolderPath) { toast("请先选择目标目录", "warn"); return; }
           const base = state._uploadFolderPath;
-          [...e.target.files].forEach(f => {
+          const entries = [...e.target.files].map(f => {
             let rel = (f.webkitRelativePath || f.relativePath || "").split("/").slice(0, -1).join("/");
             const fp = rel ? `${base}/${rel}` : base;
-            handleUpload(f, fp);
+            return { file: f, folderPath: fp };
           });
+          handleUploadSelection(entries);
           folderInput.value = "";
         });
       }

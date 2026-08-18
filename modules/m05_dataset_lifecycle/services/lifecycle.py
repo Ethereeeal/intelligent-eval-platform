@@ -371,7 +371,7 @@ class DatasetLifecycleService:
         - m03 已重算产出新 generated_case；此处把受影响的最新版本整体重建为覆盖式快照：
           删除旧版本中属于该文档（eiu→document）的 eval_case，再基于最新 generated_case 整体重快照。
         """
-        self.db.update_job(job_id, phase="rebuild", progress=80, message="覆盖式整体重算中")
+        self.db.update_job(job_id, phase="rebuild", progress=90, message="覆盖式整体重算中")
         latest_versions = self.db.list_dataset_versions()
         if latest_versions:
             version_id = latest_versions[0]["version_id"]

@@ -334,13 +334,20 @@
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/api/corpus/{corpus_id}/cases/generate` | 为所有未覆盖 EIU 批量生成题目+答案 |
+| POST | `/api/cases/generate` | 为所有未覆盖 EIU 批量生成题目+答案 |
+| GET | `/api/cases/generate-progress` | 生成任务进度 |
 | POST | `/api/eiu/{eiu_id}/generate-case` | 为单个 EIU 生成题目+答案 |
 | POST | `/api/cases/generate-from-upload` | 接收用户上传的问答对，校验后作为种子泛化出更多相关问题对 |
-| GET | `/api/corpus/{corpus_id}/cases` | 评测样本列表（支持?priority=&type=&difficulty=&status=） |
+| GET | `/api/cases` | 评测样本列表（按文档/目录维度，无 corpus） |
+| GET | `/api/cases/document/{document_id}` | 按文档列出问答对 |
+| DELETE | `/api/cases/document/{document_id}` | 删除某文档全部问答对 |
+| GET | `/api/cases/export-folder` | 按目录导出问答对 |
 | GET | `/api/cases/{case_id}` | 样本详情（含完整证据定位） |
 | PUT | `/api/cases/{case_id}` | 手动编辑样本 |
 | DELETE | `/api/cases/{case_id}` | 删除样本（标记 retired） |
+| POST | `/api/cases/{case_id}/variations` | 生成泛化变体 |
+| POST | `/api/cases/{case_id}/move` | 移动样本到其他目录 |
+| POST | `/api/cases/{case_id}/rename` | 重命名样本 |
 
 ---
 

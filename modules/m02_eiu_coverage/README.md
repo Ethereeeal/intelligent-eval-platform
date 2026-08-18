@@ -113,8 +113,8 @@ EIU (Evaluable Information Unit) = 一条能够被原文**独立证明或否定*
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | eiu_id | INT PK | |
-| corpus_id | INT FK | |
 | block_id | INT FK | 源 Block |
+| document_id | INT | 归属文档（冗余，按文档目录组织，无 corpus） |
 | statement | TEXT | 完整陈述（一句话，可独立判定真伪） |
 | eiu_type | VARCHAR | definition/rule/threshold/date/formula/process/exception/prohibition/metric/change |
 | content_priority | VARCHAR | P0/P1/P2 |
@@ -308,14 +308,16 @@ def calculate_weighted_coverage(eius: list[EIU], cases: list[EvalCase]) -> Cover
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/api/corpus/{corpus_id}/eiu/extract` | 触发 EIU 抽取（异步，进度见 doc_update_job） |
+| POST | `/api/eiu/extract?document_id=` | 触发 EIU 抽取（指定文档时仅抽取该文档，否则全量；异步返回 job_id） |
 | GET | `/api/jobs/{job_id}` | 查询抽取/更新任务进度与状态（贯穿解析→抽取→增量） |
-| GET | `/api/corpus/{corpus_id}/eiu` | EIU 清单（支持 ?type=&priority=&section=&questionable= 过滤） |
+| GET | `/api/eiu` | EIU 清单（全量） |
+| GET | `/api/eiu/document/{document_id}` | 按文档列出 EIU |
 | GET | `/api/eiu/{eiu_id}` | 单个 EIU 详情（含原文上下文） |
 | PUT | `/api/eiu/{eiu_id}` | 手动编辑 EIU |
 | DELETE | `/api/eiu/{eiu_id}` | 删除 EIU（标记为 excluded） |
-| GET | `/api/corpus/{corpus_id}/eiu/coverage` | 覆盖率报告 |
-| GET | `/api/corpus/{corpus_id}/eiu/gaps` | 未覆盖 EIU 清单 |
+| GET | `/api/eiu/coverage` | 覆盖率报告（全量） |
+| POST | `/api/eiu/coverage` | 计算覆盖率并落库，返回带 report_id 的报告 |
+| GET | `/api/eiu/gaps` | 未覆盖 EIU 清单 |
 
 ---
 

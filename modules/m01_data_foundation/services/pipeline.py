@@ -52,14 +52,14 @@ class PipelineService:
         suffix = Path(file_name).suffix.lower() or Path(file_type or "").suffix.lower()
         self._validate_file(suffix, content)
 
-        # 原始文件落盘（MinIO 的本地替代，Demo 用）
-        stored = self.storage.save_raw_document(file_name, content)
-        minio_path = stored.object_path
-
         file_hash = hashlib.sha256(content).hexdigest()
         existing = self.database.find_by_hash(file_hash)
         if existing is not None:
             return {"document_id": existing, "duplicate": True, "blocks": 0}
+
+        # 查重通过后才落盘（MinIO 的本地替代，Demo 用），避免重复上传残留孤儿文件
+        stored = self.storage.save_raw_document(file_name, content)
+        minio_path = stored.object_path
 
         document_id = self.database.save_document(
             file_name=file_name,
@@ -103,6 +103,12 @@ class PipelineService:
         file_name: str | None = None,
         upload_user: str | None = None,
     ) -> dict:
+        """文档重传：新内容走完整接入流程（存文件 + 解析 + 入库）。
+
+        返回 dict 含 job_id / 新 document_id / changed / old_document_id；
+        job 保持 running（phase=parsing），旧文档暂不删除，由编排层在
+        EIU 重抽与版本重建全部成功后再删除（失败保留旧文档、回滚新文档）。
+        """
         existing = self.database.get_document(document_id)
         if existing is None:
             raise ValueError("document not found")
@@ -117,31 +123,46 @@ class PipelineService:
             self.database.update_job(job_id, status="completed", phase="unchanged", progress=100, message="内容未变化，无需重算", finished=True)
             return {"job_id": job_id, "document_id": document_id, "changed": False}
 
-        # 覆盖式全量重算：旧文档物理删除，新内容走完整接入流程重新解析、重新抽取。
-        # 文档本身不做版本留痕；问答对的最终版本管理由 m05 的 dataset_version（冻结版本）统一负责。
-        old_minio_path = existing.get("minio_path")
-        old_document_id = document_id
-        stored = self.storage.save_raw_document(file_name or existing["file_name"], content)
-        result = self.upload_document(
-            minio_path=stored.object_path,
-            file_name=file_name or existing["file_name"],
-            file_type=suffix,
-            content=content,
-            upload_user=upload_user,
-        )
+        try:
+            # 覆盖式全量重算第一步：新内容入库（存文件 + 解析 + 写块）。
+            # 保留原文档的目录 / 业务用途 / 版本信息；旧文档等全链路成功后再删。
+            result = self.upload_document(
+                minio_path="",
+                file_name=file_name or existing["file_name"],
+                file_type=suffix,
+                content=content,
+                upload_user=upload_user,
+                document_version=existing.get("document_version"),
+                folder_path=existing.get("folder_path"),
+                purpose=existing.get("purpose"),
+            )
+        except Exception as exc:  # noqa: BLE001 — 解析/入库失败：job 置 failed，旧文档不受影响
+            logger.warning("文档 %s 重传解析失败，job %s 置 failed: %s", document_id, job_id, exc)
+            self.database.update_job(
+                job_id, status="failed", phase="parsing",
+                message=f"重传解析失败: {exc}", finished=True,
+            )
+            raise
+
+        # 新内容与库中其他文档完全一致：不执行覆盖，保留当前文档
+        if result.get("duplicate"):
+            self.database.update_job(
+                job_id, status="completed", phase="unchanged", progress=100,
+                message=f"新内容已存在于文档 {result['document_id']}，未执行覆盖", finished=True,
+            )
+            return {"job_id": job_id, "document_id": document_id, "changed": False}
+
         new_document_id = result["document_id"]
-        # P0：块向量索引已废弃，仅物理删除旧文档（块 + 知识点 + 落盘文件）
-        self.database.delete_document(old_document_id)
-        self.storage.delete_raw_document(old_minio_path)
+        # parsing 阶段完成：整体进度统一为 40（40–90 由 EIU 抽取、90–100 由版本重建接管）
         self.database.update_job(
-            job_id,
-            status="completed",
-            phase="done",
-            progress=100,
-            message=f"已重算，新文档 ID={new_document_id}（旧文档已删除）",
-            finished=True,
+            job_id, progress=40, message="解析完成，开始 EIU 重抽"
         )
-        return {"job_id": job_id, "document_id": new_document_id, "changed": True}
+        return {
+            "job_id": job_id,
+            "document_id": new_document_id,
+            "changed": True,
+            "old_document_id": document_id,
+        }
 
     # ------------------------------------------------------------------
     # 文档 / 块 / 任务 查询

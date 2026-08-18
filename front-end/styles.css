@@ -387,6 +387,25 @@ ul { list-style: none; }
 .up-modal-foot .up-danger:hover { background: #dc2626; border-color: #dc2626; color: #fff; }
 .up-hint { font-size: 12px; color: var(--sub); padding: 0 16px 14px; line-height: 1.5; }
 
+/* 混合上传确认面板：异常文件（将覆盖 / 弱提示）确认 */
+.up-confirm-list { display: flex; flex-direction: column; gap: 8px; }
+.up-confirm-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 12px; border: 1px solid var(--brand-tint); border-radius: 10px; background: var(--brand-bg); }
+.up-confirm-info { flex: 1; min-width: 0; }
+.up-confirm-name { font-size: 13px; font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 8px; }
+.up-confirm-tag { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 999px; flex-shrink: 0; }
+.up-confirm-tag.c { background: #fef2f2; color: #dc2626; border: 1px solid #fecaca; }
+.up-confirm-tag.w { background: #fffbeb; color: #b45309; border: 1px solid #fde68a; }
+.up-confirm-detail { font-size: 12px; color: var(--sub); margin-top: 3px; line-height: 1.5; }
+.up-confirm-remove { flex-shrink: 0; border: 1px solid var(--brand-tint); background: var(--surface); color: var(--sub); font-size: 12px; padding: 5px 10px; border-radius: 8px; cursor: pointer; }
+.up-confirm-remove:hover { color: #dc2626; border-color: #fecaca; background: #fef2f2; }
+.up-modal-foot .up-confirm-cancel { background: var(--surface); color: var(--sub); }
+.up-modal-foot .up-confirm-cancel:hover { background: var(--brand-bg); color: var(--brand); }
+.up-modal-foot .up-confirm-ok:disabled { opacity: .5; cursor: not-allowed; }
+
+/* 覆盖更新进度浮层 */
+.up-reupload-status { position: fixed; right: 20px; bottom: 20px; z-index: 10000; background: var(--surface); border: 1px solid var(--brand-tint); border-radius: 10px; padding: 10px 14px; font-size: 13px; color: var(--text); box-shadow: 0 12px 32px rgba(0, 0, 0, .22); max-width: 340px; }
+.up-reupload-status.err { border-color: #fecaca; color: #dc2626; }
+
 /* 删除文档确认：警示文案 + 关联问答对清单 */
 .del-confirm-txt { font-size: 13px; color: var(--text); line-height: 1.7; margin: 8px 6px 12px; }
 .del-confirm-txt b { color: #dc2626; }

@@ -111,7 +111,6 @@
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | version_id | INT PK | |
-| corpus_id | INT FK | |
 | version_number | VARCHAR | v1.0.0 |
 | status | VARCHAR | draft / frozen / published |
 | case_count | INT | |
@@ -172,7 +171,7 @@
 
 ### 3.3 文档更新处理（FR-DS-INC，Demo 采用覆盖式全量重算）
 
-文档重传触发覆盖式全量重算（更新触发见 01 §2.7 的 doc_update_job）：
+文档重传触发覆盖式全量重算（更新触发见 01 §2.8 的 doc_update_job）：
 
 ```
 新增文档后：
@@ -232,7 +231,7 @@ Agent 评测前（自动运行阶段）用户可选择：指定单个评测集�
 > - （后续版本）开启跨文档且选择目录导出时：单文档题仍按各文档章节树分文件夹，"跨文档综合题"单独形成一个"跨文档"文件夹，不混入任何单文档章节树（Demo 阶段不生成跨文档题）。
 
 ```
-GET /api/corpus/{corpus_id}/tree
+GET /api/tree
   → 按原文档 section_path 构建树形结构
   → 每个节点标注样本数、EIU 覆盖率、未覆盖缺口
 ```
@@ -357,13 +356,13 @@ GET /api/corpus/{corpus_id}/tree
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `/api/corpus/{corpus_id}/freeze` | 冻结版本 |
-| GET | `/api/corpus/{corpus_id}/versions` | 版本列表 |
+| POST | `/api/freeze` | 冻结版本 |
+| GET | `/api/versions` | 版本列表 |
 | GET | `/api/versions/{version_id}` | 版本详情（含快照元信息） |
 | GET | `/api/versions/{version_id}/export?format=jsonl` | 导出评测集 |
 | GET | `/api/versions/{version_id}/export?format=json` | 目录结构导出 |
 | GET | `/api/versions/{version_id}/export?format=xlsx` | Excel 导出 |
-| GET | `/api/corpus/{corpus_id}/tree` | 目录树浏览 |
+| GET | `/api/tree` | 目录树浏览 |
 | GET | `/api/versions/{version_id}/cases` | 表格视图数据（支持 filter/sort/page/source） |
 | GET | `/api/versions/{version_id}/stats` | 当前筛选下的聚合统计与分布（供可视化） |
 | PUT | `/api/cases/{case_id}` | 手动编辑样本（表格视图就地编辑复用） |

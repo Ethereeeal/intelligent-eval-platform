@@ -2,7 +2,7 @@
 
 本文件为早期（Demo 起步期）核心数据对象草案。**当前表结构与字段以 `modules/shared/services/database.py` 及 m01–m05 模块 README 为准**；本文件保留作概念关系参考，BRD V1.3 新增对象见文末"后续扩展"。
 
-> 当前实现说明：数据库已由 SQLite 迁移为 MySQL（docker evalforge 库）；EIU 表已新增 `embedding_vector`（EIU 向量化，512 维，BRD V1.3 §5.7）；`document_block`、`eiu`、`generated_case` 等表结构详见 m01–m05 README。
+> 当前实现说明：数据库已由 SQLite 迁移为 MySQL（docker evalforge 库）；EIU 表已新增 `embedding_vector`（EIU 向量化，512 维，BRD V1.3 §5.7）；**corpus 概念已移除**（按「文档/文件夹」维度实现，见 m01 §2.1），下文 corpus 相关表结构与关系图为早期设计留档；`document_block`、`eiu`、`generated_case` 等表结构详见 m01–m05 README。
 
 ## 核心表结构
 
@@ -120,7 +120,7 @@ document ──1:N──> task_job
 
 ## FAISS 索引
 
-- EIU 向量为主（`eiu.embedding_vector`，512 维，IndexFlatIP 余弦等价），Block 向量保留用于检索；一个语料库一个索引，或先做单全局索引再按 corpus_id 过滤
+- EIU 向量为主（`eiu.embedding_vector`，512 维，IndexFlatIP 余弦等价，进程内全库索引、从 MySQL 重建，不落盘）；**Block 向量已废弃**（仅作定位分片，不再向量化）；按文档维度检索，无 corpus 过滤
 - 索引版本与模型版本绑定
 - 向量主键必须与 MySQL `eiu_id` / `block_id` 可追溯对应
 
