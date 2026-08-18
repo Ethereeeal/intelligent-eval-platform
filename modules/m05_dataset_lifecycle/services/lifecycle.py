@@ -21,7 +21,10 @@ import json
 import re
 from datetime import datetime
 
-from modules.m02_eiu_coverage.services.coverage import save_coverage_report
+from modules.m02_eiu_coverage.services.coverage import (
+    assert_coverage_gate,
+    save_coverage_report,
+)
 from modules.shared.services.database import DatabaseService
 
 # m04 审核状态机中"可纳入冻结集"的终态（不纳入 blocked / retired / needs_revision）
@@ -99,6 +102,8 @@ class DatasetLifecycleService:
             },
         )
         coverage = self.db.get_latest_coverage_report() or {}
+        # 发布门禁（FR-COVER-002）：85% / P0=100% / 对账率=100%，不达标阻断冻结
+        assert_coverage_gate(coverage)
         snapshot_metadata = self._build_snapshot_metadata(
             coverage=coverage,
             created_by=created_by,

@@ -67,6 +67,25 @@ def _clamp_confidence(value: float | None) -> float:
     return max(0.0, min(1.0, float(value)))
 
 
+def _truncate_statement(text: str, max_len: int = _STATEMENT_MAX) -> str:
+    """按 200 字上限截断 EIU 陈述，优先在句界 / 逗号处截断。
+
+    避免直接硬切把限定语（主体/条件/范围/期间等）拦腰截断；
+    整句不超过上限时原样返回。验收 D4 仍保证 len(statement) ≤ 200。
+    """
+    if len(text) <= max_len:
+        return text
+    cut = text[:max_len]
+    for boundary in ("。", "；", "！", "？", "\n"):
+        idx = cut.rfind(boundary)
+        if idx > 0:
+            return cut[: idx + 1]
+    idx = cut.rfind("，")
+    if idx > 0:
+        return cut[: idx + 1]
+    return cut
+
+
 def _default_constraints() -> dict:
     return {"主体": None, "条件": None, "范围": None, "期间": None, "币种": None, "单位": None}
 
@@ -183,7 +202,7 @@ def deterministic_extract(text: str) -> list[dict]:
         seen.add(statement)
         results.append(
             {
-                "statement": statement[: _STATEMENT_MAX],
+                "statement": _truncate_statement(statement),
                 "eiu_type": eiu_type,
                 "content_priority": priority,
                 "constraints": _constraints_for(sentence),
@@ -238,7 +257,7 @@ def normalize_item(item: dict, block_id: int, extraction_model: str) -> dict | N
 
     return {
         "block_id": block_id,
-        "statement": statement[:_STATEMENT_MAX],
+        "statement": _truncate_statement(statement),
         "eiu_type": eiu_type,
         "content_priority": priority,
         "constraints": constraints,
@@ -592,7 +611,7 @@ class EiuExtractorService:
                 continue
             eiu_type, priority = classification
             normalized = {
-                "statement": statement[:_STATEMENT_MAX],
+                "statement": _truncate_statement(statement),
                 "eiu_type": eiu_type,
                 "content_priority": priority,
                 "constraints": _constraints_for(statement),

@@ -10,6 +10,20 @@ from typing import Iterable
 
 from modules.shared.services.database import PRIORITY_WEIGHT, DatabaseService
 
+# 覆盖统计口径：仅统计达到可发布态的 generated_case（与 m05 PUBLISHABLE_STATUSES 一致），
+# candidate / blocked / needs_revision 不计入"已覆盖"，避免抬高覆盖率通过门禁。
+PUBLISHABLE_STATUSES = {
+    "quality_verified",
+    "governance_passed",
+    "user_confirmed",
+    "published",
+}
+
+
+def _default_covered_eiu_ids(database: DatabaseService) -> set[int]:
+    """默认已覆盖集合：已生成且处于可发布态样本的 EIU id（BRD c_i=1 口径）。"""
+    return database.list_covered_eiu_ids(statuses=PUBLISHABLE_STATUSES)
+
 
 def save_coverage_report(
     *,
@@ -47,9 +61,14 @@ def compute_coverage(
     covered_eiu_ids：已有通过质量校验题目的 EIU（M03 生成题目后传入；M02 阶段为空，
     weighted_coverage 相应为 0.0，见 SPEC §7.3 示例）。
     blocked_eiu_ids：DELETE 软删除的 EIU（不计入分母）。
+
+    未显式传入 covered_eiu_ids 时，自动取"已生成且处于可发布态"样本的 EIU 集合，
+    保证 /api/eiu/coverage 与 m05 冻结时落库的覆盖率不是恒 0。
     """
     database = DatabaseService()
-    covered: set[int] = set(covered_eiu_ids or [])
+    covered: set[int] = (
+        set(covered_eiu_ids) if covered_eiu_ids is not None else _default_covered_eiu_ids(database)
+    )
     blocked: set[int] = set(blocked_eiu_ids or [])
 
     eius = database.list_eius(include_blocked=False)
@@ -163,7 +182,9 @@ def compute_coverage(
 def compute_gaps(*, covered_eiu_ids: Iterable[int] | None = None) -> list[dict]:
     """未覆盖 EIU 清单：可出题但尚无对应题目的 EIU（M02 阶段即全部可出题项）。"""
     database = DatabaseService()
-    covered: set[int] = set(covered_eiu_ids or [])
+    covered: set[int] = (
+        set(covered_eiu_ids) if covered_eiu_ids is not None else _default_covered_eiu_ids(database)
+    )
     eius = database.list_eius(include_blocked=False)
     gaps = [
         {
@@ -180,3 +201,27 @@ def compute_gaps(*, covered_eiu_ids: Iterable[int] | None = None) -> list[dict]:
         if eiu["is_questionable"] and eiu["eiu_id"] not in covered
     ]
     return gaps
+
+
+def assert_coverage_gate(report: dict) -> None:
+    """发布门禁（m05 freeze 强制执行，BRD FR-COVER-002 / README §3.3）：
+
+    - 总体加权 EIU 覆盖率 < 85% → 阻断发布；
+    - P0 EIU 覆盖率 < 100% → 阻断发布；
+    - 实质 Block 对账率 < 100% → 阻断发布。
+    不达标抛出 ValueError（上层转为 400）。
+    """
+    failures: list[str] = []
+    weighted = report.get("weighted_coverage")
+    if weighted is not None and weighted < 0.85:
+        failures.append(f"总体加权 EIU 覆盖率 {weighted:.1%} < 85%，未达到发布门禁")
+    p0 = report.get("p0_coverage_pct")
+    if p0 is not None and p0 < 1.0:
+        failures.append(f"P0 EIU 覆盖率 {p0:.1%} < 100%，未达到发布门禁")
+    reconciliation = (report.get("block_reconciliation") or {}).get("rate")
+    if reconciliation is not None and reconciliation < 1.0:
+        failures.append(
+            f"实质 Block 对账率 {reconciliation:.1%} < 100%，存在未关联 EIU/排除记录的文段"
+        )
+    if failures:
+        raise ValueError("；".join(failures))

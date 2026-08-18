@@ -1760,12 +1760,17 @@ class DatabaseService:
         return updated is not None
 
     def list_covered_eiu_ids(
-        self, *, document_id: int | None = None
+        self,
+        *,
+        document_id: int | None = None,
+        statuses: set[str] | None = None,
     ) -> set[int]:
         """已生成评测样本的 EIU id 集合（按文档维度）。
 
         传入 document_id 时仅返回该文档维度的已覆盖 EIU，
         实现单文档问答对隔离——重抽某文档不会误判其他文档已覆盖项。
+        statuses 非空时仅统计处于指定审核状态的样本（如"可发布态"），
+        用于覆盖率 / gaps 口径；m03 生成侧不传 statuses（保持跳过已覆盖项）。
         """
         with SessionLocal() as session:
             query = (
@@ -1773,6 +1778,8 @@ class DatabaseService:
                 .filter(GeneratedCaseRow.eiu_id.isnot(None))
                 .filter(GeneratedCaseRow.review_status != "retired")
             )
+            if statuses:
+                query = query.filter(GeneratedCaseRow.review_status.in_(statuses))
             if document_id is not None:
                 query = query.filter(GeneratedCaseRow.document_id == document_id)
             rows = query.all()
