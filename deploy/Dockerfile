@@ -7,9 +7,6 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# 先复制依赖清单并安装依赖（层缓存：改源码不触发重装 torch / requirements）
-COPY deploy/requirements.txt deploy/requirements.txt
-
 # 先写入全局 pip 配置（超时 600s / 重试 10 / 国内镜像），对所有后续 pip 安装生效，
 # 以对抗容器内访问 pypi.org / download.pytorch.org / files.pythonhosted.org 的网络抖动
 # （之前 torch 步骤因默认超短超时导致 155MB 大轮子 ReadTimeout）。
@@ -17,7 +14,8 @@ RUN pip config set global.timeout 600 \
  && pip config set global.retries 10 \
  && pip config set global.index-url https://mirrors.aliyun.com/pypi/simple/ \
  && pip config set global.extra-index-url "https://mirrors.cloud.tencent.com/pypi/simple/ https://mirrors.tuna.tsinghua.edu.cn/pypi/simple/"
-# torch 走 CPU 专用源：当前运行环境无 GPU（无 CUDA），用 +cpu 轮子避免
+# torch 先装（父层固定为 pip 配置）：改 requirements / 源码都不触发重装 torch。
+# 走 CPU 专用源：当前运行环境无 GPU（无 CUDA），用 +cpu 轮子避免
 # 拉取 nvidia-cudnn / cuda-toolkit 等多余 CUDA 依赖。后续若有 GPU 环境，
 # 再改回默认源或指定对应 CUDA 版本的 torch。全局超时/重试已在上一步配置，
 # 再套一层整条命令重试循环以对抗 torch 大轮子的瞬时 ReadTimeout。
@@ -25,6 +23,9 @@ RUN for i in 1 2 3 4 5; do \
       pip install --no-cache-dir --index-url https://download.pytorch.org/whl/cpu torch && break \
       || echo "torch install attempt $i failed, retrying in 15s..." && sleep 15; \
     done
+# 依赖清单最后复制（与源码同级变更）：requirements 变更只重装 requirements 一层，
+# torch 层不受影响。注意 requirements.txt 在 pip install -r 之前必须已存在。
+COPY deploy/requirements.txt deploy/requirements.txt
 # 其余依赖走国内镜像源（已在全局配置中设置 aliyun + 腾讯云 + 清华），
 # 并套一层整条命令重试循环以对抗瞬时网络抖动。torch 已装好，不会重复拉 CUDA 版。
 RUN for i in 1 2 3 4 5; do \
