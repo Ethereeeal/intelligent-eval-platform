@@ -7,6 +7,8 @@ import statistics
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from modules.shared.core.config import settings
+
 
 @dataclass
 class ParsedBlock:
@@ -70,8 +72,21 @@ class DocumentParser:
             wb = openpyxl.load_workbook(str(file_path), read_only=True, data_only=True)
             ws = wb.active
             sheet_name = ws.title or "表格"
+            # 防压缩炸弹：限制活动工作表的行数 / 单元格数，超限直接拒绝
+            max_row = ws.max_row or 0
+            max_col = ws.max_column or 0
+            if max_row > settings.max_table_rows:
+                raise ValueError(
+                    f"表格行数 {max_row} 超过上限 {settings.max_table_rows}，已拒绝解析"
+                )
+            if max_row * max_col > settings.max_xlsx_cells:
+                raise ValueError(
+                    f"表格单元格数 {max_row * max_col} 超过上限 {settings.max_xlsx_cells}，已拒绝解析"
+                )
             for row in ws.iter_rows(values_only=True):
                 rows.append([("" if c is None else str(c)).strip() for c in row])
+        if len(rows) > settings.max_table_rows:
+            raise ValueError(f"表格行数 {len(rows)} 超过上限 {settings.max_table_rows}，已拒绝解析")
         # 去掉全空行
         rows = [r for r in rows if any(r)]
         if not rows:
@@ -134,6 +149,10 @@ class DocumentParser:
         import fitz
 
         doc = fitz.open(file_path)
+        if doc.page_count > settings.max_pdf_pages:
+            raise ValueError(
+                f"PDF 页数 {doc.page_count} 超过上限 {settings.max_pdf_pages}，已拒绝解析"
+            )
         raw: list[dict] = []
         for page_index in range(doc.page_count):
             page = doc.load_page(page_index)
@@ -179,6 +198,11 @@ class DocumentParser:
         import docx
 
         document = docx.Document(str(file_path))
+        table_cells = sum(len(table.rows) * len(table.columns) for table in document.tables)
+        if len(document.paragraphs) + table_cells > settings.max_docx_blocks:
+            raise ValueError(
+                f"DOCX 元素数（段落+表格单元格）超过上限 {settings.max_docx_blocks}，已拒绝解析"
+            )
         raw: list[dict] = []
         for para in document.paragraphs:
             text = para.text.strip()

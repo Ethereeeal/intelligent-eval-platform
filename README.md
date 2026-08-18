@@ -93,6 +93,8 @@ docker compose -f deploy/docker-compose.yml logs -f backend
 
 > 注意：源码是烘焙进 backend 镜像的，修改 `modules/` 后必须重新 `build backend`，仅 `restart` 不会加载新代码。
 
+> 安全：Demo 默认无鉴权（`API_TOKEN` 留空）；生产必须设置 `API_TOKEN` 并按需收紧 `CORS_ORIGINS`（见 `deploy/env.example`）。
+
 ## 协作方式
 
 - 仓库统一使用 GitHub 管理

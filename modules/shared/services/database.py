@@ -130,6 +130,20 @@ class FolderRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class AuditLogRow(Base):
+    """审计日志：删除 / 覆盖等破坏性操作留痕（BRD 12.3 / production-readiness P0#2）。"""
+
+    __tablename__ = "audit_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    operation: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_type: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    target_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    actor: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    detail: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class BlockRow(Base):
     __tablename__ = "document_block"
 
@@ -852,7 +866,7 @@ class DatabaseService:
                 session.query(GeneratedCaseRow)
                 .filter(
                     (GeneratedCaseRow.folder_path == fp)
-                    | (GeneratedCaseRow.folder_path.like(fp + "/%"))
+                    | (GeneratedCaseRow.folder_path.startswith(fp + "/", autoescape=True))
                 )
                 .delete(synchronize_session=False)
             )
@@ -945,6 +959,31 @@ class DatabaseService:
                 "created_at": row.created_at.isoformat() if row.created_at else None,
                 "finished_at": row.finished_at.isoformat() if row.finished_at else None,
             }
+
+    # ------------------------------------------------------------------
+    # audit — 破坏性操作审计（BRD 12.3）
+    # ------------------------------------------------------------------
+    def save_audit(
+        self,
+        *,
+        operation: str,
+        target_type: str | None = None,
+        target_id: str | None = None,
+        actor: str | None = None,
+        detail: dict | None = None,
+    ) -> None:
+        """写入一条审计记录（删除 / 覆盖等破坏性操作必须留痕）。"""
+        with SessionLocal() as session:
+            session.add(
+                AuditLogRow(
+                    operation=operation,
+                    target_type=target_type,
+                    target_id=target_id,
+                    actor=actor,
+                    detail=detail,
+                )
+            )
+            session.commit()
 
     # ------------------------------------------------------------------
     # eiu（M02 — EIU 抽取与覆盖规划）

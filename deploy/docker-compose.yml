@@ -50,6 +50,15 @@ services:
       # LLM（OpenAI 兼容 API）：DeepSeek，配置来自 ../.env（已 gitignore，本地使用，不入库）
       LLM_TEMPERATURE: "0.1"
       LLM_MAX_TOKENS: "4096"
+      # P0 安全加固：生产必须设置 API_TOKEN（默认关闭，Demo 联调保持无鉴权）；
+      # CORS 白名单默认 localhost:8080（前端同源代理），直连/局域网访问按需追加
+      # API_TOKEN: "change-me"
+      # CORS_ORIGINS: "http://localhost:8080,http://127.0.0.1:8080"
+      # 解析资源上限（压缩炸弹防护，默认值已足够，可按需调小）
+      # MAX_PDF_PAGES: "500"
+      # MAX_TABLE_ROWS: "100000"
+      # MAX_XLSX_CELLS: "500000"
+      # MAX_DOCX_BLOCKS: "200000"
     ports:
       - "8000:8000"
     volumes:

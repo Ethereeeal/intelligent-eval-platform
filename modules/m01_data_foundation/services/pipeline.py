@@ -4,6 +4,8 @@ import hashlib
 import logging
 from pathlib import Path
 
+from sqlalchemy.exc import IntegrityError
+
 from modules.m01_data_foundation.services.embedding import EmbeddingService
 from modules.m01_data_foundation.services.parser import DocumentParser
 from modules.m01_data_foundation.services.storage import StorageService
@@ -61,18 +63,26 @@ class PipelineService:
         stored = self.storage.save_raw_document(file_name, content)
         minio_path = stored.object_path
 
-        document_id = self.database.save_document(
-            file_name=file_name,
-            file_type=suffix,
-            file_size=len(content),
-            file_hash=file_hash,
-            minio_path=minio_path,
-            upload_user=upload_user,
-            document_version=document_version,
-            folder_path=folder_path,
-            purpose=purpose,
-            parse_status="pending",
-        )
+        try:
+            document_id = self.database.save_document(
+                file_name=file_name,
+                file_type=suffix,
+                file_size=len(content),
+                file_hash=file_hash,
+                minio_path=minio_path,
+                upload_user=upload_user,
+                document_version=document_version,
+                folder_path=folder_path,
+                purpose=purpose,
+                parse_status="pending",
+            )
+        except IntegrityError:
+            # 并发同哈希上传：另一请求已抢先入库，按重复处理并清理本请求已落盘的文件
+            self.storage.delete_raw_document(minio_path)
+            existing = self.database.find_by_hash(file_hash)
+            if existing is None:
+                raise
+            return {"document_id": existing, "duplicate": True, "blocks": 0}
         try:
             parse_path = Path(minio_path)
             if not parse_path.exists():

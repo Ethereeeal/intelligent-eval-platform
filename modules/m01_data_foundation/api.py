@@ -275,6 +275,16 @@ def reupload_document(
         token_error = _validate_confirm_token(confirm_token, document_id, file_hash)
         if token_error:
             raise HTTPException(status_code=400, detail=token_error)
+        try:
+            pipeline_service.database.save_audit(
+                operation="document.overwrite_confirmed",
+                target_type="document",
+                target_id=str(document_id),
+                actor="web",
+                detail={"file_hash": file_hash, "file_name": file.filename},
+            )
+        except Exception:  # noqa: BLE001 — 审计失败不阻断覆盖确认
+            logger.warning("审计写入失败 document.overwrite_confirmed id=%s", document_id)
     try:
         result = pipeline_service.reupload_document(
             document_id=document_id,
@@ -359,6 +369,17 @@ def _run_reupload_chain(*, job_id: int, new_document_id: int, old_document_id: i
             message=f"新文档已生效，但旧文档清理失败: {exc}",
             finished=True,
         )
+        return
+    try:
+        db.save_audit(
+            operation="document.overwrite",
+            target_type="document",
+            target_id=str(old_document_id),
+            actor="web",
+            detail={"new_document_id": new_document_id, "job_id": job_id},
+        )
+    except Exception:  # noqa: BLE001 — 审计失败不阻断主流程
+        logger.warning("审计写入失败 document.overwrite old_doc=%s", old_document_id)
 
 
 @documents_router.delete("/{document_id}")
@@ -370,7 +391,18 @@ def delete_document(document_id: int):
     try:
         pipeline_service.delete_document(document_id)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=f"删除失败：{exc}") from exc
+        logger.error("文档 %s 删除失败: %s", document_id, exc)
+        raise HTTPException(status_code=500, detail="删除失败，请稍后重试或查看日志") from exc
+    try:
+        pipeline_service.database.save_audit(
+            operation="document.delete",
+            target_type="document",
+            target_id=str(document_id),
+            actor=document.get("upload_user") or "web",
+            detail={"file_name": document.get("file_name")},
+        )
+    except Exception:  # noqa: BLE001 — 审计失败不阻断删除
+        logger.warning("审计写入失败 document.delete id=%s", document_id)
     return {"document_id": document_id, "deleted": True}
 
 
@@ -433,7 +465,18 @@ def move_folder(
 def delete_folder(path: str = Query(...), owner: str | None = Query(None)):
     """删除文件夹（递归子孙），其下文档自动上移到父目录（不丢文档）。"""
     try:
-        return pipeline_service.database.delete_folder(owner=owner, path=path)
+        result = pipeline_service.database.delete_folder(owner=owner, path=path)
     except ValueError as exc:
         status = 404 if "不存在" in str(exc) else 400
         raise HTTPException(status_code=status, detail=str(exc)) from exc
+    try:
+        pipeline_service.database.save_audit(
+            operation="folder.delete",
+            target_type="folder",
+            target_id=path,
+            actor=owner or "web",
+            detail=result,
+        )
+    except Exception:  # noqa: BLE001 — 审计失败不阻断删除
+        logger.warning("审计写入失败 folder.delete path=%s", path)
+    return result

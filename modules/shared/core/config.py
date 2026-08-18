@@ -24,8 +24,24 @@ class Settings(BaseModel):
     minio_secret_key: str = os.getenv("MINIO_SECRET_KEY", "minio12345")
     faiss_index_path: str = os.getenv("FAISS_INDEX_PATH", "storage/faiss.index")
     embedding_model_name: str = os.getenv("EMBEDDING_MODEL_NAME", "BAAI/bge-small-zh-v1.5")
+    # 访问控制（P0 安全加固）：默认关闭（Demo）；生产设置 API_TOKEN 后所有 /api/* 需 Bearer/请求头鉴权
+    api_token: str = os.getenv("API_TOKEN", "")
+    # CORS 白名单：前端经 nginx 同源代理（8080）访问时无需跨域；直连后端或局域网访问需按需追加
+    cors_origins: list[str] = [
+        origin.strip().lower()
+        for origin in os.getenv(
+            "CORS_ORIGINS",
+            "http://localhost:8080,http://127.0.0.1:8080",
+        ).split(",")
+        if origin.strip()
+    ]
     # 文档接入限制（README FR-DOC-005 / §2.6）
     max_file_size: int = int(os.getenv("MAX_FILE_SIZE", str(50 * 1024 * 1024)))  # 50MB
+    # 解析资源上限（P0 压缩炸弹防护）：PDF 页数 / 表格行数 / 单元格数 / DOCX 元素数
+    max_pdf_pages: int = int(os.getenv("MAX_PDF_PAGES", "500"))
+    max_table_rows: int = int(os.getenv("MAX_TABLE_ROWS", "100000"))
+    max_xlsx_cells: int = int(os.getenv("MAX_XLSX_CELLS", "500000"))
+    max_docx_blocks: int = int(os.getenv("MAX_DOCX_BLOCKS", "200000"))
     allowed_extensions: list[str] = [
         ext.strip().lower()
         for ext in os.getenv("ALLOWED_EXTENSIONS", ".txt,.md,.pdf,.docx,.xlsx,.csv").split(",")
