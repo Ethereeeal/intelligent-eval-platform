@@ -1,6 +1,8 @@
 # Data Model
 
-本文件描述核心数据对象、表结构和主键关系。
+本文件为早期（Demo 起步期）核心数据对象草案。**当前表结构与字段以 `modules/shared/services/database.py` 及 m01–m05 模块 README 为准**；本文件保留作概念关系参考，BRD V1.3 新增对象见文末"后续扩展"。
+
+> 当前实现说明：数据库已由 SQLite 迁移为 MySQL（docker evalforge 库）；EIU 表已新增 `embedding_vector`（EIU 向量化，512 维，BRD V1.3 §5.7）；`document_block`、`eiu`、`generated_case` 等表结构详见 m01–m05 README。
 
 ## 核心表结构
 
@@ -118,6 +120,19 @@ document ──1:N──> task_job
 
 ## FAISS 索引
 
-- 一个语料库一个索引，或先做单全局索引再按 corpus_id 过滤
+- EIU 向量为主（`eiu.embedding_vector`，512 维，IndexFlatIP 余弦等价），Block 向量保留用于检索；一个语料库一个索引，或先做单全局索引再按 corpus_id 过滤
 - 索引版本与模型版本绑定
-- 向量主键必须与 MySQL block_id 可追溯对应
+- 向量主键必须与 MySQL `eiu_id` / `block_id` 可追溯对应
+
+## 后续扩展（BRD V1.3）
+
+| 对象 | 说明 | 关键关系 |
+|---|---|---|
+| EvidenceItem | EIU 有序证据列表中的单条证据（含角色 `direct`/`qualifier`/`reference`/`conflict`、定位全字段、版本） | 关联 EvaluableUnit（BRD V1.3 §8.3 证据列表化，预留） |
+| StatementProvenance | EIU 陈述片段到证据条目的映射（可选增强） | 关联 EIU 与 EvidenceItem |
+| UploadedEvalSet | 用户直接上传的 QA 评测集（单轮 `q/a/evidence/dimension`；多轮 `session_id + turns[]`） | 关联维度配置与质量评估结果（FR-DS-SRC-001/002，预留） |
+| PublicEvalSet | 组织方预置的公共评测集库条目 | 按可配置维度分类，版本化管理（FR-DS-SRC-004，预留） |
+| EvalSetDimension | 评测维度可配置体系 | 关联公共库条目与上传样本 |
+| EvalSetComposition | Agent 评测前的评测集组合（单个/维度/多来源合并） | 关联评测运行与审计记录（FR-DS-SRC-005，预留） |
+
+> 说明：以上对象为 BRD V1.3 新增需求的预留设计，尚未建表；落地时以数据库迁移为准。

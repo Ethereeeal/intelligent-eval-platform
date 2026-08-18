@@ -29,8 +29,8 @@
 
 | 需求编号 | 需求 |
 |---|---|
-| FR-STORAGE-001 | 五层后台存储：原始文件/关系型数据/向量索引/语义理解/配置与版本 |
-| FR-INDEX-001 | 多路索引：关键词稀疏/稠密向量/元数据/结构关系/表格 |
+| FR-STORAGE-001 | 五层后台存储：原始文件/关系型数据/向量索引/语义理解/配置与版本；EIU 为向量化核心对象（BRD V1.3 §5.7，chunk/Block 为中间结构、主要服务检索） |
+| FR-INDEX-001 | 多路索引：关键词稀疏/稠密向量（EIU 向量为主、Block 向量为辅）/元数据/结构关系/表格 |
 | FR-INDEX-002 | FAISS 适用边界：原型或单机高效近邻检索，不承担业务数据库职责 |
 | FR-INDEX-003 | 覆盖式重处理：重传文档整体重新分段+向量化（Demo 不做增量，见 §2.7） |
 | FR-INDEX-004 | Embedding/Reranker 预配置：模型名称/版本/维度/批大小/归一化方式/健康检查 |
@@ -134,7 +134,9 @@ POST /api/documents/upload
 - 检测乱码：不可打印字符占比 > 阈值 → 标记
 - Demo 阶段：发现问题时记入 parse_error，不阻断流程
 
-### 2.4 Block 存储与向量化
+### 2.4 Block 存储与 EIU 向量化
+
+> **P0 改造（BRD V1.3 §5.7）**：向量化核心对象从 Block（chunk）改为 **EIU**。Block 仍承担结构存储与原文定位（FR-PARSE-003），chunk/Block 是文档切分的中间结构、主要服务检索；EIU 承载完整语义，是向量化与跨文档知识融合的基础。实现：`modules/m01_data_foundation/services/eiu_indexer.py`（`EiuFaissIndex`）。
 
 **数据模型（block 表）：**
 
@@ -151,19 +153,20 @@ POST /api/documents/upload
 | end_offset | INT | |
 | metadata_json | JSON | |
 
-**向量化（辅助用途，非核心路径）：**
+**向量化（EIU 为主，Block 为辅）：**
 
 ```
-Block 文本 → BGE-small-zh-v1.5 → 768维向量 → FAISS Index
-                                            └── 记录 block_id ↔ vector_id 映射
+EIU 陈述 → BGE-small-zh-v1.5（512 维，已归一化）→ FAISS IndexFlatIP（余弦等价）
+                                            └── 记录 eiu_id ↔ vector_id 映射
+Block 文本 → BGE-small-zh-v1.5 → 向量（保留用于检索召回，非核心向量化对象）
 ```
 
-**向量化的三个辅助场景：**
-1. EIU 抽取时，检索相似 Block 帮助 LLM 判断是否重复
-2. 跨段关系发现时，Top-K 近邻作为候选（后续版本）
-3. 证据扩展时，检索邻接段落补充上下文
+**EIU 向量的用途：**
+1. EIU 抽取时语义去重（m02，已实现）
+2. 跨段/跨文档关系发现时，EIU 相似度聚类 + Top-K 近邻作为候选（BRD V1.3 §8.7，后续版本）
+3. 证据扩展时，检索邻接段落补充上下文（Block 向量）
 
-**Demo 阶段：** 向量化可先做简化版（仅用于 Block 去重提醒），不阻塞主链路。
+**Demo 阶段：** EIU 向量化已实现（`eiu.embedding_vector` 落库 + `EiuFaissIndex` 进程内索引）；FAISS 不可用或无向量时优雅降级，不阻断主链路。
 
 ### 2.8 BGE 模型加载（本地挂载，需手动下载）
 
@@ -250,7 +253,7 @@ Demo 阶段不实现完整的 FR-CORPUS-003，仅做：
 - [ ] `block` 表 + 解析器（TXT/MD/PDF/DOCX）
 - [ ] 层级文段构建（标题推断 + parent_block_id + section_path）
 - [ ] 解析状态管理 + 错误记录
-- [ ] BGE 向量化 + FAISS 索引（辅助）
+- [x] EIU 向量化 + FAISS 索引（`EiuFaissIndex`，EIU 为核心向量化对象；Block 向量保留用于检索）
 - [ ] 文件类型白名单 + 大小限制
 - [ ] 文档更新触发（content_hash 变化 → 覆盖式全量重算，无版本）
 - [ ] `doc_update_job` 进度状态机 + 进度查询 API（前端显示进度，完成提示"已更新完成"）

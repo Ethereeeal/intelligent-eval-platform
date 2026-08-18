@@ -1,8 +1,7 @@
 # 评测集平台 BRD 增量需求（侧线讨论整理）
 
-> 用途：供主线更新 `evaluation_dataset_platform_brd.md`（当前 V1.2）时参考。
+> 用途：供主线更新 `evaluation_dataset_platform_brd.md` 时参考（增量内容已并入 BRD **V1.3**，本文件作为决策依据存档）。
 > 来源：侧线讨论「EIU 抽取、覆盖率、质量评估、P0 机制、证据溯源」收口结论。
-> 状态：以下内容均**尚未写入** BRD；用户已确认本清单作为新增需求。
 > 关联文件：
 > - 四项关键决策（上传评测集模板、公共库维护、覆盖率适用范围、量化评估与门禁关系）：[evaluation_dataset_discussion_summary.md](evaluation_dataset_discussion_summary.md)
 > - 评分策略与质量评估研究依据：[evaluation_scoring_strategy.md](evaluation_scoring_strategy.md)
