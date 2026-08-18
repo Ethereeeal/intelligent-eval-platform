@@ -198,9 +198,12 @@
 
 泛化题共享种子答案，存在两类风险：① 改问偏离原意导致"答案与改问不匹配"；② 无意义改写（仅措辞变化无泛化价值）。
 
-- **方案**：泛化题复用 m04 `QualityChecker.check_case`（5 项检查：可回答性 / 答案忠实性 / 唯一性 / 证据充分性 / 问题相关性）做轻量门控——对每个泛化变体跑 `check_case`，hard 失败（忠实性 / 问题相关性）丢弃，其余保留并标记 `review_status="candidate"` 供后续人工/质检追溯。
-- **权衡**：复用 m04 而非完整重过质检，是因为泛化本身为"省成本扩写"；仅对 hard 失败丢弃，soft 失败（覆盖度存疑）走人工确认，避免违背泛化初衷。
-- 当前 `variation.py` 仅做"丢弃与种子完全相同的表述"（FR-VAR-002 简化版），上述 m04 门控为后续增强。
+- **方案（已实现）**：泛化变体先落库，再对每个变体跑 m04 `QualityChecker.check_case`（5 项检查：可回答性 / 答案忠实性 / 唯一性 / 证据充分性 / 问题相关性）做门控：
+  - **hard 失败**（忠实性 `faithfulness` / 问题相关性 `question_relevance`）→ 软删除该变体（`retire_generated_case`，保留审计痕迹），不进入产出；
+  - **其余**（含 soft 失败，如覆盖度/唯一性存疑）→ 保留为 `review_status="candidate"` 供后续人工/质检追溯。
+  - 质检异常（如模型不可用）不阻断泛化，变体保留为 candidate 交人工追溯。
+- **权衡**：复用 m04 而非完整重过质检，是因为泛化本身为"省成本扩写"；仅对 hard 失败丢弃，soft 失败走人工确认，避免违背泛化初衷。
+- 实现位置：`modules/m03_generation/services/variation.py` `generate_variations` → `_has_hard_failure`。
 
 ---
 

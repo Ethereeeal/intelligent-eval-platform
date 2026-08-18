@@ -3,6 +3,10 @@
 以种子问答对（用户上传的，或系统生成的规范问答对）为输入，
 扩写/改写/关联出数量更多、表述更多样的相关问题对。
 所有泛化结果共享同一 intent_id 与标准答案，不重复计入 EIU 覆盖率。
+
+泛化质检：复用 m04 `QualityChecker.check_case`（5 项检查）做门控，
+hard 失败（faithfulness / question_relevance）丢弃，其余保留并标记
+`review_status="candidate"` 供后续人工/质检追溯（README §2.7 泛化质检）。
 """
 from __future__ import annotations
 
@@ -13,6 +17,8 @@ from typing import Any
 from modules.m03_generation.models import GeneratedCase
 from modules.m03_generation.services.llm_service import LLMService
 from modules.m03_generation.services.prompts import build_variation_prompt
+from modules.m04_quality_governance.services.quality_checker import QualityChecker
+from modules.m04_quality_governance.schemas import HARD_CHECKS
 from modules.shared.core.config import settings
 from modules.shared.services.database import DatabaseService
 
@@ -21,6 +27,7 @@ class VariationService:
     def __init__(self) -> None:
         self.database = DatabaseService()
         self.llm = LLMService()
+        self.quality = QualityChecker()
 
     def generate_variations(
         self,
@@ -29,7 +36,12 @@ class VariationService:
         count: int = 3,
         styles: list[str] | None = None,
     ) -> list[dict]:
-        """基于种子题生成 count 个变体，全部共享种子题的 intent_id 与标准答案。"""
+        """基于种子题生成 count 个变体，全部共享种子题的 intent_id 与标准答案。
+
+        每个变体先落库，再走 m04 `check_case` 门控：
+        - hard 失败（忠实性 / 问题相关性）→ 丢弃并软删除该变体；
+        - 其余（含 soft 失败）→ 保留为 candidate 供人工/质检追溯。
+        """
         if count <= 0:
             return []
         styles = styles or ["formal", "colloquial", "omitted_subject", "reordered"]
@@ -49,7 +61,7 @@ class VariationService:
             question = str(variant.get("question") or "").strip()
             if not question:
                 continue
-            # 质量控制（简化，FR-VAR-002）：丢弃与种子完全相同的表述
+            # 质量控制（FR-VAR-002）：丢弃与种子完全相同的表述
             if question == seed_case["question"]:
                 continue
             case = GeneratedCase(
@@ -67,7 +79,7 @@ class VariationService:
                 content_priority=seed_case["content_priority"],
                 review_status="candidate",
             )
-            saved.append(self.database.save_generated_case(
+            case_dict = self.database.save_generated_case(
                 intent_id=case.intent_id,
                 eiu_id=case.eiu_id,
                 document_id=case.document_id,
@@ -81,8 +93,26 @@ class VariationService:
                 evidence=case.evidence,
                 content_priority=case.content_priority,
                 review_status=case.review_status,
-            ))
+            )
+
+            # 泛化质检：复用 m04 check_case，hard 失败丢弃
+            if self._has_hard_failure(case_dict):
+                self.database.retire_generated_case(case_dict["case_id"])
+                continue
+            saved.append(case_dict)
         return saved
+
+    def _has_hard_failure(self, case_dict: dict[str, Any]) -> bool:
+        """对单个泛化变体跑 m04 质检，命中 hard 检查（忠实性/问题相关性）返回 True。"""
+        try:
+            report = self.quality.check_case(case_dict)
+        except Exception:
+            # 质检异常不阻断泛化，保留为 candidate 交人工追溯
+            return False
+        return any(
+            item.check_type in HARD_CHECKS and not item.passed
+            for item in report.checks
+        )
 
     @staticmethod
     def _parse_variants(response: str) -> list[dict[str, Any]]:
