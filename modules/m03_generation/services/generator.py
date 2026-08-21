@@ -55,8 +55,9 @@ class CaseGenerator:
             raise ValueError(f"EIU {eiu['eiu_id']} 不可出题：{eiu.get('exclusion_reason')}")
 
         # 1. 定位原文证据 Block 与动态筛选的上下文
-        block = block or self._resolve_source_block(eiu)
-        context = self._resolve_context(eiu, block)
+        document_blocks = self.database.get_document_blocks(eiu["document_id"])
+        block = block or self._resolve_source_block(eiu, blocks=document_blocks)
+        context = self._resolve_context(eiu, block, blocks=document_blocks)
         document = self.database.get_document(eiu["document_id"]) or {}
 
         # 2. 题型映射（EIU 类型 → 题目类型）
@@ -77,6 +78,11 @@ class CaseGenerator:
             constraints=eiu.get("constraints_json"),
         )
         raw = self._call_and_parse(prompt)
+        raw = self._validate_generation_output(
+            raw,
+            expected_question_type=question_type,
+            statement=eiu["statement"],
+        )
 
         if raw.get("is_unanswerable"):
             # README §2.3：原文证据不足以支撑规范答案时，不伪造答案、不落库
@@ -91,10 +97,11 @@ class CaseGenerator:
 
         # 5. 证据绑定写死（#9）：直接绑定生成该 EIU 的源 Block，不依赖 LLM 定位
         evidence = self._build_evidence_bindings(
-            raw_evidence=[],  # 不再采用 LLM 给出的证据定位，改用源 Block 兜底（确定性）
+            raw_evidence=raw.get("evidence_bindings", []),
             block=block,
             document=document,
             fallback_points=raw.get("must_have_points", [eiu["statement"]]),
+            valid_blocks=document_blocks,
         )
 
         case = GeneratedCase(
@@ -138,9 +145,11 @@ class CaseGenerator:
     # ------------------------------------------------------------------
     # 原文定位与上下文
     # ------------------------------------------------------------------
-    def _resolve_source_block(self, eiu: dict[str, Any]) -> dict[str, Any]:
+    def _resolve_source_block(
+        self, eiu: dict[str, Any], *, blocks: list[dict[str, Any]] | None = None
+    ) -> dict[str, Any]:
         """从 EIU 的 evidence_blocks 中解析源 Block；缺省回退到 block_id。"""
-        blocks = self.database.get_document_blocks(eiu["document_id"])
+        blocks = blocks if blocks is not None else self.database.get_document_blocks(eiu["document_id"])
         by_id = {b["block_id"]: b for b in blocks}
         evidence_ids = eiu.get("evidence_blocks") or [eiu.get("block_id")]
         for block_id in evidence_ids:
@@ -149,7 +158,11 @@ class CaseGenerator:
         raise ValueError(f"EIU {eiu['eiu_id']} 的证据 Block 未找到: {evidence_ids}")
 
     def _resolve_context(
-        self, eiu: dict[str, Any], block: dict[str, Any]
+        self,
+        eiu: dict[str, Any],
+        block: dict[str, Any],
+        *,
+        blocks: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         """筛选上下文：仅用位置窗口（源块前后各 CONTEXT_WINDOW 个相邻块）。
 
@@ -160,7 +173,7 @@ class CaseGenerator:
         """
         document_id = eiu["document_id"]
         block_id = block["block_id"]
-        blocks = self.database.get_document_blocks(document_id)
+        blocks = blocks if blocks is not None else self.database.get_document_blocks(document_id)
         by_id = {b["block_id"]: b for b in blocks}
         ordered = sorted(blocks, key=lambda b: b.get("block_id") or 0)
 
@@ -206,6 +219,49 @@ class CaseGenerator:
                 continue
         raise ValueError(f"无法解析 LLM 返回的 JSON: {response[:300]}")
 
+    @staticmethod
+    def _validate_generation_output(
+        raw: dict[str, Any], *, expected_question_type: str, statement: str
+    ) -> dict[str, Any]:
+        """规范化 LLM 字段，阻止错误结构进入 eval_case。"""
+        question = raw.get("question")
+        if not isinstance(question, str) or not question.strip():
+            raise ValueError("LLM 返回缺少有效 question")
+        if len(question) > 2000:
+            raise ValueError("question 超过 2000 字")
+
+        gold_answer = raw.get("gold_answer")
+        if not isinstance(gold_answer, str) or not gold_answer.strip():
+            gold_answer = statement
+        if len(gold_answer) > 10000:
+            raise ValueError("gold_answer 超过 10000 字")
+
+        def string_list(value: Any) -> list[str]:
+            if not isinstance(value, list):
+                return []
+            return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+
+        must_have_points = string_list(raw.get("must_have_points")) or [statement]
+        acceptable_answers = string_list(raw.get("acceptable_answers"))
+        evidence_bindings = raw.get("evidence_bindings")
+        if not isinstance(evidence_bindings, list):
+            evidence_bindings = []
+
+        question_type = raw.get("question_type")
+        if question_type != expected_question_type:
+            question_type = expected_question_type
+
+        return {
+            **raw,
+            "question": question.strip(),
+            "question_type": question_type,
+            "gold_answer": gold_answer.strip(),
+            "must_have_points": must_have_points,
+            "acceptable_answers": acceptable_answers,
+            "evidence_bindings": evidence_bindings,
+            "is_unanswerable": raw.get("is_unanswerable") is True,
+        }
+
     # ------------------------------------------------------------------
     # 证据绑定（FR-QG-003）
     # ------------------------------------------------------------------
@@ -216,6 +272,7 @@ class CaseGenerator:
         block: dict[str, Any],
         document: dict[str, Any],
         fallback_points: list[str],
+        valid_blocks: list[dict[str, Any]],
     ) -> list[dict[str, Any]]:
         """把 must_have_point 与底层原文证据绑定。
 
@@ -231,32 +288,48 @@ class CaseGenerator:
             start_offset=block.get("start_offset"),
             end_offset=block.get("end_offset"),
         )
+        block_by_id = {item.get("block_id"): item for item in valid_blocks}
         bindings: list[dict[str, Any]] = []
 
         if isinstance(raw_evidence, list):
             for item in raw_evidence:
                 if not isinstance(item, dict):
                     continue
-                point = item.get("must_have_point") or ""
+                point = item.get("must_have_point")
                 ev = item.get("evidence") or {}
+                evidence_block_id = ev.get("block_id")
+                candidate_block = block_by_id.get(evidence_block_id)
+                original_text = ev.get("original_text")
+                if (
+                    not isinstance(point, str)
+                    or not point.strip()
+                    or not isinstance(original_text, str)
+                    or not original_text
+                    or candidate_block is None
+                    or original_text not in (candidate_block.get("block_text") or "")
+                ):
+                    continue
+                source_text = candidate_block.get("block_text") or ""
+                start_offset = source_text.find(original_text)
                 bindings.append(
                     {
-                        "must_have_point": point,
+                        "must_have_point": point.strip(),
                         "evidence": {
-                            "document_id": ev.get("document_id", source.document_id),
-                            "document_name": ev.get("document_name", source.document_name),
-                            "section_path": ev.get("section_path", source.section_path),
-                            "page_no": ev.get("page_no", source.page_no),
-                            "block_id": ev.get("block_id", source.block_id),
-                            "original_text": ev.get("original_text", source.original_text),
-                            "start_offset": ev.get("start_offset", source.start_offset),
-                            "end_offset": ev.get("end_offset", source.end_offset),
+                            "document_id": document.get("document_id") or source.document_id,
+                            "document_name": document.get("file_name") or source.document_name,
+                            "section_path": candidate_block.get("section_path", "未分类"),
+                            "page_no": candidate_block.get("page_no"),
+                            "block_id": evidence_block_id,
+                            "original_text": original_text,
+                            "start_offset": start_offset,
+                            "end_offset": start_offset + len(original_text),
                         },
                     }
                 )
 
-        # 兜底：LLM 未给出绑定或绑定不完整时，为每个要点绑定源 Block
-        if not bindings:
+        # 只要候选证据没有覆盖所有答案要点，就整体回退，避免产生半完整证据链。
+        if len(bindings) != len(fallback_points):
+            bindings = []
             for point in fallback_points:
                 bindings.append(
                     {

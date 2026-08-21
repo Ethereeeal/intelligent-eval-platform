@@ -15,7 +15,7 @@ from typing import Any
 from modules.m03_generation.services.generator import CaseGenerator
 from modules.m03_generation.services.variation import VariationService
 from modules.shared.core.logging_config import get_logger
-from modules.shared.services.database import DatabaseService, normalize_statement
+from modules.shared.services.database import DatabaseService
 
 logger = get_logger(__name__)
 
@@ -137,7 +137,7 @@ class PipelineService:
         - 每次触发都是"重建"：先删该文档旧问答对，再按当前全部 EIU 重新生成，
           因此删掉旧问答对库后 EIU 仍在，可随时再次触发重新生成；
         - 不触碰其他文档的问答对与 EIU；
-        - 重合内容跨文件复用（statement 精确匹配）避免重复调用 LLM。
+         - 跨文档不复用问答对，每个文档独立生成完整问答集。
         """
         eius = self.database.list_eius(
             questionable=True, document_id=document_id
@@ -183,34 +183,9 @@ class PipelineService:
         }
 
         results: list[dict[str, Any]] = []
-        reused_total = 0
         try:
             for idx, eiu in enumerate(pending):
                 try:
-                    # 重合内容复用 —— 先按归一化 statement 跨文件精确匹配
-                    statement_norm = normalize_statement(eiu.get("statement", ""))
-                    hit = (
-                        self.database.find_cases_by_statement(statement_norm)
-                        if statement_norm
-                        else []
-                    )
-                    if hit:
-                        reused = self._reuse_case_for_eiu(
-                            eiu, hit[0], angles=angles or ["primary"]
-                        )
-                        reused_total += len(reused)
-                        results.append(
-                            {
-                                "eiu_id": eiu["eiu_id"],
-                                "eiu_type": eiu["eiu_type"],
-                                "statement": eiu["statement"],
-                                "case_ids": [c["case_id"] for c in reused],
-                                "reused": True,
-                                "error": None,
-                            }
-                        )
-                        continue
-
                     result = self._generate_for_eiu_with_angles(
                         eiu,
                         angles=angles,
@@ -241,7 +216,6 @@ class PipelineService:
             "total_questionable_eiu": len(eius),
             "already_covered": 0,  # 重建语义：触发前已删除该文档旧问答对，故 0
             "generated": sum(1 for r in results if r.get("error") is None and not r.get("reused")),
-            "reused": reused_total,
             "failed": sum(1 for r in results if r.get("error") is not None),
             "results": results,
         }
@@ -469,39 +443,6 @@ class PipelineService:
     # ------------------------------------------------------------------
     # 内部工具
     # ------------------------------------------------------------------
-    def _reuse_case_for_eiu(
-        self,
-        eiu: dict[str, Any],
-        old_case: dict[str, Any],
-        *,
-        angles: list[str],
-    ) -> list[dict[str, Any]]:
-        """方案 B 复用：把历史问答对复制落库到当前 eiu/document。
-
-        跳过 LLM 重生成，仅替换归属维度（document/eiu/intent_id），
-        内容（question/answer/evidence/difficulty 等）原样复用。
-        """
-        reused: list[dict[str, Any]] = []
-        for angle in angles:
-            saved = self.database.save_generated_case(
-                intent_id=f"intent_{eiu['eiu_id']}_{angle}",
-                eiu_id=eiu["eiu_id"],
-                document_id=eiu["document_id"],
-                question=old_case.get("question") or "",
-                question_type=old_case.get("question_type") or "rule",
-                difficulty=old_case.get("difficulty") or "L2",
-                scope_type=old_case.get("scope_type") or "single_segment",
-                gold_answer=old_case.get("gold_answer") or "",
-                must_have_points=old_case.get("must_have_points") or [],
-                acceptable_answers=old_case.get("acceptable_answers") or [],
-                evidence=old_case.get("evidence") or [],
-                content_priority=eiu.get("content_priority", "P2"),
-                review_status=old_case.get("review_status") or "candidate",
-                statement_norm=old_case.get("statement_norm") or "",
-            )
-            reused.append(saved)
-        return reused
-
     def _generate_for_eiu_with_angles(
         self,
         eiu: dict[str, Any],
