@@ -1,7 +1,10 @@
 """M02 — EIU 抽取与覆盖规划：请求 / 响应 Pydantic 模型（按文件维度，无 corpus）。"""
 from __future__ import annotations
 
+import json
+
 from pydantic import BaseModel, Field
+from pydantic import field_validator
 
 
 class EiuExtractResponse(BaseModel):
@@ -55,6 +58,15 @@ class EiuUpdate(BaseModel):
     exclusion_reason: str | None = Field(default=None, max_length=128)
     constraints: dict | None = None
     extraction_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+
+    @field_validator("constraints")
+    @classmethod
+    def validate_constraints_size(cls, value: dict | None) -> dict | None:
+        if value is None:
+            return None
+        if len(json.dumps(value, ensure_ascii=False).encode("utf-8")) > 16 * 1024:
+            raise ValueError("constraints 不能超过 16KB")
+        return value
 
 
 class DeleteResponse(BaseModel):

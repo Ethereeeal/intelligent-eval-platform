@@ -68,6 +68,8 @@ def _count_paragraph_blocks(document_id: int | None = None) -> int:
 def trigger_eiu_extract(
     document_id: int | None = Query(default=None, description="指定文档时仅抽取该文档（单文档隔离），否则全量抽取"),
 ) -> EiuExtractResponse:
+    if document_id is not None and database.find_document_by_id(document_id) is None:
+        raise HTTPException(status_code=404, detail="document not found")
     job_id = database.save_job(document_id=document_id or 0, job_type="eiu_extract")
     database.update_job(
         job_id, status="running", phase="queued", progress=0, message="任务已创建，准备抽取"
@@ -171,6 +173,9 @@ def get_eiu(eiu_id: int) -> EiuDetail:
 
 @eiu_router.put("/{eiu_id}", response_model=EiuOut)
 def update_eiu(eiu_id: int, payload: EiuUpdate) -> EiuOut:
+    current = database.get_eiu(eiu_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail="eiu not found")
     updates: dict = {}
     if payload.statement is not None:
         updates["statement"] = payload.statement
@@ -187,6 +192,8 @@ def update_eiu(eiu_id: int, payload: EiuUpdate) -> EiuOut:
         updates["is_questionable"] = payload.is_questionable
         if payload.is_questionable:
             updates["exclusion_reason"] = None
+        elif not (payload.exclusion_reason or current.get("exclusion_reason")):
+            raise HTTPException(status_code=422, detail="不可出题 EIU 必须提供排除原因")
     if payload.exclusion_reason is not None:
         updates["exclusion_reason"] = payload.exclusion_reason
     if payload.constraints is not None:
@@ -195,8 +202,13 @@ def update_eiu(eiu_id: int, payload: EiuUpdate) -> EiuOut:
         updates["extraction_confidence"] = payload.extraction_confidence
 
     item = database.update_eiu(eiu_id, **updates)
-    if item is None:
-        raise HTTPException(status_code=404, detail="eiu not found")
+    database.save_audit(
+        operation="update",
+        target_type="eiu",
+        target_id=str(eiu_id),
+        actor="api",
+        detail={"fields": sorted(updates)},
+    )
     return EiuOut(**item)
 
 
@@ -205,4 +217,11 @@ def delete_eiu(eiu_id: int) -> DeleteResponse:
     item = database.mark_eiu_blocked(eiu_id)
     if item is None:
         raise HTTPException(status_code=404, detail="eiu not found")
+    database.save_audit(
+        operation="delete",
+        target_type="eiu",
+        target_id=str(eiu_id),
+        actor="api",
+        detail={"review_status": "blocked"},
+    )
     return DeleteResponse(eiu_id=eiu_id, status="deleted", review_status="blocked")

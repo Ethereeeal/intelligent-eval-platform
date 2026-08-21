@@ -30,6 +30,8 @@ from modules.shared.services.database import DatabaseService
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    if settings.app_env == "production" and not settings.api_token:
+        raise RuntimeError("生产环境必须配置 API_TOKEN")
     # 启动时初始化日志（参考日志规约：统一日志入口，禁止散落的 print）
     configure_logging()
     logging.getLogger("uvicorn.error").info("EvalForge backend starting")

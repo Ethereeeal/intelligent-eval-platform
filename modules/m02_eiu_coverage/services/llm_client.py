@@ -111,7 +111,14 @@ class LLMClient:
                 data = json.loads(text)
             except json.JSONDecodeError:
                 return None
-            return data if isinstance(data, list) else None
+            if isinstance(data, list):
+                return [item for item in data if isinstance(item, dict)]
+            if isinstance(data, dict):
+                for key in ("items", "eius", "results", "data"):
+                    value = data.get(key)
+                    if isinstance(value, list):
+                        return [item for item in value if isinstance(item, dict)]
+            return None
 
         parsed = _load(raw)
         if parsed is not None:

@@ -11,6 +11,7 @@ LLM 不可用（未安装 openai / API Key 为占位符）时，自动降级为�
 from __future__ import annotations
 
 import re
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -368,6 +369,8 @@ def exclusion_item(block: dict, reason: str) -> dict:
 # 抽取服务
 # ----------------------------------------------------------------------
 class EiuExtractorService:
+    _run_lock = threading.Lock()
+
     def __init__(self) -> None:
         self.database = DatabaseService()
         self.llm = LLMClient()
@@ -439,6 +442,25 @@ class EiuExtractorService:
             return {"job_id": job_id, "status": "failed", "message": str(exc)}
 
     def _run(
+        self,
+        job_id: int,
+        document_id: int | None = None,
+        *,
+        finalize_job: bool = True,
+        progress_start: int = 0,
+        progress_end: int = 100,
+    ) -> dict:
+        # EIU 重抽会先删除旧数据；并发执行会互相覆盖，必须串行化。
+        with self._run_lock:
+            return self._run_locked(
+                job_id,
+                document_id=document_id,
+                finalize_job=finalize_job,
+                progress_start=progress_start,
+                progress_end=progress_end,
+            )
+
+    def _run_locked(
         self,
         job_id: int,
         document_id: int | None = None,

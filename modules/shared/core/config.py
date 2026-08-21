@@ -14,6 +14,7 @@ except ImportError:
 
 
 class Settings(BaseModel):
+    app_env: str = os.getenv("APP_ENV", "demo").lower()
     mysql_host: str = os.getenv("MYSQL_HOST", "127.0.0.1")
     mysql_port: int = int(os.getenv("MYSQL_PORT", "3306"))
     mysql_user: str = os.getenv("MYSQL_USER", "evalforge")

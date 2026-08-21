@@ -344,8 +344,12 @@ def calculate_weighted_coverage(eius: list[EIU], cases: list[EvalCase]) -> Cover
 - [x] 实质 Block 对账检查（+ 覆盖率失真告警）
 - [x] EIU 手动编辑/删除 API（软删除标记 blocked）
 - [x] 文档更新自动重抽 EIU（覆盖式全量重算，复用 doc_update_job 进度）
+- [x] 抽取任务串行化，避免并发重抽互相覆盖；EIU 编辑/删除写入审计日志
+- [x] `is_questionable=false` 强制要求 `exclusion_reason`，防止人为排空覆盖率分母
+- [x] LLM JSON 解析兼容数组及 `items/eius/results/data` 对象包装
 
 ### 配置与验收
 
 - LLM 配置：`modules/shared/core/config.py` 追加 `LLM_API_BASE/KEY/MODEL/TEMPERATURE/MAX_TOKENS`；根目录 `.env`（gitignore 忽略）经 `python-dotenv` 自动加载。`LLM_API_KEY` 为占位符 `sk-xxx` 或缺少 openai 库时自动降级为离线确定性抽取。
+- 生产环境需设置 `APP_ENV=production` 和 `API_TOKEN`；缺少 Token 时后端启动失败。Demo 默认 `APP_ENV=demo`，保持本地联调行为。
 - 真实模型验收：`python tests/acceptance_m02.py`（读取 `demo/.env` 的 DeepSeek 配置，覆盖 F1–F11 / D1–D6 / I1–I4，29 项全部通过）。

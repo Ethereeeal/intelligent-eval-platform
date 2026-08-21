@@ -1038,6 +1038,10 @@ class DatabaseService:
                     continue
                 seen.add(key)
                 priority = item.get("content_priority", "P2")
+                is_questionable = bool(item.get("is_questionable", True))
+                exclusion_reason = str(item.get("exclusion_reason") or "").strip()
+                if not is_questionable and not exclusion_reason:
+                    raise ValueError("不可出题 EIU 必须提供 exclusion_reason")
                 row = EiuRow(
                     block_id=item["block_id"],
                     document_id=block_doc_map.get(item["block_id"]),
@@ -1047,8 +1051,8 @@ class DatabaseService:
                     weight=PRIORITY_WEIGHT.get(priority, 1),
                     constraints_json=item.get("constraints"),
                     evidence_blocks=item.get("evidence_blocks") or [item["block_id"]],
-                    is_questionable=bool(item.get("is_questionable", True)),
-                    exclusion_reason=item.get("exclusion_reason"),
+                    is_questionable=is_questionable,
+                    exclusion_reason=exclusion_reason if not is_questionable else None,
                     extraction_model=item.get("extraction_model"),
                     extraction_confidence=item.get("extraction_confidence"),
                     review_status=item.get("review_status", "candidate"),

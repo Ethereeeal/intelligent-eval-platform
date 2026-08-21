@@ -7,6 +7,8 @@
 
 ## A. 已完成（2026-08 落地）
 
+- **M02 安全与一致性修复（2026-08-21）**：抽取任务串行化；生产环境缺失 `API_TOKEN` 时拒绝启动；不可出题 EIU 强制保留排除原因；EIU 编辑/删除增加审计；兼容 LLM 对象包装 JSON，避免抽取结果因响应格式差异被整段丢弃；
+
 - **文档重传后端闭环**：`POST /api/documents/{id}/reupload` 全链路（重解析 → EIU 重抽 → 版本重建 → 删旧文档）；统一 `doc_update_job`（`parsing → eiu_extract → rebuild → done/failed`）；进度单调不回跳（10 / 40 / 40–90 / 90 / 100）；失败保留旧文档、回滚新文档；
 - **混合上传**：后端 `POST /api/documents/precheck`（只读预检）+ `confirm_token`（一次性、10 分钟、绑定 document_id + 文件哈希）；前端预检限并发 3、异常确认面板（将覆盖 / 弱提示，可逐行移除）、覆盖确认后带 token 走 reupload、重传进度浮层；
 - **上传内存炸弹修复**：precheck / upload / reupload 三个入口改为流式限长读取（1MB 分块，超限返回 413）；
@@ -39,7 +41,7 @@
 ### P1（生产化阶段）
 
 1. **运行时联调测试**（需 MySQL / 后端服务）：正常上传、重复上传、同名覆盖确认（token）、重传闭环各 job 阶段与失败回滚；前端确认面板全流程（实现已落地，待联调验证）；
-2. **同文档并发重传加锁**：按 document 互斥，避免产生多个新文档或重复删除；
+2. **同文档并发重传加锁**：按 document 互斥，避免产生多个新文档或重复删除（M02 抽取任务已串行化，重传编排锁仍待补齐）；
 3. **数据库索引与迁移规范**：`file_name` / `folder_path` 等加索引；把启动时 `ALTER` 迁移改为版本化迁移流程；
 4. **MinIO 接入**（满足触发条件后实施）：`STORAGE_BACKEND=local|minio` 开关（默认 local、不可用时降级）；bucket 初始化（`bucket_exists` + `make_bucket`）；解析临时目录方案；`minio_path` 语义改为对象 key；密钥只走 `.env` / compose；
 5. **评分策略落地**：短答案规范化精确匹配、长答案语义评分 + 固定校准集验证阈值；LLM 裁判防位置 / 长度偏差并保留人工抽查（BRD §8.22 FR-DS-SRC-003）；
