@@ -34,6 +34,7 @@ from modules.shared.services.database import DatabaseService
 
 STATUS_PASSED = "quality_verified"
 STATUS_NEEDS_REVIEW = "needs_review"  # 统一"待人工确认"状态（软/硬两类失败共用）
+DEFAULT_BATCH_STATUSES = ("candidate", STATUS_NEEDS_REVIEW)
 TAG_ANSWER_COVERAGE = "answer_coverage"
 TAG_GENERATION_ISSUE = "generation_issue"
 
@@ -53,14 +54,22 @@ class PipelineService:
     # 全量校验（POST /api/corpus/{corpus_id}/quality-check）
     # ------------------------------------------------------------------
     def run_quality_check(self, document_id: int | None = None) -> dict[str, Any]:
-        """对全部样本执行一轮质量校验（可按文档过滤），返回汇总（README §2.3）。"""
-        cases = self.database.list_generated_cases(document_id=document_id)
+        """对待质检样本执行一轮质量校验（可按文档过滤），返回汇总。"""
+        cases = [
+            case
+            for status in DEFAULT_BATCH_STATUSES
+            for case in self.database.list_generated_cases(
+                document_id=document_id, status=status
+            )
+        ]
         summary = self._empty_summary()
         summary["total_cases"] = len(cases)
 
         for case in cases:
             try:
-                report = self._check_and_handle(case)
+                report = self._check_and_handle(
+                    case, preserve_status=case["review_status"] == "published"
+                )
             except Exception as exc:  # 单题异常不阻断批量流程
                 summary.setdefault("errors", []).append(
                     {"case_id": case["case_id"], "error": str(exc)}
@@ -104,16 +113,7 @@ class PipelineService:
                 )
             ),
             "review_tag": report.review_tag,
-            "checks": [
-                {
-                    "check_id": None,
-                    "case_id": report.case_id,
-                    "check_type": item.check_type,
-                    "passed": item.passed,
-                    "reason": item.reason,
-                }
-                for item in report.checks
-            ],
+            "checks": self.database.list_quality_checks(report.case_id),
         }
 
     # ------------------------------------------------------------------
@@ -176,7 +176,9 @@ class PipelineService:
     # ------------------------------------------------------------------
     # 核心：检查 + 失败分流 + 自动重生成
     # ------------------------------------------------------------------
-    def _check_and_handle(self, case: dict[str, Any]) -> QualityReport:
+    def _check_and_handle(
+        self, case: dict[str, Any], *, preserve_status: bool = False
+    ) -> QualityReport:
         """单题完整处理：检查 → 分流 → 落库 → 更新状态机。
 
         - 全部通过 → quality_verified
@@ -185,6 +187,9 @@ class PipelineService:
           多次仍失败 → needs_review + generation_issue
         """
         report = self._check_and_persist(case)
+        if preserve_status:
+            return report
+
         if report.passed:
             self.database.update_generated_case(
                 case["case_id"], review_status=STATUS_PASSED, review_tag=None
@@ -267,15 +272,18 @@ class PipelineService:
     # ------------------------------------------------------------------
     def _check_and_persist(self, case: dict[str, Any]) -> QualityReport:
         """单题：清旧结果 → 5 项检查 → 逐项落库（不更新状态机）。"""
-        self.database.clear_quality_checks(case["case_id"])
         report = self.checker.check_case(case)
-        for item in report.checks:
-            self.database.save_quality_check(
-                case_id=case["case_id"],
-                check_type=item.check_type,
-                passed=item.passed,
-                reason=item.reason,
-            )
+        self.database.replace_quality_checks(
+            case_id=case["case_id"],
+            checks=[
+                {
+                    "check_type": item.check_type,
+                    "passed": item.passed,
+                    "reason": item.reason,
+                }
+                for item in report.checks
+            ],
+        )
         return report
 
     def _mark_needs_review(self, case_id: int, tag: str) -> None:

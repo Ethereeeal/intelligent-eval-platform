@@ -24,10 +24,10 @@ pipeline = PipelineService()
 @quality_router.post(
     "/quality-check",
     response_model=QualityCheckSummary,
-    summary="对全部样本执行一轮质量校验（可按文档）",
+    summary="对待质检样本执行一轮质量校验（可按文档）",
 )
 def run_quality_check(document_id: int | None = Query(default=None, description="指定文档时仅校验该文档样本")):
-    """遍历全部候选样本执行 5 项检查，并更新各 case 状态机。"""
+    """仅遍历 candidate / needs_review 样本执行 5 项检查，并更新状态机。"""
     return pipeline.run_quality_check(document_id)
 
 

@@ -36,7 +36,7 @@ REVIEW_TAG_LABELS: dict[str, str] = {
 }
 
 # 硬性失败：题目本身质量有问题 → 自动回 m03 重生成
-HARD_CHECKS = ("faithfulness", "question_relevance")
+HARD_CHECKS = ("answerability", "faithfulness", "question_relevance")
 # 软性失败：覆盖度/唯一性需人工确认 → 不自动重生成
 SOFT_CHECKS = ("evidence_sufficiency", "uniqueness")
 

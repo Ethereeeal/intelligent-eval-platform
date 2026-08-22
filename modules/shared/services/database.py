@@ -1821,6 +1821,27 @@ class DatabaseService:
             session.refresh(row)
             return self._quality_check_to_dict(row)
 
+    def replace_quality_checks(self, *, case_id: int, checks: list[dict]) -> list[dict]:
+        """原子替换单个 case 的质量检查结果。"""
+        with SessionLocal() as session:
+            session.query(QualityCheckRow).filter(
+                QualityCheckRow.case_id == case_id
+            ).delete(synchronize_session=False)
+            rows = [
+                QualityCheckRow(
+                    case_id=case_id,
+                    check_type=check["check_type"],
+                    passed=1 if check["passed"] else 0,
+                    reason=check["reason"] or "",
+                )
+                for check in checks
+            ]
+            session.add_all(rows)
+            session.commit()
+            for row in rows:
+                session.refresh(row)
+            return [self._quality_check_to_dict(row) for row in rows]
+
     def list_quality_checks(self, case_id: int) -> list[dict]:
         """查询单个 case 的全部检查结果。"""
         with SessionLocal() as session:

@@ -129,7 +129,11 @@ class QualityChecker:
                     )
                 )
                 continue
-            passed = bool(item.get("passed"))
-            reason = str(item.get("reason") or ("通过" if passed else "未给出失败原因"))
+            raw_passed = item.get("passed")
+            passed = raw_passed if isinstance(raw_passed, bool) else False
+            default_reason = "通过" if passed else "未给出失败原因"
+            if not isinstance(raw_passed, bool):
+                default_reason = "LLM 返回的 passed 字段不是布尔值"
+            reason = str(item.get("reason") or default_reason)
             items.append(CheckItem(check_type=check_type, passed=passed, reason=reason))
         return items
