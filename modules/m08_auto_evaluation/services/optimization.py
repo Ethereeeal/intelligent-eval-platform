@@ -1,7 +1,7 @@
 """优化建议与 ErrorBook（BRD §9.4 FR-OPT-001~003）。
 
 - FR-OPT-001：按 D1–D9 给出可执行优化建议；
-- FR-OPT-003：ErrorBook 聚类（按归因统计），供 m06 回流工作台消费。
+- FR-OPT-003：ErrorBook 聚类（按归因统计），供智能体失败诊断与优化分析消费。
 """
 from __future__ import annotations
 

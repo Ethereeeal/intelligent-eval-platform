@@ -24,6 +24,7 @@ from modules.shared.core.config import settings
 from modules.shared.core.logging_config import get_logger
 
 logger = get_logger(__name__)
+_UNSET = object()
 
 # 10 种 EIU 类型（M02 SPEC 4.2）
 EIU_TYPES = {
@@ -1721,7 +1722,7 @@ class DatabaseService:
         evidence: list | None = None,
         content_priority: str | None = None,
         review_status: str | None = None,
-        review_tag: str | None = None,
+        review_tag: str | None | object = _UNSET,
         folder_path: str | None = None,
         purpose: str | None = None,
     ) -> dict | None:
@@ -1748,7 +1749,7 @@ class DatabaseService:
                 row.content_priority = content_priority
             if review_status is not None:
                 row.review_status = review_status
-            if review_tag is not None:
+            if review_tag is not _UNSET:
                 row.review_tag = review_tag
             if folder_path is not None:
                 row.folder_path = folder_path

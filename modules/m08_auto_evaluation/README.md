@@ -51,7 +51,7 @@ modules/m08_auto_evaluation/
 
 ```
 POST /api/evaluation-runs {composition_id, adapter, adapter_config}
-  → 组合解析为统一输入样本（m05 composition.resolve_composition）
+  → 组合解析为统一输入样本（m05 composition.resolve_composition；文档生成来源必须是 frozen 版本）
   → 异步线程逐题调用适配器
   → score_case（FR-DS-SRC-003 评分口径：短答案精确匹配 / 长答案语义相似度）
   → diagnose（D1–D9，未返回检索轨迹时不可诊断）
@@ -74,7 +74,7 @@ POST /api/evaluation-runs {composition_id, adapter, adapter_config}
 | GET | `/api/evaluation-runs/{run_id}/results` | 单题结果 + 分层指标汇总 |
 | GET | `/api/evaluation-runs/{run_id}/failures` | 该运行 D1–D9 归因（ErrorBook） |
 | POST | `/api/evaluation-runs/{run_id}/retry` | 重跑（新 run，回归比较） |
-| GET | `/api/error-book` | ErrorBook 查询（m06 回流工作台数据源，支持 diagnosis/status 过滤 + 聚类） |
+| GET | `/api/error-book` | ErrorBook 查询（智能体失败诊断与优化分析，支持 diagnosis/status 过滤 + 聚类） |
 | GET | `/api/adapters` | 内置适配器清单 |
 | POST | `/api/dimensions` | 新增评测维度（m05，可配置体系） |
 
@@ -88,10 +88,10 @@ POST /api/evaluation-runs {composition_id, adapter, adapter_config}
 - [x] evaluation_run / evaluation_case_result / error_book_item 表 + CRUD（shared/database.py）
 - [ ] （阶段 2）检索指标（Recall@K / MRR / nDCG）——待测系统返回检索轨迹时启用
 - [ ] （阶段 2）多轮 memory/coherence 完整评分与完整对话过程展示
-- [ ] （阶段 2）ErrorBook 聚类自动优化实验；m06 回流工作台 UI 深度集成
+- [ ] （阶段 2）ErrorBook 聚类自动优化实验与诊断视图深化
 
-## 7. 与 m05 / m06 的衔接
+## 7. 与 m05 的衔接
 
-- 输入：m05 `composition.resolve_composition` 把三类来源（文档生成冻结版本 / 上传评测集 / 公共库）解析为统一样本；
-- 输出：m06 回流工作台消费 `GET /api/error-book`（失败归因 + 优化建议），修订问答对后生成新版本（m05 freeze）；
+- 输入：m05 `composition.resolve_composition` 把三类来源（仅 `frozen` 的文档生成版本 / 上传评测集 / 公共库）解析为统一样本；
+- 输出：`GET /api/error-book` 供智能体失败诊断与优化分析使用，不驱动评测集回流或修订；
 - 覆盖门禁：上传评测集 / 公共库不参与 EIU 覆盖率（BRD 决策 3），运行输入以组合后的临时标准化评测集为准。

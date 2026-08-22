@@ -14,7 +14,7 @@
 |---|---|---|---|
 | 评测集生成 | §8.1–§8.9 | m01–m04 已实现 | 不动主线，仅微调 |
 | 评测集管理 | §8.10–§8.17、§8.22 | m05 有版本/编辑/导出；三类来源预留 | 扩展 m05（上传评测集、公共库、组合选择） |
-| Agent 评测 | §9 | 无模块；m06 边界过时 | 新增 m08（自动运行 + 指标 + 归因 + 优化），m06 边界更新 |
+| Agent 评测 | §9 | 无模块 | 新增 m08（自动运行 + 指标 + 归因 + 优化），不建设评测集回流模块 |
 
 附带补齐：§8.20 业务需求书→测试功能点（无代码，见 §6 落点）。
 
@@ -48,11 +48,11 @@ modules/m08_auto_evaluation/
 └── README.md
 ```
 
-### 2.3 m06 边界调整（回流闭环）
+### 2.3 评测集回流决策
 
-- m06 保留"评测后数据回流"：回流工作台、人工标注、修题闭环（FR-DS-FB）；
-- 数据来源从"仅外部回传"扩展为 **m08 运行结果（ErrorBook）+ 人工标注**；
-- 更新 m06 README 顶部边界声明：不再写"自动评测不在本平台范围"。
+- 不建设 m06 或评测后回流闭环；
+- m08 的 ErrorBook 只用于待测智能体诊断、优化与回归比较；
+- 人工发现评测集内容问题时，走 m04 质量复核与 m05 草案编辑/新版本流程。
 
 ### 2.4 shared 层
 
@@ -106,7 +106,7 @@ modules/m08_auto_evaluation/
 | GET | `/api/evaluation-runs/{id}/results` | 分层指标汇总（按指标/难度/文档分组） |
 | GET | `/api/evaluation-runs/{id}/failures` | D1–D9 失败归因列表 |
 | POST | `/api/evaluation-runs/{id}/retry` | 重跑（开发集回归） |
-| GET | `/api/error-book` | ErrorBook 查询（回流工作台数据源，供 m06） |
+| GET | `/api/error-book` | ErrorBook 查询（智能体失败诊断与优化分析） |
 | POST | `/api/adapters` | 待测系统适配器配置（CRUD） |
 
 ---
@@ -124,7 +124,7 @@ modules/m08_auto_evaluation/
                                  ▼
                   分层指标 + D1–D9 归因（m08）
                                  ▼
-                ErrorBook（优化建议/回归）─→ m06 回流工作台（修题闭环 → 新版本）
+                ErrorBook（优化建议/回归，用于智能体诊断）
 ```
 
 ---
@@ -142,7 +142,7 @@ modules/m08_auto_evaluation/
 **延后（阶段 2+）：**
 
 - 多轮评测集（memory/coherence）完整评分（决策 5：Demo 不开发，但前端/后端均保留功能点与字段占位，后续优化实现）；语义评分固定校准集（待 §18 确认）；
-- 治理审核 Skill 全量 S0 规则；公共库维度体系固化；回流工作台 UI 深度集成。
+- 治理审核 Skill 全量 S0 规则；公共库维度体系固化；ErrorBook 诊断视图深化。
 
 ---
 
@@ -151,8 +151,8 @@ modules/m08_auto_evaluation/
 1. **数据层**：新增 8 张表 + audit 关联（create_all 自动迁移）；
 2. **m05 三类来源**：上传评测集 → 公共库 → 组合选择（含质量评估与评分口径）；
 3. **m08 自动评测**：适配器 → runner → 指标 → 归因 → ErrorBook；
-4. **m06 边界与回流衔接**：ErrorBook → 回流工作台 → 修题 → 新版本；
-5. **文档同步**：m05/m06/m08 README、modules/README、根 README、technical_design_demo、production-readiness-todo。
+4. **评测集修订边界**：ErrorBook 只服务智能体诊断；评测集内容问题走 m04/m05 质量复核与版本编辑；
+5. **文档同步**：m05/m08 README、modules/README、根 README、technical_design_demo、production-readiness-todo。
 
 ---
 
@@ -160,7 +160,7 @@ modules/m08_auto_evaluation/
 
 | # | 决策项 | 结论 |
 |---|---|---|
-| 1 | m08 模块归属 | **独立新增 m08_auto_evaluation**；m06 仅保留回流闭环 |
+| 1 | m08 模块归属 | **独立新增 m08_auto_evaluation**；不建设 m06 回流模块 |
 | 2 | 上传样本落表 | **独立 `uploaded_eval_case` 表**（不复用 generated_case） |
 | 3 | Agent 评测 Demo 落点 | **Demo 必做**（运行 + 基础指标 + D1–D9 归因） |
 | 4 | 待测系统形态 | **mock + OpenAI 兼容双适配器（A+B）**；真实系统经适配器注册表后续扩展 |

@@ -1,6 +1,10 @@
 import unittest
 
 from modules.m05_dataset_lifecycle.services.lifecycle import DatasetLifecycleService
+from modules.m05_dataset_lifecycle.services.composition import (
+    resolve_composition,
+    validate_composition_items,
+)
 from modules.m05_dataset_lifecycle.services.public_set import import_public_set
 from modules.m05_dataset_lifecycle.services.uploaded_set import import_uploaded_set
 
@@ -59,6 +63,57 @@ class _TreeDatabase:
         return next(item for item in self.list_eius() if item["eiu_id"] == eiu_id)
 
 
+class _RevisionDatabase:
+    def __init__(self, status="quality_verified"):
+        self.case = {"case_id": 1, "review_status": status}
+        self.updated = None
+        self.audits = []
+
+    def get_generated_case(self, case_id):
+        return self.case if case_id == 1 else None
+
+    def update_generated_case(self, case_id, **kwargs):
+        self.updated = kwargs
+        self.case.update(kwargs)
+        return self.case
+
+    def save_audit(self, **kwargs):
+        self.audits.append(kwargs)
+
+
+class _QualityPipeline:
+    def retry_check(self, case_id):
+        return {
+            "case_id": case_id,
+            "replaced_case_id": None,
+            "passed": True,
+            "review_status": "quality_verified",
+            "review_tag": None,
+            "checks": [],
+        }
+
+
+class _RevisionService(DatasetLifecycleService):
+    def _quality_pipeline(self):
+        return _QualityPipeline()
+
+
+class _CompositionDatabase:
+    def __init__(self, status="frozen"):
+        self.status = status
+
+    def get_dataset_version(self, version_id):
+        if version_id != 1:
+            return None
+        return {"version_id": 1, "status": self.status}
+
+    def get_composition(self, composition_id):
+        return {"composition_id": composition_id, "items": [{"source": "doc_generated", "version_id": 1}]}
+
+    def get_eval_cases(self, version_id, **kwargs):
+        return [{"case_id": 5, "question": "q", "gold_answer": "a"}]
+
+
 class M05DemoHardeningTests(unittest.TestCase):
     def test_frozen_versions_are_read_only(self):
         service = DatasetLifecycleService(_LifecycleDatabase("frozen"))
@@ -113,6 +168,31 @@ class M05DemoHardeningTests(unittest.TestCase):
         node = result["tree"][0]
         self.assertEqual(node["coverage_pct"], 50.0)
         self.assertEqual(node["gap"], 1)
+
+    def test_candidate_revision_resets_quality_state_and_audits(self):
+        database = _RevisionDatabase()
+        result = _RevisionService(database).revise_candidate_case(
+            1, actor="reviewer", question="revised question"
+        )
+        self.assertEqual(result["review_status"], "candidate")
+        self.assertIsNone(database.updated["review_tag"])
+        self.assertEqual(database.audits[0]["operation"], "dataset_case.revise")
+        self.assertEqual(database.audits[0]["detail"]["changed_fields"], ["question"])
+
+    def test_candidate_revision_can_be_rechecked(self):
+        database = _RevisionDatabase(status="candidate")
+        result = _RevisionService(database).recheck_candidate_case(1)
+        self.assertTrue(result["passed"])
+        self.assertEqual(database.audits[0]["operation"], "dataset_case.recheck")
+
+    def test_composition_rejects_non_frozen_document_version(self):
+        database = _CompositionDatabase(status="draft")
+        errors = validate_composition_items(
+            [{"source": "doc_generated", "version_id": 1}], database
+        )
+        self.assertTrue(errors)
+        with self.assertRaises(ValueError):
+            resolve_composition(database, 1)
 
 
 if __name__ == "__main__":

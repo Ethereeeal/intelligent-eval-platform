@@ -17,7 +17,6 @@
 | [m03 — 评测集生成](modules/m03_generation/README.md) | 8.6 单段问题生成 / 8.7 跨段 / 8.8 改写与泛化 / 8.11 难度体系 | 必做（仅单段 + 问答对输出，含泛化） |
 | [m04 — 质量门禁与治理审核](modules/m04_quality_governance/README.md) | 8.9 问题质量门禁与治理审核 / FR-QA-005 质量评估参考评分（预留） | 必做（5 项基础检查） |
 | [m05 — 数据集生命周期](modules/m05_dataset_lifecycle/README.md) | 8.10 版本数据划分 / 8.12 编辑 / 8.13 浏览导出 / 8.14 增量 / 8.15 泛化 / 8.16 回流 / 8.17 空评测集 / 8.22 三类来源统一管理（已实现） | 必做（基础版本+导出） |
-| [m06 — 评测后数据回流](modules/m06_feedback_loop/README.md) | 9.（仅回流；自动评测由 m08 负责） | Demo 不做（后续版本） |
 | [m07 — 智能问答交互](modules/m07_smart_qa/README.md) | 8.19 智能问答交互 | Demo 不做（后续版本） |
 | [m08 — Agent 评测](modules/m08_auto_evaluation/README.md) | 9. 自动运行与后评估（适配 / 指标 / 归因 / ErrorBook） | 必做（mock + OpenAI 兼容适配器，基础指标与归因） |
 

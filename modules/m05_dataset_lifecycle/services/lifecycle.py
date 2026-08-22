@@ -178,6 +178,66 @@ class DatasetLifecycleService:
         return self.db.get_dataset_version(version_id)
 
     # ------------------------------------------------------------------
+    # 冻结前人工修订 / 复检
+    # ------------------------------------------------------------------
+    def revise_candidate_case(
+        self, case_id: int, *, actor: str | None = None, **fields
+    ) -> dict | None:
+        """修订 m03 候选题并强制回退到待质检状态。
+
+        已冻结版本保存的是独立 eval_case 快照，不会被这里的源题修改影响。
+        """
+        case = self.db.get_generated_case(case_id)
+        if case is None:
+            return None
+        if case.get("review_status") == "retired":
+            raise ValueError("retired case cannot be revised")
+
+        changed_fields = sorted(fields)
+        if not changed_fields:
+            raise ValueError("at least one editable field is required")
+        self.db.save_audit(
+            operation="dataset_case.revise",
+            target_type="generated_case",
+            target_id=str(case_id),
+            actor=actor or "web",
+            detail={"changed_fields": changed_fields, "review_status": "candidate"},
+        )
+        return self.db.update_generated_case(
+            case_id,
+            **fields,
+            review_status="candidate",
+            review_tag=None,
+        )
+
+    def _quality_pipeline(self):
+        from modules.m04_quality_governance.services.pipeline import PipelineService
+
+        return PipelineService()
+
+    def recheck_candidate_case(self, case_id: int, *, actor: str | None = None) -> dict | None:
+        """对修订后的候选题调用 m04 单题复检。"""
+        case = self.db.get_generated_case(case_id)
+        if case is None:
+            return None
+        if case.get("review_status") != "candidate":
+            raise ValueError("only candidate cases can be rechecked")
+
+        result = self._quality_pipeline().retry_check(case_id)
+        self.db.save_audit(
+            operation="dataset_case.recheck",
+            target_type="generated_case",
+            target_id=str(case_id),
+            actor=actor or "web",
+            detail={
+                "passed": result["passed"],
+                "review_status": result["review_status"],
+                "replaced_case_id": result["replaced_case_id"],
+            },
+        )
+        return result
+
+    # ------------------------------------------------------------------
     # 编辑 / 删除
     # ------------------------------------------------------------------
     def edit_case(

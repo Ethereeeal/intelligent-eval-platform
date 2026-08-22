@@ -28,7 +28,6 @@
 | m03_generation | [README](./m03_generation/README.md) | 8.6 单段问题生成、8.7 跨段、8.8 改写与泛化、8.11 难度体系 | 必做（单段 + 泛化输出） |
 | m04_quality_governance | [README](./m04_quality_governance/README.md) | 8.9 问题质量门禁与治理审核 | 必做（5项基础检查） |
 | m05_dataset_lifecycle | [README](./m05_dataset_lifecycle/README.md) | 8.10 版本与数据划分、8.12 事后编辑、8.13 目录浏览与导出、8.14 增量更新、8.15 泛化、8.16 评测集回流、8.17 空评测集处理、8.22 三类来源统一管理（上传评测集 / 公共库 / 组合选择，已实现） | 必做 |
-| m06_feedback_loop | [README](./m06_feedback_loop/README.md) | 9.（仅回流部分，自动评测不在本平台范围） | Demo 不做（后续版本） |
 | m07_smart_qa | [README](./m07_smart_qa/README.md) | 8.19 智能问答交互 | Demo 不做（后续版本） |
 | m08_auto_evaluation | [README](./m08_auto_evaluation/README.md) | 9. 自动运行与后评估（待测系统适配 / 分层指标 / D1–D9 归因 / ErrorBook） | 必做（mock + OpenAI 兼容适配器，基础指标与归因） |
 
@@ -88,7 +87,6 @@ project-root/
 │   ├── m03_generation/          # 03-评测集生成（必做）
 │   ├── m04_quality_governance/  # 04-质量门禁（必做）
 │   ├── m05_dataset_lifecycle/   # 05-数据集生命周期（必做）
-│   ├── m06_feedback_loop/       # 06-数据回流（后续）
 │   └── m07_smart_qa/            # 07-智能问答（后续）
 ├── deploy/                      # 运维基础设施
 ├── docs/                        # 跨模块架构文档

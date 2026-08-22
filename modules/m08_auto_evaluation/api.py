@@ -7,7 +7,7 @@
   GET  /api/evaluation-runs/{id}/results     单题结果 + 分层指标汇总
   GET  /api/evaluation-runs/{id}/failures    D1–D9 失败归因（ErrorBook）
   POST /api/evaluation-runs/{id}/retry       重跑（新 run，供回归比较）
-  GET  /api/error-book                       回流工作台数据源（m06 消费）
+  GET  /api/error-book                       智能体失败诊断与优化分析数据源
   GET  /api/adapters                         内置适配器清单
 """
 from __future__ import annotations

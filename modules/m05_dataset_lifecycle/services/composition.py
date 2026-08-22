@@ -22,8 +22,12 @@ def validate_composition_items(items: list[dict], db: DatabaseService) -> list[s
         if source not in VALID_SOURCES:
             errors.append(f"第 {idx} 项 source 非法: {source}（{sorted(VALID_SOURCES)}）")
             continue
-        if source == "doc_generated" and db.get_dataset_version(item.get("version_id")) is None:
-            errors.append(f"第 {idx} 项 doc_generated 版本不存在: {item.get('version_id')}")
+        if source == "doc_generated":
+            version = db.get_dataset_version(item.get("version_id"))
+            if version is None:
+                errors.append(f"第 {idx} 项 doc_generated 版本不存在: {item.get('version_id')}")
+            elif version.get("status") != "frozen":
+                errors.append(f"第 {idx} 项 doc_generated 必须引用 frozen 版本")
         elif source == "uploaded" and db.get_uploaded_set(item.get("set_id")) is None:
             errors.append(f"第 {idx} 项上传评测集不存在: {item.get('set_id')}")
         elif source == "public" and db.get_public_set(item.get("set_id")) is None:
@@ -79,6 +83,9 @@ def resolve_composition(db: DatabaseService, composition_id: int) -> list[dict]:
         source = item.get("source")
         if source == "doc_generated":
             version_id = item.get("version_id")
+            version = db.get_dataset_version(version_id)
+            if version is None or version.get("status") != "frozen":
+                raise ValueError("doc_generated composition must reference a frozen version")
             cases = db.get_eval_cases(version_id, include_retired=False, limit=100000)
             samples.extend(_eval_case_to_sample(c, source) for c in cases)
         elif source == "uploaded":

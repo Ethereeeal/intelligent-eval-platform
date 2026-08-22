@@ -2,7 +2,14 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+from modules.m03_generation.schemas import (
+    DIFFICULTY_LEVELS,
+    PRIORITY_LEVELS,
+    QUESTION_TYPES,
+    EvidenceBinding,
+)
 
 from modules.m05_dataset_lifecycle.services.composition import (
     create_composition,
@@ -55,6 +62,21 @@ class DimensionCreate(BaseModel):
     description: str | None = None
 
 
+class CandidateCaseRevisionRequest(BaseModel):
+    """冻结前人工修订 m03 候选题；不允许客户端改写质量状态。"""
+
+    model_config = {"extra": "forbid"}
+
+    question: str | None = Field(default=None, min_length=1)
+    question_type: QUESTION_TYPES | None = None
+    difficulty: DIFFICULTY_LEVELS | None = None
+    gold_answer: str | None = Field(default=None, min_length=1)
+    must_have_points: list[str] | None = None
+    acceptable_answers: list[str] | None = None
+    evidence: list[EvidenceBinding] | None = None
+    content_priority: PRIORITY_LEVELS | None = None
+
+
 # 单次上传评测集样本数量上限（防超大 JSON 请求体）
 _MAX_UPLOAD_CASES = 100_000
 
@@ -89,6 +111,35 @@ def get_version(version_id: int):
 # ----------------------------------------------------------------------
 # 编辑 / 删除
 # ----------------------------------------------------------------------
+@router.put("/candidate-cases/{case_id}")
+def revise_candidate_case(
+    case_id: int,
+    payload: CandidateCaseRevisionRequest,
+    actor: str | None = None,
+):
+    fields = payload.model_dump(exclude_none=True)
+    if "evidence" in fields:
+        fields["evidence"] = [item.model_dump() for item in payload.evidence or []]
+    try:
+        result = _service.revise_candidate_case(case_id, actor=actor, **fields)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="generated case not found")
+    return result
+
+
+@router.post("/candidate-cases/{case_id}/quality-check")
+def recheck_candidate_case(case_id: int, actor: str | None = None):
+    try:
+        result = _service.recheck_candidate_case(case_id, actor=actor)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if result is None:
+        raise HTTPException(status_code=404, detail="generated case not found")
+    return result
+
+
 @router.put("/cases/{case_id}")
 def edit_case(case_id: int, payload: dict):
     try:

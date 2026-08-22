@@ -16,7 +16,6 @@
 │   ├── m03_generation/               # 03-评测集生成：题目+答案+证据
 │   ├── m04_quality_governance/       # 04-质量门禁
 │   ├── m05_dataset_lifecycle/        # 05-数据集生命周期：版本、导出、编辑、三类来源统一管理
-│   ├── m06_feedback_loop/            # 06-评测后数据回流（后续版本）
 │   ├── m07_smart_qa/                 # 07-智能问答交互（后续版本）
 │   ├── m08_auto_evaluation/          # 08-Agent 评测：待测系统适配、指标、归因、ErrorBook
 │   └── shared/                       # 跨模块共享：config、database、main.py
