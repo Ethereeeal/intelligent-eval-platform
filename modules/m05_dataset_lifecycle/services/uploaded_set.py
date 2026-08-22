@@ -12,6 +12,23 @@ from modules.shared.services.database import DatabaseService
 _MAX_ERRORS = 20
 
 
+def normalize_cases(cases: list[dict], template_type: str) -> list[dict]:
+    """将多轮模板规范为可持久化的最终轮问答，同时保留完整 turns。"""
+    normalized: list[dict] = []
+    for case in cases:
+        if not isinstance(case, dict):
+            normalized.append(case)
+            continue
+        item = dict(case)
+        if template_type == "multi" and isinstance(item.get("turns"), list) and item["turns"]:
+            final_turn = item["turns"][-1]
+            if isinstance(final_turn, dict):
+                item["q"] = final_turn.get("q")
+                item["a"] = final_turn.get("a")
+        normalized.append(item)
+    return normalized
+
+
 def validate_cases(cases: list[dict], template_type: str) -> list[str]:
     """模板字段校验，返回错误列表（空 = 通过）。"""
     errors: list[str] = []
@@ -29,14 +46,17 @@ def validate_cases(cases: list[dict], template_type: str) -> list[str]:
             if not str(case.get("session_id") or "").strip():
                 errors.append(f"第 {idx} 条多轮样本缺少 session_id")
             turns = case.get("turns") or []
-            if not turns:
+            if not isinstance(turns, list) or not turns:
                 errors.append(f"第 {idx} 条多轮样本 turns 为空")
             else:
                 last = turns[-1]
-                if isinstance(last, dict) and not str(last.get("a") or "").strip():
-                    errors.append(f"第 {idx} 条最终轮缺少标准答案 a")
+                if not isinstance(last, dict):
+                    errors.append(f"第 {idx} 条最终轮不是对象")
+                elif not str(last.get("q") or "").strip() or not str(last.get("a") or "").strip():
+                    errors.append(f"第 {idx} 条最终轮缺少问题 q 或标准答案 a")
                 for turn_idx, turn in enumerate(turns, start=1):
                     if not isinstance(turn, dict):
+                        errors.append(f"第 {idx} 条第 {turn_idx} 轮不是对象")
                         continue
                     if turn.get("key_turn") and (
                         turn.get("turn_type") not in ("memory", "coherence")
@@ -104,18 +124,13 @@ def import_uploaded_set(
     errors = validate_cases(cases, template_type)
     if errors:
         raise ValueError("；".join(errors))
-    set_id = db.save_uploaded_set(
+    normalized_cases = normalize_cases(cases, template_type)
+    quality = assess_quality(normalized_cases)
+    return db.create_uploaded_set_with_cases(
         name=name,
         template_type=template_type,
         source_file=source_file,
         dimension=dimension,
-    )
-    db.save_uploaded_cases(set_id=set_id, cases=cases)
-    quality = assess_quality(cases)
-    db.update_uploaded_set(
-        set_id,
+        cases=normalized_cases,
         quality_snapshot=quality,
-        total_cases=len(cases),
-        review_status="quality_checked",
     )
-    return {"set_id": set_id, "quality": quality, "total_cases": len(cases)}

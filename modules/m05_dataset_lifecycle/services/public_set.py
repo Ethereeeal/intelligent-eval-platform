@@ -25,7 +25,7 @@ def import_public_set(
         name=name,
         version=version,
         dimensions=dimensions,
-        review_status="governance_passed",
+        review_status="quality_checked",
     )
     db.save_public_cases(set_id=set_id, cases=cases)
     quality = assess_quality(cases)

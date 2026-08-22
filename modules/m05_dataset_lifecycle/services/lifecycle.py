@@ -194,8 +194,12 @@ class DatasetLifecycleService:
         acceptable_answers: list | None = None,
         evidence: list | None = None,
     ) -> dict | None:
-        if self.db.get_eval_case(case_id) is None:
+        case = self.db.get_eval_case(case_id)
+        if case is None:
             return None
+        version = self.db.get_dataset_version(case["version_id"])
+        if version and version.get("status") in {"frozen", "published"}:
+            raise ValueError("frozen or published versions are read-only; create a draft first")
         self.db.update_eval_case(
             case_id,
             question=question,
@@ -211,8 +215,12 @@ class DatasetLifecycleService:
         return self.db.get_eval_case(case_id)
 
     def delete_case(self, case_id: int) -> bool:
-        if self.db.get_eval_case(case_id) is None:
+        case = self.db.get_eval_case(case_id)
+        if case is None:
             return False
+        version = self.db.get_dataset_version(case["version_id"])
+        if version and version.get("status") in {"frozen", "published"}:
+            raise ValueError("frozen or published versions are read-only; create a draft first")
         self.db.retire_eval_case(case_id)
         return True
 
@@ -251,16 +259,21 @@ class DatasetLifecycleService:
     def tree(self) -> dict:
         cases = self._publishable_cases()
         eius = self.db.list_eius(include_blocked=False)
+        covered_eiu_ids = {
+            case["eiu_id"]
+            for case in cases
+            if case.get("eiu_id") is not None
+        }
 
         # section_path → 文档名 → 计数
         by_section: dict[str, dict] = {}
         for case in cases:
-            eiu_id = (case.get("eiu_ids") or [None])[0] if case.get("eiu_ids") else None
+            eiu_id = case.get("eiu_id")
             eiu = next((e for e in eius if e.get("eiu_id") == eiu_id), None)
             path = (eiu or {}).get("section_path") or "未分类"
             doc = (eiu or {}).get("document_name") or "未关联文档"
             node = by_section.setdefault(
-                path, {"section_path": path, "eiu_count": 0, "case_count": 0, "coverage_pct": 0.0, "documents": {}}
+                path, {"section_path": path, "eiu_count": 0, "questionable_eiu_count": 0, "covered_eiu_count": 0, "case_count": 0, "coverage_pct": 0.0, "documents": {}}
             )
             node["documents"].setdefault(doc, 0)
             node["documents"][doc] += 1
@@ -269,23 +282,26 @@ class DatasetLifecycleService:
         for eiu in eius:
             path = eiu.get("section_path") or "未分类"
             node = by_section.setdefault(
-                path, {"section_path": path, "eiu_count": 0, "case_count": 0, "coverage_pct": 0.0, "documents": {}}
+                path, {"section_path": path, "eiu_count": 0, "questionable_eiu_count": 0, "covered_eiu_count": 0, "case_count": 0, "coverage_pct": 0.0, "documents": {}}
             )
             node["eiu_count"] += 1
+            if eiu.get("is_questionable"):
+                node["questionable_eiu_count"] += 1
+                if eiu.get("eiu_id") in covered_eiu_ids:
+                    node["covered_eiu_count"] += 1
             node["documents"].setdefault(eiu.get("document_name") or "未关联文档", 0)
 
         tree_list = []
         for path, node in by_section.items():
-            eiu_count = node["eiu_count"]
-            covered = sum(1 for e in eius if (e.get("section_path") or "未分类") == path and e.get("is_questionable"))
-            node["coverage_pct"] = round(covered / eiu_count * 100, 1) if eiu_count else 0.0
+            questionable_count = node["questionable_eiu_count"]
+            node["coverage_pct"] = round(node["covered_eiu_count"] / questionable_count * 100, 1) if questionable_count else 0.0
             tree_list.append(
                 {
                     "section_path": path,
-                    "eiu_count": eiu_count,
+                    "eiu_count": node["eiu_count"],
                     "case_count": node["case_count"],
                     "coverage_pct": node["coverage_pct"],
-                    "gap": max(eiu_count - node["case_count"], 0),
+                    "gap": max(questionable_count - node["covered_eiu_count"], 0),
                     "documents": node["documents"],
                 }
             )
@@ -377,12 +393,14 @@ class DatasetLifecycleService:
           删除旧版本中属于该文档（eiu→document）的 eval_case，再基于最新 generated_case 整体重快照。
         """
         self.db.update_job(job_id, phase="rebuild", progress=90, message="覆盖式整体重算中")
-        latest_versions = self.db.list_dataset_versions()
-        if latest_versions:
-            version_id = latest_versions[0]["version_id"]
-            # 覆盖式：先全量作废该版本下的快照样本，再基于最新 m03/m04 结果整体重快照
-            self._rebuild_version_snapshot(version_id=version_id)
-        self.db.update_job(job_id, status="done", phase="rebuild", progress=100, message="已更新完成", finished=True)
+        self.db.update_job(
+            job_id,
+            status="done",
+            phase="rebuild",
+            progress=100,
+            message="源文档产物已全量重算；已有冻结版本保持不变，请显式冻结创建新版本",
+            finished=True,
+        )
 
     def _rebuild_version_snapshot(self, *, version_id: int) -> int:
         """覆盖式重建：清空该版本 eval_case 快照，基于最新 generated_case 重新整体快照。"""

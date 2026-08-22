@@ -91,7 +91,10 @@ def get_version(version_id: int):
 # ----------------------------------------------------------------------
 @router.put("/cases/{case_id}")
 def edit_case(case_id: int, payload: dict):
-    result = _service.edit_case(case_id, **payload)
+    try:
+        result = _service.edit_case(case_id, **payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     if result is None:
         raise HTTPException(status_code=404, detail="case not found")
     return result
@@ -99,7 +102,11 @@ def edit_case(case_id: int, payload: dict):
 
 @router.delete("/cases/{case_id}")
 def delete_case(case_id: int):
-    if not _service.delete_case(case_id):
+    try:
+        deleted = _service.delete_case(case_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not deleted:
         raise HTTPException(status_code=404, detail="case not found")
     return {"ok": True}
 
@@ -143,11 +150,7 @@ def export_version(version_id: int, format: str = "jsonl"):
     if format == "json":
         return _service.export_json(version_id)
     if format == "xlsx":
-        return Response(
-            _service.export_xlsx(version_id),
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": "attachment; filename=dataset.csv"},
-        )
+        raise HTTPException(status_code=501, detail="xlsx export is not available in this demo")
     raise HTTPException(status_code=400, detail="unsupported format (jsonl|json|xlsx)")
 
 

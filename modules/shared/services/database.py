@@ -1925,6 +1925,55 @@ class DatabaseService:
             session.refresh(row)
             return row.set_id
 
+    def create_uploaded_set_with_cases(
+        self,
+        *,
+        name: str,
+        template_type: str,
+        source_file: str | None,
+        dimension: str | None,
+        cases: list[dict],
+        quality_snapshot: dict,
+    ) -> dict:
+        """在同一事务内保存上传集、样本与质量快照。"""
+        with SessionLocal() as session:
+            row = UploadedEvalSetRow(
+                name=name,
+                template_type=template_type,
+                source_file=source_file,
+                dimension=dimension,
+                review_status="quality_checked",
+                quality_snapshot=quality_snapshot,
+                total_cases=len(cases),
+            )
+            session.add(row)
+            session.flush()
+            for case in cases:
+                session.add(
+                    UploadedEvalCaseRow(
+                        set_id=row.set_id,
+                        q=str(case["q"]),
+                        a=str(case["a"]),
+                        evidence=case.get("evidence"),
+                        dimension=case.get("dimension"),
+                        session_id=case.get("session_id"),
+                        turns=case.get("turns"),
+                        key_turn=case.get("key_turn"),
+                        turn_type=case.get("turn_type"),
+                        depends_on_turns=case.get("depends_on_turns"),
+                        no_evidence=1 if not case.get("evidence") else 0,
+                        quality=case.get("quality"),
+                        review_status="quality_checked",
+                    )
+                )
+            session.commit()
+            session.refresh(row)
+            return {
+                "set_id": row.set_id,
+                "quality": quality_snapshot,
+                "total_cases": len(cases),
+            }
+
     def list_uploaded_sets(self) -> list[dict]:
         with SessionLocal() as session:
             rows = (
@@ -2037,7 +2086,7 @@ class DatabaseService:
         name: str,
         version: str = "v1.0.0",
         dimensions: list | None = None,
-        review_status: str = "governance_passed",
+        review_status: str = "quality_checked",
     ) -> int:
         with SessionLocal() as session:
             row = PublicEvalSetRow(
@@ -2086,7 +2135,7 @@ class DatabaseService:
                         evidence=case.get("evidence"),
                         dimension=case.get("dimension"),
                         no_evidence=1 if not case.get("evidence") else 0,
-                        review_status=case.get("review_status", "governance_passed"),
+                        review_status="quality_checked",
                     )
                 )
             session.commit()
