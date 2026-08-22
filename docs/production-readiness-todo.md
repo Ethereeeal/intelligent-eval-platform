@@ -12,6 +12,7 @@
 - **M04 质检门禁加固与文档对齐（2026-08-22）**：`answerability` 失败纳入硬失败并自动重生；批量质检默认仅处理 `candidate` / `needs_review`，`quality_verified` 通过单题重跑显式复检，`published` 不受批量质检影响；严格校验 LLM `passed` 为布尔值，非布尔值失败关闭；质检结果改为单事务替换，避免调用失败清空历史；重跑接口返回真实 `check_id`；README 明确 Demo 的 5 项检查与 BRD 完整能力的差距；
 - **M05 Demo 数据完整性修复（2026-08-22）**：冻结/发布版本禁止直接编辑或停用；重传不再改写冻结快照，用户显式冻结生成新版本；公共库和样本不再伪造 `governance_passed`；多轮上传按最终轮问答完成质量评估并原子入库；树形覆盖率改按实际已覆盖 EIU 统计；XLSX 未实现时明确返回 501；
 - **M05 冻结前人工修订闭环（2026-08-22）**：新增 m03 候选题修订与单题复检接口；修订仅记录字段级审计、强制回退 `candidate` 并清空旧失败标签，复检通过后显式冻结为新版本；`doc_generated` 组合及 m08 运行只接受 `frozen` 文档版本，既有快照和已开始评测不被改写；
+- **M08 评测边界与文档对齐（2026-08-22）**：BRD 改为整集冻结评测，不区分开发/验证/测试集；平台只负责以同一冻结评测集复测和比较不同智能体版本，不负责智能体调优，m08 开始后不修改评测集；README 明确 Demo 仅实现基础指标与 D3/D5/D6/D9 归因，其余指标、完整归因和完整多轮记录属于生产版本能力；
 
 - **文档重传后端闭环**：`POST /api/documents/{id}/reupload` 全链路（重解析 → EIU 重抽 → 版本重建 → 删旧文档）；统一 `doc_update_job`（`parsing → eiu_extract → rebuild → done/failed`）；进度单调不回跳（10 / 40 / 40–90 / 90 / 100）；失败保留旧文档、回滚新文档；
 - **混合上传**：后端 `POST /api/documents/precheck`（只读预检）+ `confirm_token`（一次性、10 分钟、绑定 document_id + 文件哈希）；前端预检限并发 3、异常确认面板（将覆盖 / 弱提示，可逐行移除）、覆盖确认后带 token 走 reupload、重传进度浮层；
@@ -33,7 +34,7 @@
   - **m02 README 对齐**：清理旧信息（corpus_id、单通道 LLM、Block 向量化、DELETE 措辞），标注 FR-SEM-001/002/007、FR-COVER-004（模块扩展）与门禁实现说明。
 - **评测平台架构调整（2026-08-18，按确认决策实施）**：
   - **m05 三类来源统一管理**：上传评测集（单轮/多轮模板校验 + 质量评估 + 入库）、公共评测集库（预置导入 + 维度体系 + 版本化停用）、评测集组合选择（校验 + 审计 + 解析为统一运行输入）、评分口径（规范化精确匹配 / 语义相似度）；
-  - **新增 m08_auto_evaluation**：mock / openai_compatible 标准适配器（FR-RUN-001）、批量运行编排（异步 + 进度）、分层指标（FR-METRIC-001~004）、D1–D9 基础归因（FR-DIAG）、ErrorBook + 优化建议 + 聚类（FR-OPT）；
+  - **新增 m08_auto_evaluation**：mock / openai_compatible 标准适配器（FR-RUN-001）、批量运行编排（异步 + 进度）、Demo 基础指标、D3/D5/D6/D9 基础归因（FR-DIAG Demo 子集）、基础 ErrorBook + 诊断建议 + 聚类（FR-OPT）；
   - **数据层**：新增 8 张表（uploaded_eval_set / uploaded_eval_case / public_eval_set / public_eval_case / eval_set_dimension / eval_set_composition / evaluation_run / evaluation_case_result / error_book_item），create_all 自动建表；
   - **m06 模块移除**：不建设评测后回流；m08 ErrorBook 仅用于待测智能体诊断、优化和回归比较，评测集内容问题走 m04 质量复核与 m05 草案/新版本流程；
   - **文档同步**：m05/m08 README、modules/README、根 README、technical_design_demo、BRD 与技术调整计划（Demo 边界含三类来源 + Agent 评测）。
