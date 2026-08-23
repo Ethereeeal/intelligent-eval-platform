@@ -164,6 +164,8 @@ class OpenAiCompatibleAdapter(BaseAdapter):
         try:
             messages: list[dict] = []
             outputs: list[str] = []
+            total_elapsed_ms = 0
+            total_tokens = 0
             for index, turn in enumerate(turns):
                 if not isinstance(turn, dict):
                     continue
@@ -175,6 +177,8 @@ class OpenAiCompatibleAdapter(BaseAdapter):
                     messages.append({"role": "assistant", "content": str(turn.get("a"))})
                 else:
                     content, elapsed, tokens = self._chat(messages)
+                    total_elapsed_ms += elapsed
+                    total_tokens += tokens
                     outputs.append(content)
                     messages.append({"role": "assistant", "content": content})
             final = outputs[-1] if outputs else ""
@@ -183,7 +187,11 @@ class OpenAiCompatibleAdapter(BaseAdapter):
                 "turn_outputs": outputs,
                 "retrieved": None,
                 "context": None,
-                "usage": {"time_ms": 0, "tokens": 0, "cost": 0.0},
+                "usage": {
+                    "time_ms": total_elapsed_ms,
+                    "tokens": total_tokens,
+                    "cost": 0.0,
+                },
                 "error": None,
             }
         except AdapterError:

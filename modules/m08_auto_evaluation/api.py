@@ -5,7 +5,7 @@
   GET  /api/evaluation-runs                  运行列表
   GET  /api/evaluation-runs/{id}             运行进度 + 汇总
   GET  /api/evaluation-runs/{id}/results     单题结果 + 分层指标汇总
-  GET  /api/evaluation-runs/{id}/failures    D1–D9 失败归因（ErrorBook）
+  GET  /api/evaluation-runs/{id}/failures    E2E/D9 失败记录（ErrorBook）
   POST /api/evaluation-runs/{id}/retry       重跑（新 run，供回归比较）
   GET  /api/error-book                       智能体失败诊断与优化分析数据源
   GET  /api/adapters                         内置适配器清单
@@ -112,7 +112,7 @@ def evaluation_run_failures(run_id: int):
 
 @evaluation_router.post("/evaluation-runs/{run_id}/retry")
 def retry_evaluation_run(run_id: int):
-    """重跑（创建新 run，供开发集回归比较，FR-OPT-002）。"""
+    """重跑（创建新 run，供同一冻结评测集复测比较，FR-OPT-002）。"""
     run = _get_run_or_404(run_id)
     if run.get("composition_id") is None:
         raise HTTPException(status_code=400, detail="原运行缺少组合，无法重跑")
@@ -137,7 +137,7 @@ def retry_evaluation_run(run_id: int):
 
 @evaluation_router.get("/error-book")
 def error_book(
-    diagnosis: str | None = Query(default=None, description="按 D1–D9 过滤"),
+    diagnosis: str | None = Query(default=None, description="按 E2E/D9 过滤"),
     status: str | None = Query(default=None, description="open/fixed/closed"),
 ):
     items = _db.list_error_book(diagnosis=diagnosis, status=status)
