@@ -90,10 +90,28 @@
           </div>
         </section>
 
+        <!-- ============ 文档库管理 ============ -->
+        <section class="view" data-view="doclib" hidden>
+          <div class="page-head">
+            <div><h1>文档库管理</h1><p class="sub">文档接入、解析、知识点管理与质量门禁</p></div>
+            <div class="page-actions">
+              <button class="btn ghost" id="uploadBtn"><i data-lucide="upload"></i>上传文档</button>
+              <input type="file" id="uploadInput" accept=".pdf,.doc,.docx,.txt,.md,.xlsx,.xls,.csv" multiple hidden />
+              <input type="file" id="uploadFolderInput" webkitdirectory directory multiple hidden />
+            </div>
+          </div>
+          <div class="lib-split">
+            <div class="tree" id="docTree">
+              <div class="tree-bar"><span class="tree-bar-t">目录</span><button class="tree-toggle" id="treeToggle" title="隐藏/显示目录"><i data-lucide="chevron-left"></i></button></div>
+            </div>
+            <div id="docContent"></div>
+          </div>
+        </section>
+
         <!-- ============ 评测集库（页面内分为生成与展示） ============ -->
         <section class="view" data-view="evalset" hidden>
           <div class="page-head">
-            <div><h1>评测集库</h1><p class="sub">评测集生成与展示管理（生成库 / 上传库 / 公共库 / 输入文档库）</p></div>
+            <div><h1>评测集库</h1><p class="sub">评测集生成与展示管理（生成库 / 上传库 / 公共库 / 评测集库）</p></div>
             <div class="page-actions">
               <button class="btn primary" id="esGenBtn"><i data-lucide="plus"></i>生成评测集</button>
               <button class="btn ghost" id="esUploadBtn"><i data-lucide="upload"></i>上传评测集</button>
@@ -114,7 +132,6 @@
                     <div class="tree-row tree-child" data-es="uploaded"><i data-lucide="folder-up"></i><span>上传库</span></div>
                     <div class="tree-row tree-child" data-es="public"><i data-lucide="folder-open"></i><span>公共库</span></div>
                     <div class="tree-row tree-child" data-es="custom"><i data-lucide="folder-cog"></i><span>评测集库</span></div>
-                    <div class="tree-row tree-child" data-es="doclib"><i data-lucide="folder-search-2"></i><span>输入文档库</span></div>
                   </div>
                 </div>
               </div>
@@ -205,25 +222,6 @@
                   </div>
                 </div>
 
-                <!-- 输入文档库（保留原文档库界面：目录树 + 文档 + 解析 + 知识点 + 质量门禁 + 导出） -->
-                <div id="esDoc" class="es-pane" hidden>
-                  <div class="card card-pad">
-                    <div class="card-t">输入文档库
-                      <div class="page-actions" style="float:right">
-                        <button class="btn ghost" id="uploadBtn"><i data-lucide="upload"></i>上传文档</button>
-                        <input type="file" id="uploadInput" accept=".pdf,.doc,.docx,.txt,.md,.xlsx,.xls,.csv" multiple hidden />
-                        <input type="file" id="uploadFolderInput" webkitdirectory directory multiple hidden />
-                      </div>
-                    </div>
-                    <div class="es-gen-hint">文档接入、解析、在线查看与版本管理；抽取知识点并经过质量门禁后进入生成库。</div>
-                    <div class="lib-split">
-                      <div class="tree" id="docTree">
-                        <div class="tree-bar"><span class="tree-bar-t">目录</span><button class="tree-toggle" id="treeToggle" title="隐藏/显示目录"><i data-lucide="chevron-left"></i></button></div>
-                      </div>
-                      <div id="docContent"></div>
-                    </div>
-                  </div>
-                </div>
               </div>
             </div>
           </div>

@@ -65,7 +65,6 @@ async function renderEvalSetLibrary() {
   $("#esUploaded").hidden = view !== "uploaded";
   $("#esPublic").hidden = view !== "public";
   $("#esCustom").hidden = view !== "custom";
-  $("#esDoc").hidden = view !== "doclib";
 
   if (view === "generate") {
     // 生成库 = 原按文档问答库视图（质量与人工审核）
@@ -73,7 +72,6 @@ async function renderEvalSetLibrary() {
   }
   if (view === "uploaded") await esLoadUploaded();
   if (view === "public") await esLoadPublic();
-  if (view === "doclib") renderLib("doc"); // 输入文档库界面（目录树+文档+解析+知识点+质量门禁+导出）
   if (view === "custom") await esLoadCustom();
   icons();
 }
