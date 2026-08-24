@@ -99,9 +99,9 @@
   // 各文档归属的输入用途（统一为 basic=基础问题输入；是否泛化由生成界面选择）
   let DOC_PURPOSE = {};
   // 后端持久化的文件夹扁平列表（[{folder_id, name, parent_id}]），
-  // 输出问答对库目录树据此重建，保证空文件夹与层级刷新后不丢失。
+  // 输出评测集库目录树据此重建，保证空文件夹与层级刷新后不丢失。
   let QA_FOLDERS = [];
-  // 文档用途判定：所有输入文档统一视为基础问题输入（basic），仅泛化/问答对生成在生成界面选择
+  // 文档用途判定：所有输入文档统一视为基础问题输入（basic），仅泛化/评测集生成在生成界面选择
   function docPurposeOf(d) {
     return "basic";
   }
@@ -195,7 +195,7 @@
   function escapeHTML(s) {
     return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   }
-  // 演示数据：为「已解析但无问答对」的文档生成确定性示例问答对（含难度分布），便于展示问答对表与难度占比
+  // 演示数据：为「已解析但无评测集」的文档生成确定性示例评测集（含难度分布），便于展示评测集表与难度占比
   function sampleQaForDoc(d, docId, qaType) {
     const kpStmts = (d.kp || []).map(k => k.stmt).filter(Boolean);
     const baseQ = d.name.replace(/\.[^.]+$/, "");
@@ -212,7 +212,7 @@
         diff,
         review: i % 4 === 3 ? "待审核" : "已通过",
         evidence: kp,
-        src: "示例问答对（演示数据）",
+        src: "示例评测集（演示数据）",
         type: qaType
       });
     }
@@ -248,7 +248,7 @@
       DOCS = {};
       // 先按后端持久化的文件夹重建目录树（含空文件夹，刷新后不丢失）
       TREE.children = buildFolderTree(folders || []);
-      // 输出问答对库复用同一份持久化文件夹（与输入文档库同构）；
+      // 输出评测集库复用同一份持久化文件夹（与输入文档库同构）；
       // 各自独立构造节点对象，避免两棵树共享节点导致折叠态互相串扰。
       QA_FOLDERS = folders || [];
       DOC_PURPOSE = {};
@@ -284,12 +284,12 @@
           // 优先取 evidence 块内的原文句子（block_text/content/text），后端无则兜底为空串，由展示层标「（无）」。
           evidence2: evBack(c.evidence) || (c.gold_answer || c.answer || c.question || ""),
           type: qaType,
-          // 后端持久化的问答对目录归属（相对「问答对库」根），用于输出问答对库目录树
+          // 后端持久化的评测集目录归属（相对「评测集库」根），用于输出评测集库目录树
           caseId: c.case_id,
           folderPath: c.folder_path || "",
           purpose: c.purpose || purpose
         }));
-        // 问答对集在「问答对库」中的目录归属：取其问答对上后端持久化的 folder_path；
+        // 评测集集在「评测集库」中的目录归属：取其评测集上后端持久化的 folder_path；
         // 后端尚未回填时（历史数据）兜底沿用源文档的 folder_path，保持与输入库同构。
         const qaFolderPath = (qa.find(x => x.folderPath) || {}).folderPath || (d.folder_path || "");
         DOCS[id] = {
@@ -304,10 +304,10 @@
         // 按后端 folder_path 重建目录树（保留上传时的目录层级），缺省挂到「文档库」根
         insertDocIntoFolderTree(d.folder_path || "", id, d.file_name);
       });
-      // 演示数据补齐：已解析（跑通）但后端未返回问答对的文档，生成一份确定性示例问答对，
-      // 以便「输出问答对库」能展示问答对表与难度占比（真实后端返回时以真实数据为准，不覆盖）。
-      // 注：2026-08 已移除该兜底——真实后端联调后，仅展示数据库真实问答对；
-      // 删除文档问答对后若再补示例数据会误导用户（表现为「删了还有假数据」）。
+      // 演示数据补齐：已解析（跑通）但后端未返回评测集的文档，生成一份确定性示例评测集，
+      // 以便「输出评测集库」能展示评测集表与难度占比（真实后端返回时以真实数据为准，不覆盖）。
+      // 注：2026-08 已移除该兜底——真实后端联调后，仅展示数据库真实评测集；
+      // 删除文档评测集后若再补示例数据会误导用户（表现为「删了还有假数据」）。
       // 如需纯前端演示再启用 sampleQaForDoc 兜底。
     } catch (err) {
       console.error("加载后端数据失败，所有文档区将显示为空：", err);

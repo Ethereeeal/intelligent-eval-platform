@@ -31,7 +31,7 @@
       content.classList.toggle("split-on", on);
       divider.hidden = !on; right.hidden = !on; right.classList.remove("ask-max"); content.classList.remove("ask-full");
       $("#askBtn").classList.toggle("active", on);
-      // 点击智能问答后，仅输入文档库与输出问答对库这两个栏目的目录缩放（收起），让内容占满
+      // 点击智能问答后，仅输入文档库与输出评测集库这两个栏目的目录缩放（收起），让内容占满
       trees.forEach(t => { if (t) t.classList.toggle("collapsed", on); });
       applyTreeHidden();
     }
@@ -70,7 +70,7 @@
       if (e.key !== "Enter") return;
       const go = e.target.closest("[data-go][role='link']"); if (go) { goto(go.dataset.go); }
     });
-    // 问答对生成：来源类型切换 → 选项随类型变化
+    // 评测集生成：来源类型切换 → 选项随类型变化
     $("#srcTypeSeg").addEventListener("click", e => {
       const b = e.target.closest("button[data-type]"); if (!b) return;
       $$("#srcTypeSeg button").forEach(x => x.classList.toggle("on", x === b));
@@ -86,7 +86,7 @@
       // 待生成问答文件：需勾选至少一种难度
       if (state.studioType === "doc" && state.studioOpts.difficulties.length === 0) { toast("请至少选择一种难度"); return; }
       renderMonitor();
-      const label = state.studioType === "doc" ? "问答对生成" : "问题泛化";
+      const label = state.studioType === "doc" ? "评测集生成" : "问题泛化";
       toast(`${label}中…（按所选文档逐个执行 m03 生成 → m04 质检）`);
       let genTotal = 0, reuseTotal = 0, failTotal = 0;
       for (const id of srcIds) {
@@ -97,9 +97,9 @@
         const docId = Number(m[1]);
         try {
           if (state.studioType === "qa") {
-            // 问题泛化：对该文档下已有问答对逐个调用 m03 泛化/改写接口
+            // 问题泛化：对该文档下已有评测集逐个调用 m03 泛化/改写接口
             const qas = d.qa || [];
-            if (!qas.length) { toast(`「${d.name}」暂无问答对可泛化`); continue; }
+            if (!qas.length) { toast(`「${d.name}」暂无评测集可泛化`); continue; }
             let okN = 0;
             for (const qa of qas) {
               const cm = String(qa.id || "").match(/^Q-(\d+)$/);
@@ -114,7 +114,7 @@
             toast(`「${d.name}」泛化完成：${okN} 个种子题已改写扩写`);
             continue;
           }
-          // m03：按文档生成问答对（单文档隔离，未覆盖 EIU 才生成，可重复触发）
+          // m03：按文档生成评测集（单文档隔离，未覆盖 EIU 才生成，可重复触发）
           // 先展示进度条（初始 0%），请求期间轮询后端进度
           renderGenProgress(d, { running: true, total: (d.kp || []).length, done: 0 });
           const poll = setInterval(async () => {
@@ -146,7 +146,7 @@
             if (qrBody) toast(`「${d.name}」生成 ${gqr.generated || 0} 道 · 质检通过 ${qrBody.passed || 0} / 待确认 ${qrBody.failed || 0}`);
             else toast(`「${d.name}」生成完成，已执行质量校验`);
           } else {
-            toast(`「${d.name}」问答对已生成，质量校验未执行（m04 接口异常）`);
+            toast(`「${d.name}」评测集已生成，质量校验未执行（m04 接口异常）`);
           }
         } catch (e) {
           failTotal += 1;
@@ -164,14 +164,14 @@
       const pending = NAV.filter(n => n.badge && n.badge.unread)
         .reduce((s, n) => s + unreadCount(n.view), 0);
       toast(pending
-        ? `提醒：知识抽取完成 · 评测完成 · 新生成问答对 ${pending} 个尚未查看`
-        : "提醒：知识抽取完成 · 评测完成 · 暂无待查看的新问答对");
+        ? `提醒：知识抽取完成 · 评测完成 · 新生成评测集 ${pending} 个尚未查看`
+        : "提醒：知识抽取完成 · 评测完成 · 暂无待查看的新评测集");
     };
-    // 输出问答对库：页面级「导出问答对」（导出当前选中文档/目录下全部问答对）
+    // 输出评测集库：页面级「导出评测集」（导出当前选中文档/目录下全部评测集）
     const qaLibExport = $("#qaLibExportBtn");
     if (qaLibExport) qaLibExport.onclick = () => {
       const rows = currentQaRows();
-      const name = state.folderSel.qa ? state.folderSel.qa : (state.sel.qa && DOCS[state.sel.qa] ? DOCS[state.sel.qa].name : "全部问答对");
+      const name = state.folderSel.qa ? state.folderSel.qa : (state.sel.qa && DOCS[state.sel.qa] ? DOCS[state.sel.qa].name : "全部评测集");
       exportQaRows(rows, name);
     };
     // 输入文档库：上传文档 → 选择目标目录（点击弹出 overlay 目录树）→ 自动抽取知识点
@@ -268,15 +268,42 @@
     fillOverviewStats();
   })();
 
-  // 概览：问答对总量 + 一句文档大致内容概览（不展示建议/多跳/回溯率等）
-  function fillOverviewStats() {
-    const docCount = Object.keys(DOCS).length;
-    const qaTotal = Object.values(DOCS).reduce((s, d) => s + (d.qa ? d.qa.length : 0), 0);
-    const el = $("#kpiQaTotal");
-    if (el) el.textContent = qaTotal;
+  // 概览：拉取后端真实统计，反映当前全链路功能（文档/EIU/评测集/评测集/评测运行）
+  async function fillOverviewStats() {
+    const set = (id, v) => { const el = $("#" + id); if (el) el.textContent = (v == null ? "—" : v); };
+    set("kpiDocs", "…"); set("kpiEiu", "…"); set("kpiQaTotal", "…"); set("kpiEvalSets", "…"); set("kpiRuns", "…");
+
+    // 前端本地文档计数（兜底）
+    const localDocs = Object.keys(DOCS).length;
+    const localQa = Object.values(DOCS).reduce((s, d) => s + (d.qa ? d.qa.length : 0), 0);
+
+    let docs = localDocs, eiu = null, qa = localQa, evalSets = null, runs = null;
+    try {
+      const [docRes, eiuRes, pubRes, upRes, runRes] = await Promise.all([
+        apiGet(`/api/documents`).catch(() => null),
+        apiGet(`/api/eiu`).catch(() => null),
+        apiGet(`/api/public-sets`).catch(() => []),
+        apiGet(`/api/eval-sets/uploaded`).catch(() => []),
+        apiGet(`/api/evaluation-runs`).catch(() => []),
+      ]);
+      if (Array.isArray(docRes)) docs = docRes.length || localDocs;
+      if (Array.isArray(eiuRes)) eiu = eiuRes.length;
+      evalSets = (Array.isArray(pubRes) ? pubRes.length : 0) + (Array.isArray(upRes) ? upRes.length : 0);
+      if (Array.isArray(runRes)) runs = runRes.length;
+    } catch (e) { /* 后端不可用时用本地兜底 */ }
+
+    set("kpiDocs", docs);
+    set("kpiEiu", eiu == null ? "—" : eiu);
+    set("kpiQaTotal", qa);
+    set("kpiEvalSets", evalSets == null ? "—" : evalSets);
+    set("kpiRuns", runs == null ? "—" : runs);
 
     const ins = $("#hlInsight");
     if (!ins) return;
-    if (!docCount) { ins.textContent = "当前暂无已加载的输入文档。"; return; }
-    ins.textContent = `当前输入文档库共 ${docCount} 篇文档，已生成 ${qaTotal} 条问答对，内容围绕银行证券业务规则与合规要点。`;
+    const parts = [`输入文档 ${docs} 篇`];
+    if (eiu != null) parts.push(`知识点(EIU) ${eiu} 条`);
+    parts.push(`评测集 ${qa} 条`);
+    if (evalSets != null) parts.push(`评测集 ${evalSets} 个`);
+    if (runs != null) parts.push(`评测运行 ${runs} 次`);
+    ins.textContent = `当前平台：${parts.join(" · ")}。链路覆盖 文档解析 → 知识点抽取 → 评测集生成 → m04 质量门禁 → 评测集 → 目标智能体评测。`;
   }

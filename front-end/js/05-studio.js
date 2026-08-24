@@ -1,4 +1,4 @@
-  /* ---------------- 问答对生成（选择文件类型 / 配置 / 监控） ---------------- */
+  /* ---------------- 评测集生成（选择文件类型 / 配置 / 监控） ---------------- */
   function renderSrcList() {
     renderSrcTree();
   }
@@ -31,12 +31,12 @@
     }
   }
 
-  /* 运行监测：演示环境无后端执行，仅展示已选文件并提供真实「导出已有问答对」下载 */
+  /* 运行监测：演示环境无后端执行，仅展示已选文件并提供真实「导出已有评测集」下载 */
   function renderMonitor() {
     const el = $("#monitorList"); if (!el) return;
     const srcIds = state.studioSrc || [];
     if (!srcIds.length) {
-      el.innerHTML = emptyState("尚未选择文件", "在左侧「选择文件类型」下勾选源文件后，点击「开始生成」即可在此导出现有问答对。");
+      el.innerHTML = emptyState("尚未选择文件", "在左侧「选择文件类型」下勾选源文件后，点击「开始生成」即可在此导出现有评测集。");
       return;
     }
     const typeLabel = { doc: "待生成问答文件", qa: "仅泛化" }[state.studioType];
@@ -49,12 +49,12 @@
       const eiuN = (d.kp || []).length;
       const metaBits = [];
       if (eiuN > 0) metaBits.push(`${eiuN} 知识点`); else if (d.status) metaBits.push(d.status);
-      metaBits.push(`已有问答对 ${qaN} 条`);
+      metaBits.push(`已有评测集 ${qaN} 条`);
       if (d.size) metaBits.push(d.size);
       return `<div class="monitor-row">
         <span class="mr-name">${d.name} · ${typeLabel} · ${tag}</span>
         <span class="mr-meta">${metaBits.join(" · ")}</span>
-        <span class="mr-pct"><button class="btn ghost sm mr-dl-btn" data-doc="${id}"><i data-lucide="download"></i>导出问答对</button></span>
+        <span class="mr-pct"><button class="btn ghost sm mr-dl-btn" data-doc="${id}"><i data-lucide="download"></i>导出评测集</button></span>
       </div>`;
     }).join("");
     icons();
@@ -70,7 +70,7 @@
       return (node.children || []).flatMap(c => c.doc ? [c.doc] : collectDocs(c));
     }
 
-    // 节点统计信息：文件夹聚合全部后代文档；文档取自身 EIU / 问答对 / 大小 / 类型
+    // 节点统计信息：文件夹聚合全部后代文档；文档取自身 EIU / 评测集 / 大小 / 类型
     function nodeStats(docIds) {
       let eiuN = 0, qaN = 0;
       docIds.forEach(id => {
@@ -95,7 +95,7 @@
         if (hasDocs) {
           const s = nodeStats(docIds);
           line1Meta = `${docIds.length} 篇`;
-          line2 = `${s.eiuN} 知识点 · ${s.qaN} 问答对`;
+          line2 = `${s.eiuN} 知识点 · ${s.qaN} 评测集`;
         } else {
           line2 = "空文件夹";
         }
@@ -104,7 +104,7 @@
         const s = nodeStats(docIds);
         line1Meta = s.eiuN > 0 ? `${s.eiuN} 知识点` : (d.status && d.status !== "已解析" ? d.status : "暂无知识点");
         const bits = [];
-        if (s.qaN > 0) bits.push(`${s.qaN} 问答对`);
+        if (s.qaN > 0) bits.push(`${s.qaN} 评测集`);
         if (d.size) bits.push(d.size);
         if (d.type) bits.push(d.type);
         line2 = bits.join(" · ");
@@ -154,14 +154,14 @@
       renderMonitor();
   }
 
-  /* 渲染选项区：待生成问答文件 → 问答对生成（跨块+跨文档+难度多选+解释）；待泛化文件 → 问题泛化（数量+保留原始） */
+  /* 渲染选项区：待生成问答文件 → 评测集生成（跨块+跨文档+难度多选+解释）；待泛化文件 → 问题泛化（数量+保留原始） */
   function renderStudioOpts() {
     const el = $("#studioOpts");
     if (!el) return;
     const o = state.studioOpts;
     let html = "";
     if (state.studioType === "doc") {
-      html += `<div class="studio-subtitle">问答对生成</div>`;
+      html += `<div class="studio-subtitle">评测集生成</div>`;
       html += `<div class="gen-row out-mode-row"><span class="gen-label">输出结构</span>
         <div class="seg out-mode-seg" id="outModeSeg">
           <button class="${o.flatOutput ? "" : "on"}" data-mode="tree">保留目录层级</button>

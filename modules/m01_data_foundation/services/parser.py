@@ -327,15 +327,18 @@ class DocumentParser:
                 continue
             merged_len = len(last["text"]) + len(item["text"])
             if merged_len > DocumentParser.MAX_MERGE_CHARS * 2:
+                # 双上限保险：无论如何强制断，防止超大块
                 merged.append(item)
             elif merged_len > DocumentParser.MAX_MERGE_CHARS and not _SENTENCE_END.search(
                 last["text"]
             ):
+                # 超长但上一块句子未结束：继续合并，等下一个句末再断（消除硬切腰斩）
                 last["text"] = f"{last['text']}\n{item['text']}"
                 last["end"] = item.get("end")
             elif merged_len > DocumentParser.MAX_MERGE_CHARS and _SENTENCE_END.search(
                 last["text"]
             ):
+                # 超长且上一块已是完整句：在句末软断点处断开
                 merged.append(item)
             else:
                 last["text"] = f"{last['text']}\n{item['text']}"

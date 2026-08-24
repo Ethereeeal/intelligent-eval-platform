@@ -67,7 +67,7 @@
   // 文档卡片底部：原空白 preview 区域改为展示「生成知识点数量」（纯文字）
   function kpCountHTML(d) {
     const kpN = (d.kp || []).length, qaN = (d.qa || []).length;
-    const text = kpN > 0 ? `${kpN} 个知识点` : (qaN > 0 ? `${qaN} 个问答对` : "暂无知识点");
+    const text = kpN > 0 ? `${kpN} 个知识点` : (qaN > 0 ? `${qaN} 个评测集` : "暂无知识点");
     return `<p class="kp-count-text">${text}</p>`;
   }
 
@@ -96,7 +96,7 @@
     if (!d.kp || d.kp.length === 0) {
       return `<div class="lib-head"><div class="lh-ic"><i data-lucide="file-x"></i></div>
         <div><div class="lh-title">${d.name}</div><div class="lh-sub">知识点</div></div></div>` +
-        emptyState("该文档无知识点", "已执行拒答验证：所选文档无可提取知识点，未生成问答对（不单独成栏）。");
+        emptyState("该文档无知识点", "已执行拒答验证：所选文档无可提取知识点，未生成评测集（不单独成栏）。");
     }
     return `<div class="lib-head"><div class="lh-ic"><i data-lucide="list-checks"></i></div>
         <div><div class="lh-title">${d.name}</div><div class="lh-sub">知识点 · ${d.kp.length} 条</div></div>
@@ -139,13 +139,13 @@
       setupPager($("#docContent"), "#docContent .kp-tr", 15, "kpPager", "kpPage");
       enableHScrollDrag($("#docContent .kp-table"));
     } else {
-      // 查看具体文档时，左目录已无导航价值，自动收起使问答对内容占满浏览器宽度
+      // 查看具体文档时，左目录已无导航价值，自动收起使评测集内容占满浏览器宽度
       const qaSplit = $("#qaContent").closest(".lib-split");
       const qaTreeEl = qaSplit ? qaSplit.querySelector(".tree") : null;
       if (qaTreeEl) qaTreeEl.classList.add("collapsed");
       if (qaSplit) qaSplit.classList.add("tree-hidden");
       const rbEl = $(".tree-reopen"); if (rbEl) rbEl.classList.toggle("show", true);
-      // 删除文档后选中可能失效：自动回退到第一个仍有问答对的文档，否则展示空态
+      // 删除文档后选中可能失效：自动回退到第一个仍有评测集的文档，否则展示空态
       if (!docId || !DOCS[docId]) {
         const first = Object.keys(DOCS).find(id => (DOCS[id].qa || []).length);
         if (first) {
@@ -155,13 +155,13 @@
           renderLibContent("qa", first);
           return;
         }
-        $("#qaContent").innerHTML = emptyState("问答对库为空", "上传文档并生成问答对后，可在此查看与管理。");
+        $("#qaContent").innerHTML = emptyState("评测集库为空", "上传文档并生成评测集后，可在此查看与管理。");
         icons();
         return;
       }
       const d = DOCS[docId];
       if (!d.qa || !d.qa.length) {
-        $("#qaContent").innerHTML = qaHead(docId) + emptyState("该文档无问答对", "已执行拒答验证：所选文档无可提取知识点，未生成问答对（不单独成栏）。");
+        $("#qaContent").innerHTML = qaHead(docId) + emptyState("该文档无评测集", "已执行拒答验证：所选文档无可提取知识点，未生成评测集（不单独成栏）。");
       } else {
         $("#qaContent").innerHTML = qaHead(docId) + qaBlockHTML(d.qa, "qaChart-" + docId);
         qaBind("qaChart-" + docId);
@@ -175,7 +175,7 @@
     if (mode === "qa") bindQaTree($(treeId));
     else bindTree($(treeId), mode);
     renderLibContent(mode, state.sel[mode]);
-    // 打开「输出问答对库」栏目时，默认展开目录：renderLibContent 在查看具体集时会折叠目录，
+    // 打开「输出评测集库」栏目时，默认展开目录：renderLibContent 在查看具体集时会折叠目录，
     // 故在渲染内容之后再强制展开并取消隐藏，确保刚进入栏目时目录始终是展开态。
     if (mode === "qa") {
       const qaSplit = $(treeId) && $(treeId).closest(".lib-split");
@@ -190,12 +190,12 @@
   function typeLabel(t) { return t === "gen" ? "泛化问题" : (t === "plain" ? "基础问题" : t); }
 
   // ============================================================
-  // 输出问答对库目录树（后端驱动，真实持久化）
+  // 输出评测集库目录树（后端驱动，真实持久化）
   // ------------------------------------------------------------
   // 结构与「输入文档库」完全同构：
   //   泛化问题 / 基础问题（两个系统根，不可重命名/删除）
   //     └─ 用户文件夹（来自 /api/folders，与输入库共享同一份持久化目录）
-  //          └─ 问答对集（按其问答对上后端持久化的 folder_path 归位）
+  //          └─ 评测集集（按其评测集上后端持久化的 folder_path 归位）
   // 交互也与输入库一致：chevron-down 箭头 + 可折叠（.tree-node/.tree-children.open/.collapsed）
   // ============================================================
 
@@ -224,7 +224,7 @@
     return make("root");
   }
 
-  // 某系统根下的问答对集：按 purpose 过滤，返回 { relPath -> [docId] }
+  // 某系统根下的评测集集：按 purpose 过滤，返回 { relPath -> [docId] }
   function qaSetsByPath(rootKey) {
     const map = {};
     Object.keys(DOCS).forEach(id => {
@@ -237,8 +237,8 @@
   }
 
   function qaTreeHTML() {
-    let html = `<div class="tree-h up-title">问答对目录</div>`;
-    html += `<div class="lib-hint"><i data-lucide="info"></i><div><b>问答对库</b>：目录与「输入文档库」同构，问答对集随源文档目录自动归位；可新建文件夹、移动、重命名，并支持按目录导出。</div></div>`;
+    let html = `<div class="tree-h up-title">评测集目录</div>`;
+    html += `<div class="lib-hint"><i data-lucide="info"></i><div><b>评测集库</b>：目录与「输入文档库」同构，评测集集随源文档目录自动归位；可新建文件夹、移动、重命名，并支持按目录导出。</div></div>`;
     QA_ROOTS.forEach(root => {
       const folders = qaFolderTree();
       const setsByPath = qaSetsByPath(root.key);
@@ -262,7 +262,7 @@
   function qaFolderNodeHTML(node, parentRel, root, setsByPath) {
     const rel = parentRel ? parentRel + "/" + node.name : node.name;
     const sets = setsByPath[rel] || [];
-    // 计数：本目录 + 所有子目录下的问答对集数量
+    // 计数：本目录 + 所有子目录下的评测集集数量
     const count = Object.keys(setsByPath)
       .filter(p => p === rel || p.startsWith(rel + "/"))
       .reduce((s, p) => s + setsByPath[p].length, 0);
@@ -279,7 +279,7 @@
     </div>`;
   }
 
-  // 问答对集叶子节点
+  // 评测集集叶子节点
   function qaChildRowHTML(id, root, rel) {
     const doc = DOCS[id];
     const cnt = (doc.qa || []).filter(q => q.type === root.key).length;
@@ -319,7 +319,7 @@
         await moveQaSetToFolder(mId, mType, row.dataset.path || "");
       });
     });
-    // 问答对集节点：选中并展示 + 可拖拽到其他同目的文件夹
+    // 评测集集节点：选中并展示 + 可拖拽到其他同目的文件夹
     container.querySelectorAll(".tree-child").forEach(row => {
       row.addEventListener("click", (e) => {
         if (e.target.closest(".tree-dots")) return;
@@ -334,7 +334,7 @@
         e.dataTransfer.effectAllowed = "move";
       });
     });
-    // 三点菜单：系统根 / 用户文件夹 / 问答对集（事件委托，避免图标替换导致 handler 丢失）
+    // 三点菜单：系统根 / 用户文件夹 / 评测集集（事件委托，避免图标替换导致 handler 丢失）
     container.addEventListener("click", (e) => {
       const btn = e.target.closest(".tree-dots");
       if (!btn) return;
@@ -346,7 +346,7 @@
     });
   }
 
-  // 将问答对集（= 某文档的全部同类问答对）移动到目标目录：调用后端逐条落库
+  // 将评测集集（= 某文档的全部同类评测集）移动到目标目录：调用后端逐条落库
   async function moveQaSetToFolder(docId, rootKey, targetRel) {
     const doc = DOCS[docId];
     if (!doc) return;
@@ -394,7 +394,7 @@
     return pop;
   }
 
-  // 问答对集三点菜单：导出 / 移动到 / 重命名 / 删除
+  // 评测集集三点菜单：导出 / 移动到 / 重命名 / 删除
   function showQaContextMenu(e, btn) {
     const id = btn.dataset.id;
     const rootKey = btn.dataset.rootKey || btn.dataset.type;
@@ -457,7 +457,7 @@
         return;
       }
       const created = await res.json();
-      // 同步两棵树的数据源：QA_FOLDERS（问答对库）与 TREE（输入文档库共享同一份持久化目录）
+      // 同步两棵树的数据源：QA_FOLDERS（评测集库）与 TREE（输入文档库共享同一份持久化目录）
       QA_FOLDERS.push({ folder_id: created.folder_id, name: created.name, parent_id: created.parent_id ?? null });
       const parentNode = parentRel ? (findOrCreateFolder(parentRel.split("/").pop()) || TREE) : TREE;
       if (parentNode && !(parentNode.children || []).some(c => c.name === created.name)) {
@@ -476,7 +476,7 @@
     if (row) renameQaFolderInline(row, rel, "新建文件夹");
   }
 
-  // 内联重命名文件夹：走 /api/folders/move（后端会一并重写文档与问答对的 folder_path）
+  // 内联重命名文件夹：走 /api/folders/move（后端会一并重写文档与评测集的 folder_path）
   function renameQaFolderInline(row, rel, oldName) {
     if (!row) return;
     const nameSpan = row.querySelector(".tw-name");
@@ -520,7 +520,7 @@
   }
 
   // 删除文件夹：后端会把其下内容上移到父级
-  // 统计某目录（含子孙）下归属的问答对条数
+  // 统计某目录（含子孙）下归属的评测集条数
   function countQaUnder(rel) {
     let n = 0;
     for (const d of Object.values(DOCS)) {
@@ -535,8 +535,8 @@
   async function deleteQaFolder(rel, name) {
     const cnt = countQaUnder(rel);
     const tip = cnt > 0
-      ? `该文件夹及其子目录下共有 <b>${cnt}</b> 条问答对，将<b>一并删除且不可恢复</b>。`
-      : `该文件夹下没有问答对，仅删除空目录。`;
+      ? `该文件夹及其子目录下共有 <b>${cnt}</b> 条评测集，将<b>一并删除且不可恢复</b>。`
+      : `该文件夹下没有评测集，仅删除空目录。`;
     const mask = document.createElement("div");
     mask.className = "up-modal-mask";
     mask.innerHTML = `
@@ -571,7 +571,7 @@
       close();
       await loadData();
       renderLib("qa");
-      toast(`已删除文件夹「${name}」${cnt > 0 ? `及 ${cnt} 条问答对` : ""}`);
+      toast(`已删除文件夹「${name}」${cnt > 0 ? `及 ${cnt} 条评测集` : ""}`);
     }
   }
 
@@ -584,10 +584,10 @@
     const a = document.createElement("a");
     a.href = url; a.download = "";
     document.body.appendChild(a); a.click(); a.remove();
-    toast(`正在导出「${name || typeLabel(rootKey)}」目录下的问答对（含目录结构）`);
+    toast(`正在导出「${name || typeLabel(rootKey)}」目录下的评测集（含目录结构）`);
   }
 
-  // 重命名问答对集：改其下每条问答对的问题标题不合适，这里改「集名」= 源文档显示名
+  // 重命名评测集集：改其下每条评测集的问题标题不合适，这里改「集名」= 源文档显示名
   function renameQaSetInline(row, docId, rootKey) {
     if (!row) return;
     const doc = DOCS[docId];
@@ -605,7 +605,7 @@
       if (done) return; done = true;
       const v = input.value.trim();
       if (v && v !== oldName) {
-        // 问答对集名即源文档显示名：仅前端展示层改名，不影响落盘文件与问答对内容
+        // 评测集集名即源文档显示名：仅前端展示层改名，不影响落盘文件与评测集内容
         doc.name = v;
         toast(`已重命名为「${v}」`);
       }
@@ -615,13 +615,13 @@
     input.addEventListener("blur", commit);
   }
 
-  // 删除问答对集：删除该文档在此系统根下的全部问答对（逐条调后端）
+  // 删除评测集集：删除该文档在此系统根下的全部评测集（逐条调后端）
   async function deleteQaSet(docId, rootKey) {
     const doc = DOCS[docId];
     if (!doc) return;
     const rows = (doc.qa || []).filter(q => q.type === rootKey);
-    if (!rows.length) { toast("该问答对集为空"); return; }
-    if (!confirm(`确认删除「${doc.name}」下的 ${rows.length} 条问答对？该操作不可撤销。`)) return;
+    if (!rows.length) { toast("该评测集集为空"); return; }
+    if (!confirm(`确认删除「${doc.name}」下的 ${rows.length} 条评测集？该操作不可撤销。`)) return;
     try {
       for (const r of rows) {
         if (!r.caseId) continue;
@@ -639,7 +639,7 @@
     doc.qa = (doc.qa || []).filter(q => q.type !== rootKey);
     if (state.sel.qa === docId) state.sel.qa = null;
     renderLib("qa");
-    toast(`已删除「${doc.name}」的 ${rows.length} 条问答对`);
+    toast(`已删除「${doc.name}」的 ${rows.length} 条评测集`);
   }
 
   // 「移动到」弹窗：列出可选目标目录（系统根 + 其下全部文件夹）
@@ -669,7 +669,7 @@
         </label>`).join("") +
       `</div></div>` +
       `<div class="up-modal-foot"><button class="up-confirm">移动到此处</button></div>` +
-      `<div class="up-hint">问答对集将移动到所选目录，目录归属会持久化到后端；拖拽问答对集到左侧目录树同样可以移动。</div>` +
+      `<div class="up-hint">评测集集将移动到所选目录，目录归属会持久化到后端；拖拽评测集集到左侧目录树同样可以移动。</div>` +
       `</div>`;
     document.body.appendChild(mask);
     icons();
@@ -716,7 +716,7 @@
     // 难度分布：简单 / 中等 / 难
     const c = { "简单": 0, "中等": 0, "难": 0 };
     rows.forEach(r => { c[r.diff] = (c[r.diff] || 0) + 1; });
-    // 质量与人工审核：显示完整问答对 + 通过/驳回比例（去掉质量均分）
+    // 质量与人工审核：显示完整评测集 + 通过/驳回比例（去掉质量均分）
     const rr = reviewRatio(rows);
     const review = rows.filter(r => r.review === "待审核");
     return `
@@ -727,20 +727,20 @@
           <div class="stat-row"><span>通过比例</span><b>${rr.total ? Math.round(rr.pass / rr.total * 100) : 0}%</b></div>
           <div class="stat-row"><span>驳回比例</span><b>${rr.total ? Math.round(rr.reject / rr.total * 100) : 0}%</b></div>
           <div class="stat-row"><span>待审核</span><b>${rr.pending}</b></div>
-          <div class="review-list mt"><div class="review-tip">待审核问答对（需人工查看完整内容）</div>${review.length ? review.map(r => `<div class="review-item"><div class="ri-q">${r.q}</div><div class="ri-a">${r.a}</div><div class="ri-actions"><button class="btn ghost sm" data-rv="pass" data-id="${r.id}"><i data-lucide="check"></i>通过</button><button class="btn ghost sm" data-rv="rej" data-id="${r.id}"><i data-lucide="x"></i>驳回</button></div></div>`).join("") : '<div class="muted">无待审核项</div>'}</div>
+          <div class="review-list mt"><div class="review-tip">待审核评测集（需人工查看完整内容）</div>${review.length ? review.map(r => `<div class="review-item"><div class="ri-q">${r.q}</div><div class="ri-a">${r.a}</div><div class="ri-actions"><button class="btn ghost sm" data-rv="pass" data-id="${r.id}"><i data-lucide="check"></i>通过</button><button class="btn ghost sm" data-rv="rej" data-id="${r.id}"><i data-lucide="x"></i>驳回</button></div></div>`).join("") : '<div class="muted">无待审核项</div>'}</div>
         </div>
       </div>
-      <div class="sec-h mt">问答对</div>
+      <div class="sec-h mt">评测集</div>
       <div class="qa-toolbar">
         <div class="qa-add-wrap">
-          <button class="btn primary sm" data-act="qa-add"><i data-lucide="plus"></i>新增问答对</button>
+          <button class="btn primary sm" data-act="qa-add"><i data-lucide="plus"></i>新增评测集</button>
           <div class="qa-add-menu" id="qaAddMenu">
-            <button data-add="single">新增单个问答对</button>
+            <button data-add="single">新增单个评测集</button>
             <button data-add="file">从文件导入（含质量门禁审核）</button>
             <button data-add="tmpl">下载新增模板</button>
           </div>
         </div>
-        <button class="btn ghost sm" id="qaExportBtn"><i data-lucide="download"></i>导出问答对</button>
+        <button class="btn ghost sm" id="qaExportBtn"><i data-lucide="download"></i>导出评测集</button>
         <div class="qa-toolbar-right">
           <div class="qa-search"><i data-lucide="search"></i><input id="qaSearch" type="text" placeholder="搜索问题/答案/证据/来源…" /></div>
           <button class="btn ghost icon-only sm" id="qaFullscreenBtn" title="全屏查看"><i data-lucide="maximize"></i></button>
@@ -767,7 +767,7 @@
     if (state.folderSel.qa) { const ids = descendantDocs(findNode(state.folderSel.qa)); return ids[0]; }
     return state.sel.qa;
   }
-  // 当前 qalib 选中范围内的全部问答对（文档详情或目录聚合）
+  // 当前 qalib 选中范围内的全部评测集（文档详情或目录聚合）
   function currentQaRows() {
     if (state.folderSel.qa) {
       const ids = descendantDocs(findNode(state.folderSel.qa));
@@ -824,14 +824,14 @@
       const del = row.querySelector("[data-act='qa-del']");
       if (del) del.onclick = () => {
         const d = DOCS[findDocOfQa(id)];
-        if (!confirm("删除该问答对？")) return;
+        if (!confirm("删除该评测集？")) return;
         d.qa = d.qa.filter(x => x.id !== id); showLib("qa");
       };
     });
     const exp = $("#qaExportBtn");
     if (exp) exp.onclick = () => {
       const rows = currentQaRows();
-      const name = state.folderSel.qa ? state.folderSel.qa : (state.sel.qa && DOCS[state.sel.qa] ? DOCS[state.sel.qa].name : "问答对集");
+      const name = state.folderSel.qa ? state.folderSel.qa : (state.sel.qa && DOCS[state.sel.qa] ? DOCS[state.sel.qa].name : "评测集集");
       exportQaRows(rows, name);
     };
     // 文本搜索过滤（跨 问题/答案/证据/来源文档）
@@ -848,7 +848,7 @@
     };
     // 全屏放大查看
     const fsBtn = $("#qaFullscreenBtn");
-    if (fsBtn) fsBtn.onclick = () => openQaFullscreen(currentQaRows(), state.sel.qa && DOCS[state.sel.qa] ? DOCS[state.sel.qa].name : (state.folderSel.qa || "问答对集"));
+    if (fsBtn) fsBtn.onclick = () => openQaFullscreen(currentQaRows(), state.sel.qa && DOCS[state.sel.qa] ? DOCS[state.sel.qa].name : (state.folderSel.qa || "评测集集"));
     $$("#qaContent [data-rv]").forEach(b => {
       b.onclick = () => {
         const d = DOCS[findDocOfQa(b.dataset.id)]; const q = d.qa.find(x => x.id === b.dataset.id);
@@ -861,21 +861,21 @@
     enableHScrollDrag($("#qaContent .qa-table"));
   }
 
-  // 全屏放大查看问答对（独立浮层，内容占满浏览器）
+  // 全屏放大查看评测集（独立浮层，内容占满浏览器）
   function openQaFullscreen(rows, name) {
-    if (!rows.length) { toast("当前没有可查看的问答对"); return; }
+    if (!rows.length) { toast("当前没有可查看的评测集"); return; }
     $$(".qa-fullscreen").forEach(e => e.remove());
     const overlay = document.createElement("div");
     overlay.className = "qa-fullscreen";
     overlay.innerHTML = `
       <div class="qaf-bar">
-        <div class="qaf-title">问答对查看 · ${escapeHTML(name)}</div>
+        <div class="qaf-title">评测集查看 · ${escapeHTML(name)}</div>
         <div class="qaf-actions">
           <div class="qa-search"><i data-lucide="search"></i><input id="qafSearch" type="text" placeholder="搜索问题/答案/证据/来源…" /></div>
           <button class="btn ghost icon-only sm" id="qafClose" title="退出全屏"><i data-lucide="minimize"></i></button>
         </div>
       </div>
-      <div class="qaf-body"><div class="lib-head"><div class="lh-ic"><i data-lucide="message-square-text"></i></div><div><div class="lh-title">${escapeHTML(name)}</div><div class="lh-sub">问答对 · ${rows.length} 条</div></div></div>${qaBlockHTML(rows, "qaFsChart")}</div>`;
+      <div class="qaf-body"><div class="lib-head"><div class="lh-ic"><i data-lucide="message-square-text"></i></div><div><div class="lh-title">${escapeHTML(name)}</div><div class="lh-sub">评测集 · ${rows.length} 条</div></div></div>${qaBlockHTML(rows, "qaFsChart")}</div>`;
     document.body.appendChild(overlay);
     document.body.style.overflow = "hidden";
     const cId = "qaFsChart";
@@ -959,7 +959,7 @@
       if (arr) arr.textContent = collapsed ? "▸" : "▾";
     };
   }
-  // 在指定容器内绑定问答对单元格交互（点击显示全文 + 双击编辑），供主视图与全屏共用
+  // 在指定容器内绑定评测集单元格交互（点击显示全文 + 双击编辑），供主视图与全屏共用
   function bindQaCellInteractions(scope) {
     scope.querySelectorAll(".qa-row .qa-cell[data-c]").forEach(cell => {
       cell.addEventListener("click", () => {
@@ -1096,7 +1096,7 @@
     };
   }
 
-  // 知识点表格列筛选（与问答对列筛选机制一致）
+  // 知识点表格列筛选（与评测集列筛选机制一致）
   const kpColFilterLabel = { stmt: "知识点", prio: "推荐", type: "类型", ev: "证据", src: "来源文档" };
   function openKpColFilter(field, anchor) {
     $$(".ctx-popup").forEach(p => p.remove());
@@ -1124,7 +1124,7 @@
       icon.onclick = (e) => { e.stopPropagation(); openKpColFilter(icon.dataset.filter, icon); };
     });
   }
-  // 知识点表格列宽拖拽调整（与主问答对表一致）
+  // 知识点表格列宽拖拽调整（与主评测集表一致）
   function bindKpColResize(table) {
     if (!table) return;
     const defCols = [320, 96, 110, 220, 220];
@@ -1237,13 +1237,13 @@
     if (kpFs) { setupPager($(".kp-fullscreen"), ".kp-fullscreen .kp-tr", 15, "kpFsPager", "kpPage"); }
   }
 
-  // 从文件导入问答对（含质量门禁审核）
+  // 从文件导入评测集（含质量门禁审核）
   function openQaFileImport() {
     const inp = document.createElement("input");
     inp.type = "file"; inp.accept = ".json,.csv,.txt"; inp.multiple = true;
     inp.onchange = () => {
       const docId = currentQaDoc(); const d = DOCS[docId];
-      if (!d) { toast("请先选择目标问答对集"); return; }
+      if (!d) { toast("请先选择目标评测集集"); return; }
       let pending = inp.files.length, allResults = [];
       [...inp.files].forEach(file => {
         const reader = new FileReader();
@@ -1274,7 +1274,7 @@
 
   // 质量门禁审核结果显式展示
   function showGateResult(items) {
-    if (!items.length) { toast("无可审核的问答对"); return; }
+    if (!items.length) { toast("无可审核的评测集"); return; }
     const pass = items.filter(i => i._gate).length;
     const rej = items.length - pass;
     const pop = document.createElement("div");
@@ -1317,11 +1317,11 @@
     const d = DOCS[docId]; if (!d) return;
     exportQaRows(d.qa, d.name);
   }
-  // 导出一组问答对（支持文件夹聚合/整库导出）
-  // 格式：CSV（Excel 友好，列：问题|答案|难度|证据|来源文档，与「新增问答对模板」一致）
+  // 导出一组评测集（支持文件夹聚合/整库导出）
+  // 格式：CSV（Excel 友好，列：问题|答案|难度|证据|来源文档，与「新增评测集模板」一致）
   // 导出的 CSV 可直接再次上传到「输入文档库」→ 走 EIU 抽取（每行一条，问题列即 EIU）→ 再生成/泛化，形成闭环
   function exportQaRows(rows, name) {
-    if (!rows || !rows.length) { toast("当前没有可导出的问答对"); return; }
+    if (!rows || !rows.length) { toast("当前没有可导出的评测集"); return; }
     const head = ["问题", "答案", "难度", "证据", "来源文档"];
     const esc = (v) => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`;
     const lines = [head.map(esc).join(",")];
@@ -1330,22 +1330,22 @@
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url; a.download = (name || "问答对集").replace(/[\\/:*?"<>|]/g, "_") + "_问答对.csv";
+    a.href = url; a.download = (name || "评测集集").replace(/[\\/:*?"<>|]/g, "_") + "_评测集.csv";
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
-    toast(`已导出「${name}」的 ${rows.length} 条问答对（CSV，可直接再上传走 EIU 流程）`);
+    toast(`已导出「${name}」的 ${rows.length} 条评测集（CSV，可直接再上传走 EIU 流程）`);
   }
-  // 新增问答对模板（CSV，列：问题|答案|难度|证据|来源文档）
+  // 新增评测集模板（CSV，列：问题|答案|难度|证据|来源文档）
   function downloadQaTemplate() {
     const header = "问题|答案|难度|证据|来源文档\n";
     const sample = "示例：请在此填写问题？|示例：请在此填写对应答案。|简单|示例：原始文档中的证据语句。|示例文档.pdf（第一篇 / 第1节）\n";
     const blob = new Blob([header + sample], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
-    a.href = url; a.download = "新增问答对模板.csv";
+    a.href = url; a.download = "新增评测集模板.csv";
     document.body.appendChild(a); a.click(); a.remove();
     URL.revokeObjectURL(url);
-    toast("已下载新增问答对模板（CSV），请用「新增单个问答对」旁的「从文件导入」上传");
+    toast("已下载新增评测集模板（CSV），请用「新增单个评测集」旁的「从文件导入」上传");
   }
 
   function kpFolderHTML(node, all) {
@@ -1359,11 +1359,11 @@
   function qaHead(docId) {
     const d = DOCS[docId];
     return `<div class="lib-head"><div class="lh-ic"><i data-lucide="message-square-text"></i></div>
-      <div><div class="lh-title">${d.name}</div><div class="lh-sub">问答对 · ${(d.qa || []).length} 条 · 覆盖知识点 ${(d.kp || []).length} 条</div></div></div>`;
+      <div><div class="lh-title">${d.name}</div><div class="lh-sub">评测集 · ${(d.qa || []).length} 条 · 覆盖知识点 ${(d.kp || []).length} 条</div></div></div>`;
   }
   function qaFolderHead(node, all) {
     return `<div class="lib-head"><div class="lh-ic"><i data-lucide="folder-open"></i></div>
-      <div><div class="lh-title">${node.name}</div><div class="lh-sub">问答对 · ${all.length} 条</div></div></div>`;
+      <div><div class="lh-title">${node.name}</div><div class="lh-sub">评测集 · ${all.length} 条</div></div></div>`;
   }
 
   function renderFolderContent(mode, node) {
@@ -1380,7 +1380,7 @@
     } else {
       const ids = descendantDocs(node); const all = ids.flatMap(i => DOCS[i].qa || []);
       const slug = "agg-" + node.name.replace(/\W/g, "");
-      $("#qaContent").innerHTML = (all.length ? qaFolderHead(node, all) + qaBlockHTML(all, "qaChart-" + slug) : qaFolderHead(node, all) + emptyState("该目录下无问答对", "已执行拒答验证：目录下未生成问答对（不单独成栏）。"));
+      $("#qaContent").innerHTML = (all.length ? qaFolderHead(node, all) + qaBlockHTML(all, "qaChart-" + slug) : qaFolderHead(node, all) + emptyState("该目录下无评测集", "已执行拒答验证：目录下未生成评测集（不单独成栏）。"));
       if (all.length) qaBind("qaChart-" + slug);
     }
     icons();

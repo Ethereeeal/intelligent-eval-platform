@@ -1,16 +1,18 @@
-  /* ---- 问答对生成：选项随来源类型动态渲染 ---- */
+  /* ---- 评测集生成：选项随来源类型动态渲染 ---- */
   const UPLOAD_DIR = "uploadTargetDir"; // sessionKey for picked upload dir
 
   /* ---------------- 五大栏目 ---------------- */
   const NAV = [
     { view: "overview", label: "概览", icon: "layout-dashboard" },
     { view: "doclib", label: "输入文档库", icon: "folder-open" },
-    { view: "studio", label: "问答对生成", icon: "wand-2", badge: { unread: true } },
-    { view: "qalib", label: "输出问答对库", icon: "message-square-text", badge: { unread: true } }
+    { view: "studio", label: "评测集生成", icon: "wand-2", badge: { unread: true } },
+    { view: "qalib", label: "评测集库", icon: "message-square-text", badge: { unread: true } },
+    { view: "evalset", label: "评测集库", icon: "library-books" },
+    { view: "evaluation", label: "评测运行", icon: "gauge" }
   ];
 
-  // 未读计数：表示「刚生成完成、用户尚未点进去查看」的问答对集数量。
-  // 起始为真实数据里有问答对的文档数；点击进入对应栏目后即标为已读（清零）。
+  // 未读计数：表示「刚生成完成、用户尚未点进去查看」的评测集集数量。
+  // 起始为真实数据里有评测集的文档数；点击进入对应栏目后即标为已读（清零）。
   function unreadCount(view) {
     if (view === "studio" || view === "qalib") {
       return Object.keys(DOCS).filter(id => (DOCS[id].qa || []).length > 0).length;
@@ -37,7 +39,9 @@
     if (n && n.badge) { n.badge.unread = false; renderNav(); syncBell(); }
     if (view === "doclib") renderLib("doc");
     if (view === "qalib") renderLib("qa");
-    if (view === "studio") renderSrcList(); // 每次进入「问答对生成」都按最新 TREE 刷新源文件树
+    if (view === "studio") renderSrcList(); // 每次进入「评测集生成」都按最新 TREE 刷新源文件树
+    if (view === "evalset") renderEvalSet();
+    if (view === "evaluation") renderEvaluation();
   }
 
   function syncBell() {
@@ -196,10 +200,10 @@
           // 移动到…：弹出「文档库」目录选择器，选择目标文件夹后移动文档
           showMoveDocModal(docId);
         } else if (b.dataset.act === "ctx-rename-doc") {
-          // 重命名文档：内联改名，仅更新显示名（不影响落盘文件与问答对）
+          // 重命名文档：内联改名，仅更新显示名（不影响落盘文件与评测集）
           renameDocInline(container, mode, docId, name);
         } else if (b.dataset.act === "ctx-delete-doc") {
-          // 删除文档：连带删除知识点（EIU），但保留问答对库中已生成的问题
+          // 删除文档：连带删除知识点（EIU），但保留评测集库中已生成的问题
           await deleteDoc(docId, name);
           renderLib(mode);
         }
@@ -431,7 +435,7 @@
     return (node.children || []).filter(n => !n.doc).map(n => n.name);
   }
 
-  // 内联重命名文档：仅更新显示名 file_name，不影响落盘文件与已生成问答对
+  // 内联重命名文档：仅更新显示名 file_name，不影响落盘文件与已生成评测集
   function renameDocInline(container, mode, docId, oldName) {
     const node = findDocNodeById(docId, TREE.children);
     if (!node) return;
@@ -479,9 +483,9 @@
   }
 
   // 删除文档：两段确认。
-  // 第一段：弹窗展示该文档及其关联的问答对库清单，明确提示删除范围；
+  // 第一段：弹窗展示该文档及其关联的评测集库清单，明确提示删除范围；
   // 第二段：用户点击「确认删除」后，后端 DELETE /api/documents/{id}
-  // 连带删除 document/blocks/eiu（知识点）/generated_case（问答对）/质检结果。
+  // 连带删除 document/blocks/eiu（知识点）/generated_case（评测集）/质检结果。
   // 删除后前端同步：目录树移除节点、DOCS 移除条目、清理选中态。
   function deleteDoc(docId, name) {
     return new Promise(resolve => {
@@ -495,13 +499,13 @@
         `<div class="up-modal-head"><span>删除文档</span>` +
         `<button class="up-close" title="关闭">×</button></div>` +
         `<div class="up-modal-body">` +
-        `<p class="del-confirm-txt">确定要删除文档「<b>${escapeHTML(name)}</b>」吗？<br>以下问答对库与该文档相关也会一并删除：</p>` +
+        `<p class="del-confirm-txt">确定要删除文档「<b>${escapeHTML(name)}</b>」吗？<br>以下评测集库与该文档相关也会一并删除：</p>` +
         (qaList.length
           ? `<div class="del-qa-list">${qaList.map(q => `<div class="del-qa-item"><span class="del-qa-q">${escapeHTML(q.q)}</span><span class="del-qa-meta">${escapeHTML(q.diff)} · ${escapeHTML(q.review)}</span></div>`).join("")}</div>`
-          : `<p class="muted del-none">该文档暂无关联问答对。</p>`) +
+          : `<p class="muted del-none">该文档暂无关联评测集。</p>`) +
         `</div>` +
         `<div class="up-modal-foot"><button class="up-cancel">取消</button><button class="up-confirm up-danger">确认删除</button></div>` +
-        `<div class="up-hint">删除后该文档的知识点（EIU）与问答对库中已生成的问题将一并删除，此操作不可恢复。</div>` +
+        `<div class="up-hint">删除后该文档的知识点（EIU）与评测集库中已生成的问题将一并删除，此操作不可恢复。</div>` +
         `</div>`;
       document.body.appendChild(mask);
       if (window.lucide) window.lucide.createIcons();
@@ -521,17 +525,17 @@
           toast("删除请求失败，请检查后端", "warn");
           mask.remove(); resolve(false); return;
         }
-        // 后端已删除文档 + 知识点 + 问答对 + 质检结果；前端同步移除
+        // 后端已删除文档 + 知识点 + 评测集 + 质检结果；前端同步移除
         removeDocNodeById(docId, TREE.children);
         delete DOCS[docId];
         delete DOC_PURPOSE[docId];
         if (state.sel.doc === docId) state.sel.doc = null;
         if (state.sel.qa === docId) state.sel.qa = null;
         if (state.folderSel.doc === docId) state.folderSel.doc = null;
-        // 「问答对生成」已勾选的文件中若含该文档，一并移除
+        // 「评测集生成」已勾选的文件中若含该文档，一并移除
         if (Array.isArray(state.studioSrc)) state.studioSrc = state.studioSrc.filter(x => x !== docId);
         mask.remove();
-        toast(`已删除文档「${name}」及其 ${qaList.length} 条问答对`);
+        toast(`已删除文档「${name}」及其 ${qaList.length} 条评测集`);
         resolve(true);
       };
     });
