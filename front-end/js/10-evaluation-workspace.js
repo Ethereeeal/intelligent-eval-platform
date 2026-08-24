@@ -17,7 +17,11 @@
   async function config() {
     const compositions = await apiGet("/api/compositions").catch(() => []);
     if (window.__evSelectedCompositionId) { state.compositionId = Number(window.__evSelectedCompositionId); window.__evSelectedCompositionId = null; }
-    shell(`<div class="card card-pad"><div class="card-t">请求体设置</div><div class="ev-call-types" id="evCallTypes"><button class="on" data-adapter="openai_compatible">OpenAI 兼容接口</button><button data-adapter="mock">Mock 演示</button></div><div id="evAdapterFields"></div></div><div class="card card-pad ev-section"><div class="card-t">选择评测集</div><p class="es-gen-hint">仅可选择评测库中的正式评测集版本。单个来源也需先创建为评测库版本，以便追踪与复用。</p><div class="ev-set-actions"><button class="btn ghost" id="evCreateSet"><i data-lucide="combine"></i>创建 / 合并评测集</button></div><div class="ev-compositions">${compositions.length ? compositions.map(c => `<label class="ev-composition ${Number(c.composition_id) === state.compositionId ? "selected" : ""}"><input type="radio" name="evComposition" value="${c.composition_id}" ${Number(c.composition_id) === state.compositionId ? "checked" : ""}/><span><b>${esc(c.name)}</b><small>版本 #${c.composition_id} · ${Array.isArray(c.items) ? c.items.length : 0} 个来源</small></span></label>`).join("") : `<div class="es-gen-hint">暂无评测库版本，请先创建或合并评测集。</div>`}</div></div><div class="ev-run-foot"><button class="btn primary" id="evStart"><i data-lucide="play"></i>发起评测</button></div>`);
+    shell(`<div class="card card-pad"><div class="card-t">请求体设置</div><div class="ev-call-types" id="evCallTypes"><button class="on" data-adapter="openai_compatible">OpenAI 兼容接口</button><button data-adapter="http">通用 HTTP</button><button data-adapter="mock">Mock 演示</button></div>
+      <div id="evAdapterFields"></div></div>
+      <div class="card card-pad ev-section"><div class="card-t">选择评测集</div><p class="es-gen-hint">仅可选择评测库中的正式评测集版本。单个来源也需先创建为评测库版本，以便追踪与复用。</p><div class="ev-set-actions"><button class="btn ghost" id="evCreateSet"><i data-lucide="combine"></i>创建 / 合并评测集</button></div><div class="ev-compositions">${compositions.length ? compositions.map(c => `<label class="ev-composition ${Number(c.composition_id) === state.compositionId ? "selected" : ""}"><input type="radio" name="evComposition" value="${c.composition_id}" ${Number(c.composition_id) === state.compositionId ? "checked" : ""}/><span><b>${esc(c.name)}</b><small>版本 #${c.composition_id} · ${Array.isArray(c.items) ? c.items.length : 0} 个来源</small></span></label>`).join("") : `<div class="es-gen-hint">暂无评测库版本，请先创建或合并评测集。</div>`}</div></div>
+      <div class="ev-run-foot"><label class="es-field">运行名称（可选）</label><input class="es-input" id="evRunName" placeholder="例如：客服智能体 v0.1 回归测试"/><button class="btn primary" id="evStart"><i data-lucide="play"></i>发起评测</button></div>`);
+    // Demo 不提供 Mock 入口；评测集以可展开的“评测库”目录展示。
     document.querySelector('[data-adapter="mock"]').remove();
     const compositionBox = document.querySelector(".ev-compositions");
     const folder = document.createElement("button");
@@ -25,6 +29,8 @@
     folder.innerHTML = `<i data-lucide="chevron-down"></i><i data-lucide="folder-open"></i><b>评测库</b><span>${compositions.length}</span>`;
     compositionBox.parentNode.insertBefore(folder, compositionBox);
     folder.onclick = () => { const closed = compositionBox.classList.toggle("collapsed"); folder.querySelector("svg").setAttribute("data-lucide", closed ? "chevron-right" : "chevron-down"); icons(); };
+    const nameInput = document.getElementById("evRunName");
+    nameInput.previousElementSibling.remove(); nameInput.remove();
     setAdapter("openai_compatible");
     document.querySelectorAll("#evCallTypes button").forEach(b => b.onclick = () => setAdapter(b.dataset.adapter));
     document.querySelectorAll("input[name=evComposition]").forEach(i => i.onchange = () => { state.compositionId = Number(i.value); document.querySelectorAll(".ev-composition").forEach(x => x.classList.toggle("selected", x.querySelector("input").checked)); });
@@ -50,7 +56,10 @@
 
   async function start() {
     if (!state.compositionId) return toast("请先从评测库选择一个评测集");
-    try { const run = await post("/api/evaluation-runs", { composition_id: state.compositionId, name: null, adapter: state.adapter, adapter_config: adapterConfig() }); state.runId = run.run_id; state.tab = "results"; render(); toast("已发起评测运行"); } catch (e) { toast("发起失败：" + e.message); }
+    try {
+      const run = await post("/api/evaluation-runs", { composition_id: state.compositionId, name: null, adapter: state.adapter, adapter_config: adapterConfig() });
+      state.runId = run.run_id; state.tab = "results"; render(); toast("已发起评测运行");
+    } catch (e) { toast("发起失败：" + e.message); }
   }
 
   function metrics(summary, rows) {
