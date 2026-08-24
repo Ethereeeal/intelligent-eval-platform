@@ -745,7 +745,7 @@ ul { list-style: none; }
 .pager button:disabled { opacity: .4; cursor: not-allowed; }
 .pager input { width: 52px; text-align: center; padding: 5px 6px; border-radius: 8px; border: 1px solid rgba(140,124,240,.25); font-size: 12.5px; }
 .pager .pg-info { color: var(--ink-3); }
-.qa-col-head, .qa-row { display: grid; grid-template-columns: var(--qa-cols, 220px 300px 72px 92px 300px 200px 110px 76px); gap: 0; align-items: stretch; width: max-content; min-width: 100%; }
+.qa-col-head, .qa-row { display: grid; grid-template-columns: var(--qa-cols, 220px 300px 72px 92px 300px 200px 76px); gap: 0; align-items: stretch; width: max-content; min-width: 100%; }
 .qa-col-head { border-bottom: 2px solid rgba(140,124,240,.22); position: sticky; top: 0; background: var(--surface); z-index: 2; }
 .qa-col-head .qa-cell { font-size: 11.5px; font-weight: 700; color: var(--ink-2); letter-spacing: .3px; display: flex; align-items: center; gap: 5px; padding: 10px 12px; position: relative; }
 .qa-row { border-bottom: 1px solid rgba(140,124,240,.10); }
@@ -756,8 +756,6 @@ ul { list-style: none; }
 .qa-q-cell span { font-weight: 600; }
 .qa-a-cell span, .qa-ev-cell span { color: var(--ink-2); }
 .qa-src-cell span { font-size: 11.5px; color: var(--ink-3); }
-.qa-type-cell { justify-content: flex-start; }
-.qa-type-cell .qa-badge { font-size: 11px; }
 .qa-cell[data-c] { cursor: cell; }
 .qa-cell[data-c]:hover { background: rgba(140,124,240,.08); box-shadow: inset 0 0 0 1px rgba(140,124,240,.25); }
 .qa-act-cell { justify-content: center; }

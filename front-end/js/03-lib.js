@@ -186,24 +186,17 @@
     }
   }
 
-  // 类型标签：gen=泛化问题 plain=基础问题
-  function typeLabel(t) { return t === "gen" ? "泛化问题" : (t === "plain" ? "基础问题" : t); }
-
   // ============================================================
   // 输出评测集库目录树（后端驱动，真实持久化）
   // ------------------------------------------------------------
   // 结构与「输入文档库」完全同构：
-  //   泛化问题 / 基础问题（两个系统根，不可重命名/删除）
+  //   库文档（单一系统根，不区分泛化 / 基础问题）
   //     └─ 用户文件夹（来自 /api/folders，与输入库共享同一份持久化目录）
   //          └─ 评测集集（按其评测集上后端持久化的 folder_path 归位）
   // 交互也与输入库一致：chevron-down 箭头 + 可折叠（.tree-node/.tree-children.open/.collapsed）
   // ============================================================
 
-  // 系统根定义：key 为前端 qa.type，purpose 为后端持久化字段
-  const QA_ROOTS = [
-    { key: "gen", name: "泛化问题", purpose: "gen" },
-    { key: "plain", name: "基础问题", purpose: "basic" }
-  ];
+  const QA_ROOT = { key: "all", name: "库文档" };
 
   // 折叠态记忆：key = `${rootKey}:${relPath}`，值为 true 表示已折叠。
   // 重渲染（新建/重命名/移动后）时保持用户的展开/折叠状态。
@@ -224,11 +217,11 @@
     return make("root");
   }
 
-  // 某系统根下的评测集集：按 purpose 过滤，返回 { relPath -> [docId] }
-  function qaSetsByPath(rootKey) {
+  // 单一库文档根下的评测集集：不再按历史问题类型分组。
+  function qaSetsByPath() {
     const map = {};
     Object.keys(DOCS).forEach(id => {
-      const rows = (DOCS[id].qa || []).filter(q => q.type === rootKey);
+      const rows = DOCS[id].qa || [];
       if (!rows.length) return;
       const rel = (rows.find(r => r.folderPath) || {}).folderPath || DOCS[id].qaFolderPath || "";
       (map[rel] = map[rel] || []).push(id);
@@ -239,22 +232,19 @@
   function qaTreeHTML() {
     let html = `<div class="tree-h up-title">评测集目录</div>`;
     html += `<div class="lib-hint"><i data-lucide="info"></i><div><b>评测集库</b>：目录与「输入文档库」同构，评测集集随源文档目录自动归位；可新建文件夹、移动、重命名，并支持按目录导出。</div></div>`;
-    QA_ROOTS.forEach(root => {
-      const folders = qaFolderTree();
-      const setsByPath = qaSetsByPath(root.key);
-      const total = Object.values(setsByPath).reduce((s, arr) => s + arr.length, 0);
-      const collapsed = !!window.QA_COLLAPSED[`${root.key}:`];
-      html += `<div class="tree-node">
-        <div class="tree-row${collapsed ? " collapsed" : ""}" data-qa-folder="1" data-qa-root="1" data-root-key="${root.key}" data-path="" data-name="${root.name}">
-          <i data-lucide="folder" class="tw-ic"></i><span class="tw-name">${root.name}</span><span class="tw-count">${total}</span><i data-lucide="chevron-down" class="tw-chev"></i>
-          <button class="tree-dots" data-dot="qa-root" data-root-key="${root.key}" data-path="" data-name="${root.name}" title="更多操作"><i data-lucide="more-horizontal"></i></button>
-        </div>
-        <div class="tree-children${collapsed ? "" : " open"}">
-          ${folders.map(f => qaFolderNodeHTML(f, "", root, setsByPath)).join("")}
-          ${(setsByPath[""] || []).map(id => qaChildRowHTML(id, root, "")).join("")}
-        </div>
-      </div>`;
-    });
+    const folders = qaFolderTree();
+    const setsByPath = qaSetsByPath();
+    const total = Object.values(setsByPath).reduce((s, arr) => s + arr.length, 0);
+    const collapsed = !!window.QA_COLLAPSED[`${QA_ROOT.key}:`];
+    html += `<div class="tree-node">
+      <div class="tree-row${collapsed ? " collapsed" : ""}" data-qa-folder="1" data-qa-root="1" data-root-key="${QA_ROOT.key}" data-path="" data-name="${QA_ROOT.name}">
+        <i data-lucide="folder" class="tw-ic"></i><span class="tw-name">${QA_ROOT.name}</span><span class="tw-count">${total}</span><i data-lucide="chevron-down" class="tw-chev"></i>
+      </div>
+      <div class="tree-children${collapsed ? "" : " open"}">
+        ${folders.map(f => qaFolderNodeHTML(f, "", QA_ROOT, setsByPath)).join("")}
+        ${(setsByPath[""] || []).map(id => qaChildRowHTML(id, QA_ROOT, "")).join("")}
+      </div>
+    </div>`;
     return html;
   }
 
@@ -282,10 +272,10 @@
   // 评测集集叶子节点
   function qaChildRowHTML(id, root, rel) {
     const doc = DOCS[id];
-    const cnt = (doc.qa || []).filter(q => q.type === root.key).length;
+    const cnt = (doc.qa || []).length;
     const active = state.sel.qa === id ? "active" : "";
-    return `<div class="tree-row tree-child ${active}" data-dot="qa" data-id="${id}" data-type="${root.key}" data-root-key="${root.key}" data-path="${rel}" data-qa-id="${id}" data-qa-type="${root.key}" data-name="${doc.name}" draggable="true">
-      <i data-lucide="file-text" class="tw-ic"></i><span class="tw-name">${doc.name}</span><span class="tw-count">${cnt} 条</span><span class="qa-badge ${root.key}">${root.name}</span><button class="tree-dots" data-dot="qa" data-id="${id}" data-type="${root.key}" data-root-key="${root.key}" data-path="${rel}" data-name="${doc.name}" title="更多操作"><i data-lucide="more-horizontal"></i></button>
+    return `<div class="tree-row tree-child ${active}" data-dot="qa" data-id="${id}" data-root-key="${root.key}" data-path="${rel}" data-qa-id="${id}" data-name="${doc.name}" draggable="true">
+      <i data-lucide="file-text" class="tw-ic"></i><span class="tw-name">${doc.name}</span><span class="tw-count">${cnt} 条</span><button class="tree-dots" data-dot="qa" data-id="${id}" data-root-key="${root.key}" data-path="${rel}" data-name="${doc.name}" title="更多操作"><i data-lucide="more-horizontal"></i></button>
     </div>`;
   }
 
@@ -304,8 +294,6 @@
       });
       row.addEventListener("dragover", (e) => {
         e.preventDefault(); e.stopPropagation();
-        const t = e.dataTransfer; const mType = t && t.getData("text/qa-type");
-        if (mType && mType !== row.dataset.rootKey) { e.dataTransfer.dropEffect = "none"; return; }
         row.classList.add("drop-target");
       });
       row.addEventListener("dragleave", (e) => { if (!row.contains(e.relatedTarget)) row.classList.remove("drop-target"); });
@@ -313,10 +301,8 @@
         e.preventDefault(); e.stopPropagation();
         row.classList.remove("drop-target");
         const mId = e.dataTransfer && e.dataTransfer.getData("text/qa-id");
-        const mType = e.dataTransfer && e.dataTransfer.getData("text/qa-type");
         if (!mId) return;
-        if (mType !== row.dataset.rootKey) { toast("仅可移动到相同目的（同为泛化或基础问题）的文件夹"); return; }
-        await moveQaSetToFolder(mId, mType, row.dataset.path || "");
+        await moveQaSetToFolder(mId, row.dataset.path || "");
       });
     });
     // 评测集集节点：选中并展示 + 可拖拽到其他同目的文件夹
@@ -330,7 +316,6 @@
       });
       row.addEventListener("dragstart", (e) => {
         e.dataTransfer.setData("text/qa-id", row.dataset.qaId);
-        e.dataTransfer.setData("text/qa-type", row.dataset.qaType);
         e.dataTransfer.effectAllowed = "move";
       });
     });
@@ -340,17 +325,16 @@
       if (!btn) return;
       e.stopPropagation();
       const dot = btn.dataset.dot;
-      if (dot === "qa-root") showQaRootContextMenu(e, btn);
-      else if (dot === "qa-folder") showQaFolderContextMenu(e, btn);
+      if (dot === "qa-folder") showQaFolderContextMenu(e, btn);
       else showQaContextMenu(e, btn);
     });
   }
 
-  // 将评测集集（= 某文档的全部同类评测集）移动到目标目录：调用后端逐条落库
-  async function moveQaSetToFolder(docId, rootKey, targetRel) {
+  // 将某库文档下的全部评测集移动到目标目录：调用后端逐条落库
+  async function moveQaSetToFolder(docId, targetRel) {
     const doc = DOCS[docId];
     if (!doc) return;
-    const rows = (doc.qa || []).filter(q => q.type === rootKey);
+    const rows = doc.qa || [];
     if (!rows.length) return;
     const cur = (rows.find(r => r.folderPath) || {}).folderPath || doc.qaFolderPath || "";
     if (cur === targetRel) { toast("已在目标目录"); return; }
@@ -377,7 +361,7 @@
     state.sel.qa = docId;
     renderLibContent("qa", docId);
     icons();
-    toast(`已移动「${doc.name}」到「${targetRel || typeLabel(rootKey)}」`);
+    toast(`已移动「${doc.name}」到「${targetRel || QA_ROOT.name}」`);
   }
 
 
@@ -407,18 +391,6 @@
         else if (act === "qa-move") showMoveQaModal(id, rootKey);
         else if (act === "qa-rename") renameQaSetInline(btn.closest(".tree-row"), id, rootKey);
         else if (act === "qa-delete") await deleteQaSet(id, rootKey);
-      };
-    });
-  }
-
-  // 系统根（泛化问题 / 基础问题）三点菜单：仅「新建文件夹」
-  function showQaRootContextMenu(e, btn) {
-    const rootKey = btn.dataset.rootKey;
-    const pop = qaPopup(btn, `<button data-act="qa-newfolder">新建文件夹</button>`);
-    pop.querySelectorAll("button").forEach(b => {
-      b.onclick = async () => {
-        pop.remove();
-        if (b.dataset.act === "qa-newfolder") await createQaFolder("", rootKey);
       };
     });
   }
@@ -577,14 +549,13 @@
 
   // 按目录导出（带目录结构）：直接下载后端生成的 JSON
   function exportQaFolder(rel, rootKey, name) {
-    const purpose = rootKey === "gen" ? "gen" : "basic";
-    const qs = new URLSearchParams({ recursive: "true", purpose });
+    const qs = new URLSearchParams({ recursive: "true" });
     if (rel) qs.set("folder_path", rel);
     const url = API_BASE + `/api/cases/export-folder?` + qs.toString();
     const a = document.createElement("a");
     a.href = url; a.download = "";
     document.body.appendChild(a); a.click(); a.remove();
-    toast(`正在导出「${name || typeLabel(rootKey)}」目录下的评测集（含目录结构）`);
+    toast(`正在导出「${name || QA_ROOT.name}」目录下的评测集（含目录结构）`);
   }
 
   // 重命名评测集集：改其下每条评测集的问题标题不合适，这里改「集名」= 源文档显示名
@@ -615,11 +586,11 @@
     input.addEventListener("blur", commit);
   }
 
-  // 删除评测集集：删除该文档在此系统根下的全部评测集（逐条调后端）
+  // 删除评测集集：删除该库文档下的全部评测集（逐条调后端）
   async function deleteQaSet(docId, rootKey) {
     const doc = DOCS[docId];
     if (!doc) return;
-    const rows = (doc.qa || []).filter(q => q.type === rootKey);
+    const rows = doc.qa || [];
     if (!rows.length) { toast("该评测集集为空"); return; }
     if (!confirm(`确认删除「${doc.name}」下的 ${rows.length} 条评测集？该操作不可撤销。`)) return;
     try {
@@ -636,7 +607,7 @@
       toast("删除请求失败，请检查后端", "warn");
       return;
     }
-    doc.qa = (doc.qa || []).filter(q => q.type !== rootKey);
+    doc.qa = [];
     if (state.sel.qa === docId) state.sel.qa = null;
     renderLib("qa");
     toast(`已删除「${doc.name}」的 ${rows.length} 条评测集`);
@@ -646,7 +617,7 @@
   function showMoveQaModal(docId, rootKey) {
     const doc = DOCS[docId];
     if (!doc) return;
-    const root = QA_ROOTS.find(r => r.key === rootKey) || QA_ROOTS[1];
+    const root = QA_ROOT;
     // 扁平化全部目录路径
     const paths = [];
     (function walk(nodes, prefix) {
@@ -656,7 +627,7 @@
         if (n.children && n.children.length) walk(n.children, rel);
       });
     })(qaFolderTree(), "");
-    const cur = (doc.qa.find(q => q.type === rootKey && q.folderPath) || {}).folderPath || doc.qaFolderPath || "";
+    const cur = (doc.qa.find(q => q.folderPath) || {}).folderPath || doc.qaFolderPath || "";
     const opts = [{ rel: "", label: root.name }].concat(paths.map(p => ({ rel: p, label: root.name + "/" + p })));
     const mask = document.createElement("div");
     mask.className = "up-modal-mask";
@@ -680,7 +651,7 @@
       const picked = mask.querySelector('input[name="mvQa"]:checked');
       const target = picked ? picked.value : "";
       close();
-      await moveQaSetToFolder(docId, rootKey, target);
+      await moveQaSetToFolder(docId, target);
     };
   }
   function reviewBadge(r) {
@@ -698,7 +669,7 @@
     return r;
   }
   function qaRowHTML(q) {
-    // 仿 Excel：问题/答案分列，证据为原文语句，来源文档用 / 分级显示，类型标识 基础问题 / 泛化问题
+    // 仿 Excel：问题/答案分列，证据为原文语句，来源文档用 / 分级显示。
     return `<div class="qa-row" data-id="${q.id}">
       <div class=" qa-cell qa-q-cell" data-c="q"><span title="${escapeHTML(q.q)}">${escapeHTML(q.q)}</span></div>
       <div class="qa-cell qa-a-cell" data-c="a"><span title="${escapeHTML(q.a)}">${escapeHTML(q.a)}</span></div>
@@ -706,7 +677,6 @@
       <div class="qa-cell qa-review-cell" data-c="review">${reviewBadge(q)}</div>
       <div class="qa-cell qa-ev-cell" data-c="evidence"><span title="${escapeHTML(q.evidence || "（无）")}">${escapeHTML(q.evidence || "（无）")}</span></div>
       <div class="qa-cell qa-src-cell" data-c="src"><span title="${escapeHTML(q.src || "（无）")}">${escapeHTML(q.src || "（无）")}</span></div>
-      <div class="qa-cell qa-type-cell"><span class="qa-badge ${q.type}">${typeLabel(q.type)}</span></div>
       <span class="ds-actions">
         <button class="btn ghost sm" data-act="qa-del" title="删除"><i data-lucide="trash-2"></i></button>
       </span>
@@ -755,7 +725,6 @@
             <div class="qa-cell qa-review-cell">审核<span class="col-filter" data-filter="review"><i data-lucide="filter"></i></span><span class="qa-resize" data-resize="3"></span></div>
             <div class="qa-cell qa-ev-cell">证据<span class="col-filter" data-filter="evidence"><i data-lucide="filter"></i></span><span class="qa-resize" data-resize="4"></span></div>
             <div class="qa-cell qa-src-cell">来源文档<span class="col-filter" data-filter="src"><i data-lucide="filter"></i></span><span class="qa-resize" data-resize="5"></span></div>
-            <div class="qa-cell qa-type-cell">类型<span class="col-filter" data-filter="type"><i data-lucide="filter"></i></span><span class="qa-resize" data-resize="6"></span></div>
             <div class="qa-cell qa-act-cell">操作</div>
           </div>
           <div id="qaRows">${rows.map(qaRowHTML).join("")}</div>
@@ -972,7 +941,7 @@
   // 在指定表格内绑定列宽拖拽
   function bindQaColResizeIn(table) {
     if (!table) return;
-    const defCols = [220, 300, 72, 92, 300, 200, 110, 76];
+    const defCols = [220, 300, 72, 92, 300, 200, 76];
     const cur = () => {
       const v = getComputedStyle(table).getPropertyValue("--qa-cols");
       if (v && v.trim()) return v.trim().split(/\s+/).map(s => parseFloat(s));
@@ -1038,8 +1007,7 @@
   // 列宽拖拽调整
   function bindQaColResize() {
     const table = $("#qaTable"); if (!table) return;
-    const colCount = 8;
-    const defCols = [220, 300, 72, 92, 300, 200, 110, 76];
+    const defCols = [220, 300, 72, 92, 300, 200, 76];
     const cur = () => {
       const v = getComputedStyle(table).getPropertyValue("--qa-cols");
       if (v && v.trim()) return v.trim().split(/\s+/).map(s => parseFloat(s));
@@ -1071,7 +1039,7 @@
   }
 
   // 列筛选弹层
-  const colFilterLabel = { q: "问题", a: "答案", diff: "难度", review: "审核", evidence: "证据", src: "来源文档", type: "类型" };
+  const colFilterLabel = { q: "问题", a: "答案", diff: "难度", review: "审核", evidence: "证据", src: "来源文档" };
   function openColFilter(field, anchor) {
     $$(".ctx-popup").forEach(p => p.remove());
     const docId = currentQaDoc(); const d = DOCS[docId]; if (!d) return;
@@ -1082,7 +1050,7 @@
     document.body.appendChild(pop);
     placePopup(pop, anchor || { getBoundingClientRect: () => ({ bottom: 200, left: 200, right: 200, top: 200, width: 0, height: 0 }) }, 6, 8);
     bindPopupLifecycle(pop, anchor, 6, 8);
-    const cellClass = { q: "qa-q-cell", a: "qa-a-cell", diff: "qa-diff-cell", review: "qa-review-cell", evidence: "qa-ev-cell", src: "qa-src-cell", type: "qa-type-cell" };
+    const cellClass = { q: "qa-q-cell", a: "qa-a-cell", diff: "qa-diff-cell", review: "qa-review-cell", evidence: "qa-ev-cell", src: "qa-src-cell" };
     pop.querySelector(".cf-apply").onclick = () => {
       const keep = new Set([...pop.querySelectorAll("input[data-v]:checked")].map(x => x.dataset.v));
       const cls = cellClass[field] || `qa-${field}-cell`;
@@ -1390,4 +1358,3 @@
     if (state.folderSel[mode]) renderFolderContent(mode, findNode(state.folderSel[mode]));
     else renderLibContent(mode, state.sel[mode]);
   }
-

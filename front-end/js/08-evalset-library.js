@@ -58,9 +58,9 @@ async function renderEvalSetLibrary() {
   if (show) show.hidden = false;
   $$("#esSubNav .tree-row").forEach(row => row.classList.toggle("active", row.dataset.sub === "show"));
 
-  // 进入「评测集展示」时按选中视图加载
+  // 进入「评测集展示」时按左侧下拉目录选中库加载
   const view = window.__esView || "generate";
-  $$("#esViewSeg .seg button").forEach(b => b.classList.toggle("on", b.dataset.es === view));
+  $$("#esSubNav .tree-row[data-es]").forEach(row => row.classList.toggle("active", row.dataset.es === view));
   $("#esGenerate").hidden = view !== "generate";
   $("#esUploaded").hidden = view !== "uploaded";
   $("#esPublic").hidden = view !== "public";
@@ -266,6 +266,13 @@ function esPickForEval(kind, id) {
 
 // 事件绑定（在 07-init 统一委托，这里仅声明处理函数）
 document.addEventListener("click", e => {
+  const libraryRow = e.target.closest("#esSubNav .tree-row[data-es]");
+  if (libraryRow) {
+    window.__esSub = "show";
+    window.__esView = libraryRow.dataset.es;
+    renderEvalSetLibrary();
+    return;
+  }
   const subRow = e.target.closest("#esSubNav .tree-row");
   if (subRow) {
     window.__esSub = subRow.dataset.sub;
@@ -275,8 +282,6 @@ document.addEventListener("click", e => {
   }
   const genBtn = e.target.closest("#esGenBtn");
   if (genBtn) { window.__esSub = "gen"; renderEvalSetGenerate(); return; }
-  const seg = e.target.closest("#esViewSeg .seg button");
-  if (seg) { window.__esView = seg.dataset.es; renderEvalSetLibrary(); return; }
   const pick = e.target.closest(".es-pick");
   if (pick) { esPickForEval(pick.dataset.kind, pick.dataset.id); return; }
   if (e.target.closest("#esUploadBtn")) { $("#esUploadInput").click(); return; }
