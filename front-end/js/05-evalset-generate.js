@@ -1,4 +1,14 @@
   /* ---------------- 评测集生成（选择文件类型 / 配置 / 监控） ---------------- */
+  function renderEvalSetGenerate() {
+    const gen = $("#esMain [data-sub='gen']");
+    const show = $("#esMain [data-sub='show']");
+    if (gen) gen.hidden = false;
+    if (show) show.hidden = true;
+    $$("#esSubNav .tree-row").forEach(row => row.classList.toggle("active", row.dataset.sub === "gen"));
+    renderSrcList();
+    icons();
+  }
+
   function renderSrcList() {
     renderSrcTree();
   }
@@ -206,4 +216,3 @@
       const ko = $("#optKeepOrig"); if (ko) ko.onchange = () => { o.keepOriginal = ko.checked; };
     }
   }
-

@@ -47,21 +47,16 @@ function esSetRow(set, kind) {
   </div>`;
 }
 
-async function renderEvalSet() {
+async function renderEvalSetLibrary() {
   if (window.__evalSetReturn === "evaluation") {
     await esCreateComposition();
     return;
   }
-  // 合并页：左侧目录切换「评测集生成 / 评测集展示」
-  const sub = window.__esSub || "gen";
-  $$("#esSubNav .tree-row").forEach(r => r.classList.toggle("active", r.dataset.sub === sub));
   const gen = $("#esMain [data-sub='gen']");
   const show = $("#esMain [data-sub='show']");
-  if (gen) gen.hidden = sub !== "gen";
-  if (show) show.hidden = sub !== "show";
-
-  // 进入「评测集生成」时刷新源文件树（按最新 TREE）
-  if (sub === "gen") { await renderSrcList(); return; }
+  if (gen) gen.hidden = true;
+  if (show) show.hidden = false;
+  $$("#esSubNav .tree-row").forEach(row => row.classList.toggle("active", row.dataset.sub === "show"));
 
   // 进入「评测集展示」时按选中视图加载
   const view = window.__esView || "generate";
@@ -272,11 +267,16 @@ function esPickForEval(kind, id) {
 // 事件绑定（在 07-init 统一委托，这里仅声明处理函数）
 document.addEventListener("click", e => {
   const subRow = e.target.closest("#esSubNav .tree-row");
-  if (subRow) { window.__esSub = subRow.dataset.sub; renderEvalSet(); return; }
+  if (subRow) {
+    window.__esSub = subRow.dataset.sub;
+    if (window.__esSub === "gen") renderEvalSetGenerate();
+    else renderEvalSetLibrary();
+    return;
+  }
   const genBtn = e.target.closest("#esGenBtn");
-  if (genBtn) { window.__esSub = "gen"; renderEvalSet(); return; }
+  if (genBtn) { window.__esSub = "gen"; renderEvalSetGenerate(); return; }
   const seg = e.target.closest("#esViewSeg .seg button");
-  if (seg) { window.__esView = seg.dataset.es; renderEvalSet(); return; }
+  if (seg) { window.__esView = seg.dataset.es; renderEvalSetLibrary(); return; }
   const pick = e.target.closest(".es-pick");
   if (pick) { esPickForEval(pick.dataset.kind, pick.dataset.id); return; }
   if (e.target.closest("#esUploadBtn")) { $("#esUploadInput").click(); return; }

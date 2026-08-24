@@ -90,10 +90,10 @@
           </div>
         </section>
 
-        <!-- ============ 评测集（合并页：评测集生成 / 评测集展示[生成库·上传库·公共库·按文档问答库·输入文档库]） ============ -->
+        <!-- ============ 评测集库（页面内分为生成与展示） ============ -->
         <section class="view" data-view="evalset" hidden>
           <div class="page-head">
-            <div><h1>评测集</h1><p class="sub">评测集生成与统一管理（生成库 / 上传库 / 公共库 / 按文档问答库）</p></div>
+            <div><h1>评测集库</h1><p class="sub">评测集生成与展示管理（生成库 / 上传库 / 公共库 / 输入文档库）</p></div>
             <div class="page-actions">
               <button class="btn primary" id="esGenBtn"><i data-lucide="plus"></i>生成评测集</button>
               <button class="btn ghost" id="esUploadBtn"><i data-lucide="upload"></i>上传评测集</button>
@@ -274,13 +274,13 @@
   <!-- 应用脚本（按依赖顺序分文件加载，等价于原单文件 app.js，去掉 IIFE 包裹，统一为全局作用域） -->
   <script src="js/00-head.js?v=9"></script>
   <script src="js/01-data.js?v=9"></script>
-  <script src="js/02-nav.js?v=11"></script>
+  <script src="js/02-nav.js?v=13"></script>
   <script src="js/03-lib.js?v=9"></script>
   <script src="js/04-upload.js?v=9"></script>
-  <script src="js/05-studio.js?v=9"></script>
+  <script src="js/05-evalset-generate.js?v=1"></script>
   <script src="js/06-chat.js?v=9"></script>
   <script src="js/07-init.js?v=9"></script>
-  <script src="js/08-evalset.js?v=11"></script>
+  <script src="js/08-evalset-library.js?v=1"></script>
   <script src="js/09-evaluation.js?v=9"></script>
   <script src="js/10-evaluation-workspace.js?v=3"></script>
   <script>if (window.lucide) lucide.createIcons();</script>

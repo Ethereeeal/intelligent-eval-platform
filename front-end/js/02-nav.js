@@ -4,7 +4,7 @@
   /* ---------------- 栏目 ---------------- */
   const NAV = [
     { view: "overview", label: "概览", icon: "layout-dashboard" },
-    { view: "evalset", label: "评测集", icon: "layers", badge: { unread: true } },
+    { view: "evalset", label: "评测集库", icon: "library-books", badge: { unread: true } },
     { view: "evaluation", label: "评测运行", icon: "gauge" }
   ];
 
@@ -34,7 +34,10 @@
     $$("#nav .nav-item").forEach(el => el.classList.toggle("active", el.dataset.view === view));
     // 提醒点：点击即已读（变白）
     if (n && n.badge) { n.badge.unread = false; renderNav(); syncBell(); }
-    if (view === "evalset") renderEvalSet(); // 评测集页：默认进入「评测集生成」子视图；含输入文档库/生成库/上传库/公共库/自定义库
+    if (view === "evalset") {
+      if ((window.__esSub || "gen") === "gen") renderEvalSetGenerate();
+      else renderEvalSetLibrary();
+    }
     if (view === "evaluation") window.renderEvaluation();
   }
 
