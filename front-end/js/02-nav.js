@@ -41,7 +41,7 @@
     if (view === "qalib") renderLib("qa");
     if (view === "studio") renderSrcList(); // 每次进入「评测集生成」都按最新 TREE 刷新源文件树
     if (view === "evalset") renderEvalSet();
-    if (view === "evaluation") renderEvaluation();
+    if (view === "evaluation") window.renderEvaluation();
   }
 
   function syncBell() {

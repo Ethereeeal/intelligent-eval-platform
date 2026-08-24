@@ -11,7 +11,11 @@ retrieved 为 None 表示待测系统未返回检索轨迹 → 运行报告标�
 """
 from __future__ import annotations
 
+import json
 import time
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 
 from modules.shared.core.config import settings
 
@@ -207,9 +211,77 @@ class OpenAiCompatibleAdapter(BaseAdapter):
             }
 
 
+class HttpAdapter(BaseAdapter):
+    """通用 HTTP 问答适配器：以 {{question}} 注入请求体并从 JSON 响应提取答案。"""
+
+    name = "http"
+
+    def __init__(self, config: dict | None = None) -> None:
+        cfg = config or {}
+        self.url = str(cfg.get("url") or "").strip()
+        self.method = str(cfg.get("method") or "POST").upper()
+        self.headers = cfg.get("headers") or {}
+        self.body_template = cfg.get("body_template") or '{"question":"{{question}}"}'
+        self.answer_path = str(cfg.get("answer_path") or "answer").strip()
+        self.timeout = min(max(int(cfg.get("timeout_seconds") or 60), 1), 120)
+        if not self.url.startswith(("http://", "https://")):
+            raise AdapterError("通用 HTTP 请求地址必须以 http:// 或 https:// 开头")
+        if self.method not in {"GET", "POST", "PUT", "PATCH", "DELETE"}:
+            raise AdapterError("不支持的 HTTP 请求方法")
+        if not isinstance(self.headers, dict):
+            raise AdapterError("请求头必须为键值对象")
+
+    @staticmethod
+    def _resolve_path(payload: object, path: str) -> str:
+        value = payload
+        for key in path.removeprefix("$").strip(".").split("."):
+            if key:
+                if not isinstance(value, dict) or key not in value:
+                    raise AdapterError(f"响应中未找到回答字段：{path}")
+                value = value[key]
+        return json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else str(value or "")
+
+    def _call(self, question: str) -> dict:
+        headers = {str(k): str(v) for k, v in self.headers.items() if str(k).strip()}
+        url, data = self.url, None
+        if self.method == "GET":
+            url += ("&" if "?" in url else "?") + "question=" + quote(question)
+        else:
+            data = str(self.body_template).replace("{{question}}", question).encode("utf-8")
+            headers.setdefault("Content-Type", "application/json")
+        started = time.time()
+        try:
+            with urlopen(Request(url, data=data, headers=headers, method=self.method), timeout=self.timeout) as response:  # nosec B310: configured integration endpoint
+                payload = json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            raise AdapterError(f"目标接口返回 HTTP {exc.code}") from exc
+        except (URLError, TimeoutError, json.JSONDecodeError) as exc:
+            raise AdapterError(f"目标接口调用失败：{exc}") from exc
+        return {"answer": self._resolve_path(payload, self.answer_path), "turn_outputs": None, "retrieved": None,
+                "context": None, "usage": {"time_ms": int((time.time() - started) * 1000), "tokens": 0, "cost": 0.0}, "error": None}
+
+    def run_single(self, question: str, *, gold_answer: str | None = None, extra: dict | None = None) -> dict:
+        try:
+            return self._call(question)
+        except AdapterError as exc:
+            return {"answer": None, "turn_outputs": None, "retrieved": None, "context": None,
+                    "usage": {"time_ms": 0, "tokens": 0, "cost": 0.0}, "error": str(exc)}
+
+    def run_multi(self, turns: list[dict], *, gold_answer: str | None = None, extra: dict | None = None) -> dict:
+        outputs = []
+        for turn in turns:
+            result = self.run_single(str((turn or {}).get("q") or ""))
+            if result.get("error"):
+                return result
+            outputs.append(result["answer"])
+        return {"answer": outputs[-1] if outputs else "", "turn_outputs": outputs, "retrieved": None,
+                "context": None, "usage": {"time_ms": 0, "tokens": 0, "cost": 0.0}, "error": None}
+
+
 ADAPTER_REGISTRY: dict[str, type[BaseAdapter]] = {
     "mock": MockAdapter,
     "openai_compatible": OpenAiCompatibleAdapter,
+    "http": HttpAdapter,
 }
 
 

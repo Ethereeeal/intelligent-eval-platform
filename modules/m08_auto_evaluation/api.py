@@ -37,6 +37,9 @@ def _sanitize_adapter_config(config: dict | None) -> dict | None:
         return config
     sanitized = dict(config)
     sanitized.pop("api_key", None)
+    # 通用 HTTP 模式的 Header 常携带 Token；运行记录只保留字段名，绝不落库其值。
+    if isinstance(sanitized.get("headers"), dict):
+        sanitized["headers"] = {key: "***" for key in sanitized["headers"]}
     return sanitized
 
 

@@ -50,10 +50,12 @@ async function renderEvalSet() {
   $("#esGenerate").hidden = view !== "generate";
   $("#esUploaded").hidden = view !== "uploaded";
   $("#esPublic").hidden = view !== "public";
+  $("#esEvaluation").hidden = view !== "evaluation";
 
   if (view === "generate") await esLoadGenerate();
   if (view === "uploaded") await esLoadUploaded();
   if (view === "public") await esLoadPublic();
+  if (view === "evaluation") await esLoadEvaluationLibrary();
   icons();
 }
 
@@ -113,6 +115,26 @@ async function esLoadPublic() {
   }
 }
 
+async function esLoadEvaluationLibrary() {
+  const box = $("#esCompositionList");
+  box.innerHTML = `<div class="es-gen-hint">加载中…</div>`;
+  const items = await apiGet(`/api/compositions`).catch(() => []);
+  box.innerHTML = items.length ? items.map(c => `<div class="list-row"><span class="st" style="--c:#8C7CF0"></span><div class="lr-tx"><div class="lr-q">${c.name}</div><div class="lr-m">评测库版本 #${c.composition_id} · ${Array.isArray(c.items) ? c.items.length : 0} 个来源</div></div><button class="btn ghost es-use-composition" data-id="${c.composition_id}">用于评测</button></div>`).join("") : `<div class="es-gen-hint">暂无正式评测集版本。请创建或合并来源评测集。</div>`;
+}
+
+async function esCreateComposition() {
+  const [versions, publicSets, uploadedSets] = await Promise.all([apiGet(`/api/versions`).catch(() => []), apiGet(`/api/public-sets`).catch(() => []), apiGet(`/api/eval-sets/uploaded`).catch(() => [])]);
+  const source = [
+    ...(versions || []).filter(v => v.status === "frozen").map(v => ({ value: `doc:${v.version_id}`, name: `生成库：${v.name || ("版本 #" + v.version_id)}` })),
+    ...(publicSets || []).map(s => ({ value: `public:${s.set_id}`, name: `公共库：${s.name || ("#" + s.set_id)}` })),
+    ...(uploadedSets || []).map(s => ({ value: `uploaded:${s.set_id}`, name: `上传库：${s.name || ("#" + s.set_id)}` })),
+  ];
+  const mask = document.createElement("div"); mask.className = "modal-mask";
+  mask.innerHTML = `<div class="modal modal-wide"><div class="modal-head"><span>创建评测库版本</span><button class="modal-x">×</button></div><div class="modal-body"><label class="es-field">版本名称</label><input class="es-input" id="esCompName" placeholder="例如：客服智能体回归集 v1"/><label class="es-field">选择来源（可多选合并）</label><div class="ev-src-list">${source.map(s => `<label class="ev-src-item"><input type="checkbox" value="${s.value}"/> ${s.name}</label>`).join("") || "暂无可用来源"}</div></div><div class="modal-foot"><button class="btn ghost modal-cancel">取消</button><button class="btn primary" id="esCompSave">保存为评测库版本</button></div></div>`;
+  document.body.appendChild(mask); const close = () => mask.remove(); mask.querySelector(".modal-x").onclick = close; mask.querySelector(".modal-cancel").onclick = close;
+  mask.querySelector("#esCompSave").onclick = async () => { const name = mask.querySelector("#esCompName").value.trim(); const picked = [...mask.querySelectorAll("input:checked")].map(x => x.value); if (!name || !picked.length) return toast("请填写名称并至少选择一个来源"); const items = picked.map(v => { const [kind, id] = v.split(":"); return kind === "doc" ? { source: "doc_generated", version_id: Number(id) } : { source: kind, set_id: Number(id) }; }); try { const result = await apiPostES(`/api/compositions`, { name, items, created_by: "web" }); close(); if (window.__evalSetReturn === "evaluation") { window.__evalSetReturn = null; window.__evSelectedCompositionId = result.composition_id; goto("evaluation"); } else esLoadEvaluationLibrary(); } catch (e) { toast("创建失败：" + e.message); } };
+}
+
 // 上传评测集
 async function esHandleUpload(files) {
   for (const f of files) {
@@ -166,6 +188,9 @@ document.addEventListener("click", e => {
   const pick = e.target.closest(".es-pick");
   if (pick) { esPickForEval(pick.dataset.kind, pick.dataset.id); return; }
   if (e.target.closest("#esUploadBtn")) { $("#esUploadInput").click(); return; }
+  if (e.target.closest("#esComposeBtn")) { esCreateComposition(); return; }
+  const composition = e.target.closest(".es-use-composition");
+  if (composition) { if (window.__evalSetReturn === "evaluation") { window.__evalSetReturn = null; window.__evSelectedCompositionId = Number(composition.dataset.id); goto("evaluation"); } else { window.__evSelectedCompositionId = Number(composition.dataset.id); goto("evaluation"); } return; }
 });
 document.addEventListener("change", e => {
   if (e.target.id === "esUploadInput" && e.target.files.length) {

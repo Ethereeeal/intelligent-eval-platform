@@ -1,24 +1,25 @@
 <!-- gitnexus:start -->
 # GitNexus — Code Intelligence
 
-This project is indexed by GitNexus as **intelligent-eval-platform** (3480 symbols, 6327 relationships, 252 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+This project is indexed by GitNexus as **intelligent-eval-platform** (3226 symbols, 6987 relationships, 282 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
 
-> If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
+> Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 
 ## Always Do
 
-- **MUST run impact analysis before editing any symbol.** Before modifying a function, class, or method, run `gitnexus_impact({target: "symbolName", direction: "upstream"})` and report the blast radius (direct callers, affected processes, risk level) to the user.
-- **MUST run `gitnexus_detect_changes()` before committing** to verify your changes only affect expected symbols and execution flows.
+- **MUST run impact analysis before editing any symbol.** Before modifying a function, class, or method, run `impact({target: "symbolName", direction: "upstream"})` and report the blast radius (direct callers, affected processes, risk level) to the user.
+- **MUST run `detect_changes()` before committing** to verify your changes only affect expected symbols and execution flows. For regression review, compare against the default branch: `detect_changes({scope: "compare", base_ref: "main"})`.
 - **MUST warn the user** if impact analysis returns HIGH or CRITICAL risk before proceeding with edits.
-- When exploring unfamiliar code, use `gitnexus_query({query: "concept"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
-- When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use `gitnexus_context({name: "symbolName"})`.
+- When exploring unfamiliar code, use `query({search_query: "concept"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
+- When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use `context({name: "symbolName"})`.
+- For security review, `explain({target: "fileOrSymbol"})` lists taint findings (source→sink flows; needs `analyze --pdg`).
 
 ## Never Do
 
-- NEVER edit a function, class, or method without first running `gitnexus_impact` on it.
+- NEVER edit a function, class, or method without first running `impact` on it.
 - NEVER ignore HIGH or CRITICAL risk warnings from impact analysis.
-- NEVER rename symbols with find-and-replace — use `gitnexus_rename` which understands the call graph.
-- NEVER commit changes without running `gitnexus_detect_changes()` to check affected scope.
+- NEVER rename symbols with find-and-replace — use `rename` which understands the call graph.
+- NEVER commit changes without running `detect_changes()` to check affected scope.
 
 ## Resources
 
@@ -65,3 +66,13 @@ This project is indexed by GitNexus as **intelligent-eval-platform** (3480 symbo
 - 删除或归档条目必须注明去向，不允许无痕删除；
 - 状态更新与代码改动一起提交，保持文档与实现同步。
 <!-- review:end -->
+
+<!-- frontend-design:start -->
+## 前端体验与设计协作规范
+
+- 前端需求说明的是业务目标与关键结构，不是页面设计的全部；实现前必须主动推演信息层级、状态、交互路径、异常/空数据反馈与可扩展性。
+- 新页面或重构页面必须复用当前平台的视觉语言（导航、目录树、指标卡、表格、间距、颜色与反馈方式），不得以无层级的白色卡片堆叠替代已有设计体系。
+- 涉及工作台、管理页或数据报告时，先按用户任务流组织页面：先呈现决策所需的摘要，再提供可定位、筛选、展开和追溯的明细。
+- 在实施包含非显然设计判断的前端改动前，先向用户说明设计方案、关键取舍与待确认点；用户负责业务目标，助手负责补全展示逻辑、样式与交互细节。
+- 详细规则维护于 `docs/frontend-design-guidelines.md`；新增或调整前端页面时必须遵循并在交付时说明设计复核结论。
+<!-- frontend-design:end -->

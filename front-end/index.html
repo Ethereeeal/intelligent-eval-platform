@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
   <script src="lucide.min.js"></script>
-  <link rel="stylesheet" href="styles.css?v=10" />
+  <link rel="stylesheet" href="styles.css?v=11" />
   <script src="chart.umd.min.js"></script>
 </head>
 <body>
@@ -159,6 +159,7 @@
               <button class="on" data-es="generate">生成集</button>
               <button data-es="uploaded">上传集</button>
               <button data-es="public">公共库</button>
+              <button data-es="evaluation">评测库</button>
             </div>
           </div>
 
@@ -190,28 +191,18 @@
               </div>
             </div>
           </div>
+          <div id="esEvaluation" class="es-pane" hidden>
+            <div class="card card-pad"><div class="card-t">评测库（正式版本）<button class="btn primary sm" id="esComposeBtn" style="float:right"><i data-lucide="combine"></i>创建 / 合并</button></div><div class="es-gen-hint">选择公共库、上传库或生成库来源，保存为可追踪、可复用的评测集版本。</div><div id="esCompositionList" class="es-list"></div></div>
+          </div>
         </section>
 
         <!-- ============ 评测运行（m08：来源选择 / 发起 / 进度 / 结果） ============ -->
         <section class="view" data-view="evaluation" hidden>
           <div class="page-head">
-            <div><h1>评测运行</h1><p class="sub">基于生成库 / 公共库 / 上传库发起智能体批量评测</p></div>
-            <div class="page-actions"><button class="btn primary" id="evNewBtn"><i data-lucide="play"></i>发起评测</button></div>
+            <div><h1>评测运行</h1><p class="sub">配置目标智能体、选择评测库版本并查看评测报告</p></div>
           </div>
 
-          <div id="evRuns" class="ev-pane">
-            <div class="card card-pad">
-              <div class="card-t">评测运行记录</div>
-              <div id="evRunList" class="es-list"></div>
-            </div>
-          </div>
-
-          <div id="evDetail" class="ev-pane" hidden>
-            <div class="card card-pad">
-              <div class="card-t">运行进度与分层指标<button class="btn ghost sm ev-back-btn" style="float:right">返回运行列表</button></div>
-              <div id="evDetailBox" class="es-gen-hint">从「运行列表」点击一条查看进度与单题结果。</div>
-            </div>
-          </div>
+          <div id="evWorkspace"></div>
         </section>
 
         </div><!-- /split-left -->
@@ -250,14 +241,15 @@
   <!-- 应用脚本（按依赖顺序分文件加载，等价于原单文件 app.js，去掉 IIFE 包裹，统一为全局作用域） -->
   <script src="js/00-head.js?v=9"></script>
   <script src="js/01-data.js?v=9"></script>
-  <script src="js/02-nav.js?v=9"></script>
+  <script src="js/02-nav.js?v=10"></script>
   <script src="js/03-lib.js?v=9"></script>
   <script src="js/04-upload.js?v=9"></script>
   <script src="js/05-studio.js?v=9"></script>
   <script src="js/06-chat.js?v=9"></script>
   <script src="js/07-init.js?v=9"></script>
-  <script src="js/08-evalset.js?v=9"></script>
+  <script src="js/08-evalset.js?v=10"></script>
   <script src="js/09-evaluation.js?v=9"></script>
+  <script src="js/10-evaluation-workspace.js?v=2"></script>
   <script>if (window.lucide) lucide.createIcons();</script>
 </body>
 </html>
