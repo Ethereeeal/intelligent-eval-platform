@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
   <script src="lucide.min.js"></script>
-  <link rel="stylesheet" href="styles.css?v=12" />
+  <link rel="stylesheet" href="styles.css?v=23" />
   <script src="chart.umd.min.js"></script>
 </head>
 <body>
@@ -40,53 +40,33 @@
         <!-- ============ 概览 ============ -->
         <section class="view" data-view="overview">
           <div class="page-head">
-            <div><h1>概览</h1><p class="sub">评测平台 · 实时总览</p></div>
-            <div class="page-actions"><button class="btn primary" data-go="studio"><i data-lucide="plus"></i>新建评测集任务</button></div>
+            <div><h1>概览</h1><p class="sub">平台运行状态与最近评测表现</p></div>
           </div>
 
           <div class="hl-banner">
             <div class="hl-ic"><i data-lucide="sparkles"></i></div>
-            <div class="hl-tx"><div class="hl-t">生产洞察</div>
+            <div class="hl-tx"><div class="hl-t">平台状态</div>
               <div class="hl-d" id="hlInsight">加载中…</div></div>
           </div>
 
           <div class="kpi-grid">
-            <div class="kpi kpi-link" data-go="studio" role="link" tabindex="0" title="点击查看文档解析"><div class="kpi-top"><span class="kpi-ic" style="--c:#124571"><i data-lucide="file-text"></i></span><span class="kpi-label">输入文档</span></div><div class="kpi-num" id="kpiDocs">—</div><div class="kpi-trend up">实时 <i data-lucide="activity"></i></div></div>
-            <div class="kpi kpi-link" data-go="studio" role="link" tabindex="0" title="点击查看知识点抽取"><div class="kpi-top"><span class="kpi-ic" style="--c:#1B6CA8"><i data-lucide="list-checks"></i></span><span class="kpi-label">知识点(EIU)</span></div><div class="kpi-num" id="kpiEiu">—</div><div class="kpi-trend up">实时 <i data-lucide="activity"></i></div></div>
-            <div class="kpi kpi-link" data-go="qalib" role="link" tabindex="0" title="点击查看评测集库"><div class="kpi-top"><span class="kpi-ic" style="--c:#1B8A5A"><i data-lucide="layers"></i></span><span class="kpi-label">评测集总量</span></div><div class="kpi-num" id="kpiQaTotal">—</div><div class="kpi-trend up">实时 <i data-lucide="activity"></i></div></div>
-            <div class="kpi kpi-link" data-go="evalset" role="link" tabindex="0" title="点击查看评测集库"><div class="kpi-top"><span class="kpi-ic" style="--c:#B9770E"><i data-lucide="library-books"></i></span><span class="kpi-label">评测集</span></div><div class="kpi-num" id="kpiEvalSets">—</div><div class="kpi-trend up">生成+上传+公共 <i data-lucide="activity"></i></div></div>
-            <div class="kpi kpi-link" data-go="evaluation" role="link" tabindex="0" title="点击查看评测运行"><div class="kpi-top"><span class="kpi-ic" style="--c:#8C7CF0"><i data-lucide="gauge"></i></span><span class="kpi-label">评测运行</span></div><div class="kpi-num" id="kpiRuns">—</div><div class="kpi-trend up">实时 <i data-lucide="activity"></i></div></div>
+            <div class="kpi kpi-link" data-go="doclib" role="link" tabindex="0" title="查看文档库"><div class="kpi-top"><span class="kpi-ic" style="--c:#124571"><i data-lucide="file-check-2"></i></span><span class="kpi-label">文档解析健康度</span></div><div class="kpi-num" id="kpiDocs">—</div><div class="kpi-trend" id="kpiDocsMeta">加载中…</div></div>
+            <div class="kpi kpi-link" data-go="evalset" role="link" tabindex="0" title="查看待修订项"><div class="kpi-top"><span class="kpi-ic" style="--c:#B9770E"><i data-lucide="circle-alert"></i></span><span class="kpi-label">待处理事项</span></div><div class="kpi-num" id="kpiTodo">—</div><div class="kpi-trend" id="kpiTodoMeta">加载中…</div></div>
+            <div class="kpi kpi-link" data-go="evalset" role="link" tabindex="0" title="查看评测库"><div class="kpi-top"><span class="kpi-ic" style="--c:#1B8A5A"><i data-lucide="library-big"></i></span><span class="kpi-label">可用评测集</span></div><div class="kpi-num" id="kpiEvalSets">—</div><div class="kpi-trend" id="kpiEvalSetsMeta">加载中…</div></div>
+            <div class="kpi kpi-link" data-go="evaluation" role="link" tabindex="0" title="查看评测结果"><div class="kpi-top"><span class="kpi-ic" style="--c:#8C7CF0"><i data-lucide="chart-no-axes-combined"></i></span><span class="kpi-label">最新完成评测</span></div><div class="kpi-num" id="kpiLatestRun">—</div><div class="kpi-trend" id="kpiLatestRunMeta">加载中…</div></div>
           </div>
 
-          <div class="panel open">
-            <button class="panel-head" aria-expanded="true"><span><i data-lucide="workflow"></i>生产流程</span><i data-lucide="chevron-down" class="chev"></i></button>
+          <div class="panel open" id="overviewFlowPanel">
+            <button class="panel-head" aria-expanded="true"><span><i data-lucide="workflow"></i>平台数据链路</span><i data-lucide="chevron-down" class="chev"></i></button>
+            <button class="flow-toggle" id="overviewFlowToggle" type="button" aria-label="切换数据链路" title="切换数据链路"><i data-lucide="repeat-2"></i></button>
             <div class="panel-body"><div class="panel-inner">
-              <div class="flow">
-                <div class="flow-step"><span class="f-ic"><i data-lucide="file-text"></i></span><div class="fs-t">文档解析</div><div class="fs-m">版面 / 表格 / 公式<br>结构化</div></div>
-                <i data-lucide="arrow-right" class="flow-ar"></i>
-                <div class="flow-step"><span class="f-ic"><i data-lucide="list-checks"></i></span><div class="fs-t">提取知识点</div><div class="fs-m">EIU 抽取 + 向量<br>跨块/跨文档去重</div></div>
-                <i data-lucide="arrow-right" class="flow-ar"></i>
-                <div class="flow-step"><span class="f-ic"><i data-lucide="message-square-plus"></i></span><div class="fs-t">评测集生成</div><div class="fs-m">单 EIU 出题<br>跨块问题组合</div></div>
-                <i data-lucide="arrow-right" class="flow-ar"></i>
-                <div class="flow-step"><span class="f-ic"><i data-lucide="shield-check"></i></span><div class="fs-t">质量门禁(m04)</div><div class="fs-m">5 项检查<br>忠实性/相关性</div></div>
-                <i data-lucide="arrow-right" class="flow-ar"></i>
-                <div class="flow-step"><span class="f-ic"><i data-lucide="library-books"></i></span><div class="fs-t">评测集</div><div class="fs-m">生成/上传/公共库<br>冻结版本合并</div></div>
-                <i data-lucide="arrow-right" class="flow-ar"></i>
-                <div class="flow-step"><span class="f-ic"><i data-lucide="gauge"></i></span><div class="fs-t">评测运行</div><div class="fs-m">目标智能体<br>异步跑批+对比</div></div>
-              </div>
+              <div class="platform-flow flow-canvas" id="overviewFlowCanvas" aria-live="polite" aria-label="评测链路"></div>
             </div></div>
           </div>
 
-          <div class="panel open">
-            <button class="panel-head" aria-expanded="true"><span><i data-lucide="history"></i>最近活动</span><i data-lucide="chevron-down" class="chev"></i></button>
-            <div class="panel-body"><div class="panel-inner">
-              <div class="list">
-                <div class="list-row expandable"><span class="st" style="--c:#2E5E8C"></span><div class="lr-tx"><div class="lr-q">集团客户授信评测集完成生成</div><div class="lr-m">评测集库 · 2 分钟前</div></div><i data-lucide="chevron-down" class="lr-chev"></i><div class="row-detail">共 1,240 条，含核心合规点 100% 覆盖、多跳占比 41%；已送入人工审核队列。</div></div>
-                <div class="list-row expandable"><span class="st" style="--c:#B5C7F5"></span><div class="lr-tx"><div class="lr-q">2024 半年报 PDF 解析完成</div><div class="lr-m">输入文档库 · 18 分钟前</div></div><i data-lucide="chevron-down" class="lr-chev"></i><div class="row-detail">识别 38 个表格、12 个公式；2 页复杂扫描件降级处理，可重试。</div></div>
-                <div class="list-row expandable"><span class="st" style="--c:#1B4A78"></span><div class="lr-tx"><div class="lr-q">反欺诈规则知识点抽取复核通过</div><div class="lr-m">评测集库 · 1 小时前</div></div><i data-lucide="chevron-down" class="lr-chev"></i><div class="row-detail">抽取知识点 56 条；置信度低于 0.9 的 4 条已转人工。</div></div>
-                <div class="list-row expandable"><span class="st" style="--c:#124571"></span><div class="lr-tx"><div class="lr-q">财报评测集 v1.0 发布</div><div class="lr-m">评测集库 · 3 小时前</div></div><i data-lucide="chevron-down" class="lr-chev"></i><div class="row-detail">覆盖 5 大业务场景，对外提供 API 与下载；阻断率 6%。</div></div>
-              </div>
-            </div></div>
+          <div class="overview-lower">
+            <section class="card card-pad overview-card"><div class="overview-card-head"><div><div class="card-t"><i data-lucide="list-todo"></i>待处理事项</div><p>优先处理影响数据可用性和评测结论的问题。</p></div><button class="btn ghost sm" data-go="evalset">查看评测集库</button></div><div class="overview-list" id="overviewTodos"><div class="overview-empty">正在加载待办…</div></div></section>
+            <section class="card card-pad overview-card"><div class="overview-card-head"><div><div class="card-t"><i data-lucide="history"></i>最近运行</div><p>查看最近完成或正在执行的评测任务。</p></div><button class="btn ghost sm" data-go="evaluation">查看全部</button></div><div class="overview-list" id="overviewRuns"><div class="overview-empty">正在加载运行记录…</div></div></section>
           </div>
         </section>
 
@@ -271,15 +251,16 @@
   <!-- 应用脚本（按依赖顺序分文件加载，等价于原单文件 app.js，去掉 IIFE 包裹，统一为全局作用域） -->
   <script src="js/00-head.js?v=9"></script>
   <script src="js/01-data.js?v=9"></script>
-  <script src="js/02-nav.js?v=13"></script>
+  <script src="js/02-nav.js?v=14"></script>
   <script src="js/03-lib.js?v=10"></script>
   <script src="js/04-upload.js?v=9"></script>
   <script src="js/05-evalset-generate.js?v=1"></script>
   <script src="js/06-chat.js?v=9"></script>
-  <script src="js/07-init.js?v=9"></script>
+  <script src="js/07-init.js?v=10"></script>
   <script src="js/08-evalset-library.js?v=2"></script>
   <script src="js/09-evaluation.js?v=9"></script>
   <script src="js/10-evaluation-workspace.js?v=3"></script>
+  <script src="js/11-overview-flow.js?v=2"></script>
   <script>if (window.lucide) lucide.createIcons();</script>
 </body>
 </html>

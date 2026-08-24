@@ -268,43 +268,87 @@
     fillOverviewStats();
   })();
 
-  // 概览：拉取后端真实统计，反映当前全链路功能（文档/EIU/评测集/评测集/评测运行）
+  // 概览：聚焦平台健康、待办、可执行评测集与最新完成任务，不混入中间产物累计数。
   async function fillOverviewStats() {
     const set = (id, v) => { const el = $("#" + id); if (el) el.textContent = (v == null ? "—" : v); };
-    set("kpiDocs", "…"); set("kpiEiu", "…"); set("kpiQaTotal", "…"); set("kpiEvalSets", "…"); set("kpiRuns", "…");
+    const html = (value) => String(value == null ? "" : value).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+    const setMeta = (id, value, tone = "") => { const el = $("#" + id); if (el) { el.textContent = value; el.className = "kpi-trend " + tone; } };
+    const formatTime = (value) => {
+      if (!value) return "未记录时间";
+      const date = new Date(value);
+      return Number.isNaN(date.getTime()) ? "未记录时间" : date.toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    };
+    const renderList = (id, rows, empty) => {
+      const box = $("#" + id); if (!box) return;
+      box.innerHTML = rows.length ? rows.map(row => `<div class="overview-item"><span class="overview-item-ic ${row.tone || ""}"><i data-lucide="${row.icon}"></i></span><div class="overview-item-tx"><div class="overview-item-t">${html(row.title)}</div><div class="overview-item-m">${html(row.detail)}</div></div><div class="overview-item-v">${html(row.value)}</div></div>`).join("") : `<div class="overview-empty">${html(empty)}</div>`;
+    };
+    set("kpiDocs", "…"); set("kpiTodo", "…"); set("kpiEvalSets", "…"); set("kpiLatestRun", "…");
 
-    // 前端本地文档计数（兜底）
     const localDocs = Object.keys(DOCS).length;
-    const localQa = Object.values(DOCS).reduce((s, d) => s + (d.qa ? d.qa.length : 0), 0);
-
-    let docs = localDocs, eiu = null, qa = localQa, evalSets = null, runs = null;
+    let docs = [], quality = {}, compositions = [], runs = [], errorBook = [], uploadedSets = [];
     try {
-      const [docRes, eiuRes, pubRes, upRes, runRes] = await Promise.all([
+      const [docRes, qualityRes, compositionRes, runRes, errorRes, uploadRes] = await Promise.all([
         apiGet(`/api/documents`).catch(() => null),
-        apiGet(`/api/eiu`).catch(() => null),
-        apiGet(`/api/public-sets`).catch(() => []),
-        apiGet(`/api/eval-sets/uploaded`).catch(() => []),
+        apiGet(`/api/quality-check/results`).catch(() => ({})),
+        apiGet(`/api/compositions`).catch(() => []),
         apiGet(`/api/evaluation-runs`).catch(() => []),
+        apiGet(`/api/error-book?status=open`).catch(() => ({ items: [] })),
+        apiGet(`/api/eval-sets/uploaded`).catch(() => []),
       ]);
-      if (Array.isArray(docRes)) docs = docRes.length || localDocs;
-      if (Array.isArray(eiuRes)) eiu = eiuRes.length;
-      evalSets = (Array.isArray(pubRes) ? pubRes.length : 0) + (Array.isArray(upRes) ? upRes.length : 0);
-      if (Array.isArray(runRes)) runs = runRes.length;
-    } catch (e) { /* 后端不可用时用本地兜底 */ }
+      docs = Array.isArray(docRes) ? docRes : [];
+      quality = qualityRes || {};
+      compositions = Array.isArray(compositionRes) ? compositionRes : [];
+      runs = Array.isArray(runRes) ? runRes : [];
+      errorBook = Array.isArray(errorRes && errorRes.items) ? errorRes.items : [];
+      uploadedSets = Array.isArray(uploadRes) ? uploadRes : [];
+    } catch (e) { /* 后端不可用时保留空态，不用 mock 数据掩盖状态 */ }
 
-    set("kpiDocs", docs);
-    set("kpiEiu", eiu == null ? "—" : eiu);
-    set("kpiQaTotal", qa);
-    window.__qaTotalCases = qa; // 供自定义评测集库摘要取生成库题量
-    set("kpiEvalSets", evalSets == null ? "—" : evalSets);
-    set("kpiRuns", runs == null ? "—" : runs);
+    const documentTotal = docs.length || localDocs;
+    const parsed = docs.filter(d => d.parse_status === "completed").length;
+    const parseFailed = docs.filter(d => d.parse_status === "failed").length;
+    const parsePending = docs.filter(d => !["completed", "failed"].includes(d.parse_status)).length;
+    set("kpiDocs", documentTotal ? `${parsed}/${documentTotal}` : "0");
+    setMeta("kpiDocsMeta", documentTotal ? (parseFailed ? `${parseFailed} 个解析失败` : parsePending ? `${parsePending} 个待处理` : "全部解析完成") : "暂未上传文档", parseFailed ? "down" : "up");
+
+    // 上传评测集当前仅保存质量快照；只有后端明确写入待修订状态才计入，避免前端擅自定义阈值。
+    const uploadNeedsRevision = uploadedSets.filter(s => ["pending", "needs_review", "rejected", "failed"].includes(s.review_status) || (s.quality_snapshot || {}).action === "revise").length;
+    const qualityNeedsReview = Number(quality.failed || 0);
+    const todoTotal = parseFailed + qualityNeedsReview + uploadNeedsRevision + errorBook.length;
+    set("kpiTodo", todoTotal);
+    setMeta("kpiTodoMeta", todoTotal ? `解析 ${parseFailed} · 质检 ${qualityNeedsReview} · ErrorBook ${errorBook.length}` : "暂无开放待办", todoTotal ? "down" : "up");
+
+    const evalSetCases = compositions.reduce((sum, item) => sum + Number(item.total_cases || item.case_count || 0), 0);
+    set("kpiEvalSets", compositions.length);
+    setMeta("kpiEvalSetsMeta", compositions.length ? `${evalSetCases ? evalSetCases + " 题" : "可按来源组合"}` : "请先创建评测集", compositions.length ? "up" : "");
+
+    const completedRuns = runs.filter(run => run.status === "done").sort((a, b) => new Date(b.finished_at || b.created_at || 0) - new Date(a.finished_at || a.created_at || 0));
+    const latest = completedRuns[0];
+    let latestSummary = null;
+    if (latest) latestSummary = await apiGet(`/api/evaluation-runs/${latest.run_id}/results`).catch(() => null);
+    const summary = (latestSummary || {}).summary || {};
+    if (!latest) {
+      set("kpiLatestRun", "—"); setMeta("kpiLatestRunMeta", "暂无已完成评测");
+    } else if (!summary.scored) {
+      set("kpiLatestRun", "无评分"); setMeta("kpiLatestRunMeta", summary.error_count ? `${summary.error_count} 题调用异常` : "该任务没有可评分题目", "down");
+    } else {
+      set("kpiLatestRun", `${Math.round(Number(summary.passed_rate || 0) * 100)}%`);
+      setMeta("kpiLatestRunMeta", `通过率 · 错误 ${summary.error_count || 0} 题`, Number(summary.error_count || 0) ? "down" : "up");
+    }
 
     const ins = $("#hlInsight");
-    if (!ins) return;
-    const parts = [`输入文档 ${docs} 篇`];
-    if (eiu != null) parts.push(`知识点(EIU) ${eiu} 条`);
-    parts.push(`评测集 ${qa} 条`);
-    if (evalSets != null) parts.push(`评测集 ${evalSets} 个`);
-    if (runs != null) parts.push(`评测运行 ${runs} 次`);
-    ins.textContent = `当前平台：${parts.join(" · ")}。链路覆盖 文档解析 → 知识点抽取 → 评测集生成 → m04 质量门禁 → 评测集 → 目标智能体评测。`;
+    if (ins) ins.textContent = todoTotal ? `当前有 ${todoTotal} 项待处理事项，优先关注解析失败、质检异常和开放的 ErrorBook。` : `平台运行平稳：${compositions.length} 个可用评测集，最近完成任务可在下方追溯。`;
+
+    renderList("overviewTodos", [
+      { icon: "file-warning", tone: parseFailed ? "err" : "ok", title: "文档解析异常", detail: parseFailed ? "解析失败的文档需要重新上传或检查格式" : "没有解析失败的文档", value: parseFailed },
+      { icon: "shield-alert", tone: qualityNeedsReview ? "warn" : "ok", title: "生成样本质检待复核", detail: qualityNeedsReview ? "质量门禁发现需要人工确认的样本" : "没有待复核的生成样本", value: qualityNeedsReview },
+      { icon: "upload", tone: uploadNeedsRevision ? "warn" : "ok", title: "上传评测集待修订", detail: uploadNeedsRevision ? "质量诊断标记了需要修订的上传集" : "没有被标记为待修订的上传集", value: uploadNeedsRevision },
+      { icon: "book-open-check", tone: errorBook.length ? "err" : "ok", title: "开放 ErrorBook", detail: errorBook.length ? "评测失败诊断尚未完成处理闭环" : "没有开放的评测失败诊断", value: errorBook.length },
+    ], "暂无待处理事项。");
+
+    renderList("overviewRuns", runs.slice(0, 4).map(run => {
+      const running = run.status === "running";
+      const done = run.status === "done";
+      return { icon: running ? "loader-circle" : done ? "circle-check" : "circle-alert", tone: running ? "warn" : done ? "ok" : "err", title: run.name || `评测运行 #${run.run_id}`, detail: running ? `运行中 ${run.finished || 0}/${run.total || 0}` : done ? `完成于 ${formatTime(run.finished_at)}` : `${run.status || "未知状态"} · ${formatTime(run.created_at)}`, value: running ? `${run.progress || 0}%` : `${run.total || 0} 题` };
+    }), "暂无评测运行记录。");
+    icons();
   }
