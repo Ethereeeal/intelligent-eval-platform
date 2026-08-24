@@ -192,19 +192,11 @@
           </div>
         </section>
 
-        <!-- ============ 评测运行（m08：来源选择 / 发起 / 进度 / 结果 / 失败本） ============ -->
+        <!-- ============ 评测运行（m08：来源选择 / 发起 / 进度 / 结果） ============ -->
         <section class="view" data-view="evaluation" hidden>
           <div class="page-head">
-            <div><h1>评测运行</h1><p class="sub">基于组合 / 公共库 / 上传集 / 冻结版本发起智能体批量评测（BRD §9）</p></div>
+            <div><h1>评测运行</h1><p class="sub">基于生成库 / 公共库 / 上传库发起智能体批量评测</p></div>
             <div class="page-actions"><button class="btn primary" id="evNewBtn"><i data-lucide="play"></i>发起评测</button></div>
-          </div>
-
-          <div class="seg-wrap mb16"><span class="seg-label">视图</span>
-            <div class="seg" id="evViewSeg">
-              <button class="on" data-ev="runs">运行列表</button>
-              <button data-ev="detail">运行详情</button>
-              <button data-ev="errorbook">失败本</button>
-            </div>
           </div>
 
           <div id="evRuns" class="ev-pane">
@@ -216,15 +208,8 @@
 
           <div id="evDetail" class="ev-pane" hidden>
             <div class="card card-pad">
-              <div class="card-t">运行进度与分层指标</div>
+              <div class="card-t">运行进度与分层指标<button class="btn ghost sm ev-back-btn" style="float:right">返回运行列表</button></div>
               <div id="evDetailBox" class="es-gen-hint">从「运行列表」点击一条查看进度与单题结果。</div>
-            </div>
-          </div>
-
-          <div id="evErrorbook" class="ev-pane" hidden>
-            <div class="card card-pad">
-              <div class="card-t">失败本（ErrorBook）</div>
-              <div id="evErrorList" class="es-list"></div>
             </div>
           </div>
         </section>

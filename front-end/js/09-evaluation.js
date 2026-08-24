@@ -52,14 +52,12 @@ function evSourceName(item) {
 
 // ---------- 渲染入口 ----------
 async function renderEvaluation() {
+  // 默认展示运行记录列表；点击详情查看结果
   const view = window.__evView || "runs";
-  $$("#evViewSeg .seg button").forEach(b => b.classList.toggle("on", b.dataset.ev === view));
   $("#evRuns").hidden = view !== "runs";
   $("#evDetail").hidden = view !== "detail";
-  $("#evErrorbook").hidden = view !== "errorbook";
 
   if (view === "runs") await evLoadRuns();
-  if (view === "errorbook") await evLoadErrorBook();
   if (view === "detail" && window.__evOpenId) await evRefreshDetail(window.__evOpenId);
   if (view === "detail" && !window.__evOpenId) $("#evDetailBox").innerHTML = `<div class="es-gen-hint">从「运行列表」点击一条查看进度与单题结果。</div>`;
   icons();
@@ -92,9 +90,15 @@ async function evLoadRuns() {
 async function evOpenDetail(runId) {
   window.__evOpenId = runId;
   window.__evView = "detail";
-  $$("#evViewSeg .seg button").forEach(b => b.classList.toggle("on", b.dataset.ev === "detail"));
-  $("#evRuns").hidden = true; $("#evDetail").hidden = false; $("#evErrorbook").hidden = true;
+  $("#evRuns").hidden = true; $("#evDetail").hidden = false;
   await evRefreshDetail(runId);
+}
+
+function evBackToList() {
+  window.__evView = "runs";
+  window.__evOpenId = null;
+  $("#evRuns").hidden = false; $("#evDetail").hidden = true;
+  evLoadRuns();
 }
 
 async function evRefreshDetail(runId, auto = true) {
@@ -161,27 +165,6 @@ async function evRefreshDetail(runId, auto = true) {
     box.innerHTML = `<div class="es-gen-hint">加载失败：${e.message}</div>`;
   }
   icons();
-}
-
-// ---------- 失败本 ----------
-async function evLoadErrorBook() {
-  const box = $("#evErrorList");
-  box.innerHTML = `<div class="es-gen-hint">加载中…</div>`;
-  try {
-    const items = await apiGet(`/api/error-book`).catch(() => []);
-    if (!items.length) {
-      box.innerHTML = `<div class="es-gen-hint">失败本为空，暂无智能体失败诊断记录。</div>`;
-      return;
-    }
-    box.innerHTML = items.map(it => `<div class="list-row">
-      <span class="st" style="--c:#C0392B"></span>
-      <div class="lr-tx"><div class="lr-q">${it.case_uid || ""}</div>
-      <div class="lr-m">${(it.diagnosis && it.diagnosis.root_cause) || it.note || ""}</div></div>
-      <span class="es-tag bad">${(it.diagnosis && it.diagnosis.category) || ""}</span>
-    </div>`).join("");
-  } catch (e) {
-    box.innerHTML = `<div class="es-gen-hint">加载失败：${e.message}</div>`;
-  }
 }
 
 // ---------- 发起评测（配置 + 选集 + 合并 + 异步跑批） ----------
@@ -307,8 +290,7 @@ async function evStartRun() {
 
 // ---------- 事件委托 ----------
 document.addEventListener("click", e => {
-  const seg = e.target.closest("#evViewSeg .seg button");
-  if (seg) { window.__evView = seg.dataset.ev; if (seg.dataset.ev !== "detail") window.__evOpenId = null; renderEvaluation(); return; }
+  if (e.target.closest(".ev-back-btn")) { evBackToList(); return; }
   const open = e.target.closest(".ev-open");
   if (open) { evOpenDetail(Number(open.dataset.run)); return; }
   if (e.target.closest("#evNewBtn")) { evStartRun(); return; }
