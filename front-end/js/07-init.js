@@ -295,6 +295,7 @@
     set("kpiDocs", docs);
     set("kpiEiu", eiu == null ? "—" : eiu);
     set("kpiQaTotal", qa);
+    window.__qaTotalCases = qa; // 供自定义评测集库摘要取生成库题量
     set("kpiEvalSets", evalSets == null ? "—" : evalSets);
     set("kpiRuns", runs == null ? "—" : runs);
 

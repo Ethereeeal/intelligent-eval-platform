@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
   <script src="lucide.min.js"></script>
-  <link rel="stylesheet" href="styles.css?v=10" />
+  <link rel="stylesheet" href="styles.css?v=12" />
   <script src="chart.umd.min.js"></script>
 </head>
 <body>
@@ -90,103 +90,141 @@
           </div>
         </section>
 
-        <!-- ============ 输入文档库（左目录树 + 右预览） ============ -->
-        <section class="view" data-view="doclib" hidden>
-          <div class="page-head">
-            <div><h1>输入文档库</h1><p class="sub">文档接入、解析、在线查看与版本管理</p></div>
-            <div class="page-actions"><button class="btn ghost" id="uploadBtn"><i data-lucide="upload"></i>上传文档</button><input type="file" id="uploadInput" accept=".pdf,.doc,.docx,.txt,.md,.xlsx,.xls,.csv" multiple hidden /><input type="file" id="uploadFolderInput" webkitdirectory directory multiple hidden /></div>
-          </div>
-          <div class="lib-split">
-            <div class="tree" id="docTree">
-              <div class="tree-bar"><span class="tree-bar-t">目录</span><button class="tree-toggle" id="treeToggle" title="隐藏/显示目录"><i data-lucide="chevron-left"></i></button></div>
-            </div>
-            <div id="docContent"></div>
-          </div>
-        </section>
-
-        <!-- ============ 评测集生成（选择文件类型 / 配置 / 监控） ============ -->
-        <section class="view" data-view="studio" hidden>
-          <div class="page-head">
-            <div><h1>评测集生成</h1><p class="sub">选择文件类型，配置生成参数并监控任务进度</p></div>
-          </div>
-
-          <div class="card card-pad">
-            <div class="card-t">选择文件类型</div>
-            <div class="seg-wrap"><span class="seg-label">从</span>
-              <div class="seg" id="srcTypeSeg">
-                <button class="on" data-type="doc">待生成问答文件</button>
-                <button data-type="qa">仅泛化</button>
-              </div>
-            </div>
-            <div class="src-list" id="srcList"><!-- 由 app.js 渲染 --></div>
-          </div>
-
-          <div class="card card-pad mt" id="studioOptCard">
-            <div id="studioOpts"><!-- 由 app.js 渲染：按来源类型动态显示选项 --></div>
-            <div class="studio-run-wrap"><button class="btn primary" id="studioRun"><i data-lucide="play"></i>开始生成</button></div>
-          </div>
-
-          <div class="card card-pad mt">
-            <div class="card-t">运行监测</div>
-            <div id="genProgress" class="gen-progress" hidden></div>
-            <div id="monitorList"></div>
-          </div>
-        </section>
-
-        <!-- ============ 评测集库（左目录树：泛化问题 / 单纯输出问题 + 右列表 + 质量审核） ============ -->
-        <section class="view" data-view="qalib" hidden>
-          <div class="page-head">
-            <div><h1>评测集库</h1><p class="sub">按输入文档目录组织的评测集、质量与人工审核</p></div>
-            <div class="page-actions"><button class="btn ghost" id="qaLibExportBtn"><i data-lucide="download"></i>导出评测集</button></div>
-          </div>
-          <div class="lib-split">
-            <div class="tree" id="qaTree">
-              <div class="tree-bar"><span class="tree-bar-t">目录</span><button class="tree-toggle" id="treeToggle2" title="隐藏/显示目录"><i data-lucide="chevron-left"></i></button></div>
-            </div>
-            <div id="qaContent"></div>
-          </div>
-        </section>
-
-        <!-- ============ 评测集库（生成 + 上传 + 公共库：金融通用 / 风险合规） ============ -->
+        <!-- ============ 评测集（合并页：评测集生成 / 评测集展示[生成库·上传库·公共库·按文档问答库·输入文档库]） ============ -->
         <section class="view" data-view="evalset" hidden>
           <div class="page-head">
-            <div><h1>评测集库</h1><p class="sub">评测集生成、外部上传与平台预置公共库（金融通用 / 风险合规）的统一管理</p></div>
-            <div class="page-actions"><button class="btn primary" id="esGenBtn"><i data-lucide="plus"></i>生成评测集</button><button class="btn ghost" id="esUploadBtn"><i data-lucide="upload"></i>上传评测集</button><input type="file" id="esUploadInput" accept=".json,.csv,.xlsx,.xls" multiple hidden /></div>
-          </div>
-
-          <div class="seg-wrap mb16"><span class="seg-label">视图</span>
-            <div class="seg" id="esViewSeg">
-              <button class="on" data-es="generate">生成集</button>
-              <button data-es="uploaded">上传集</button>
-              <button data-es="public">公共库</button>
+            <div><h1>评测集</h1><p class="sub">评测集生成与统一管理（生成库 / 上传库 / 公共库 / 按文档问答库）</p></div>
+            <div class="page-actions">
+              <button class="btn primary" id="esGenBtn"><i data-lucide="plus"></i>生成评测集</button>
+              <button class="btn ghost" id="esUploadBtn"><i data-lucide="upload"></i>上传评测集</button>
+              <input type="file" id="esUploadInput" accept=".json,.csv,.xlsx,.xls" multiple hidden />
             </div>
           </div>
 
-          <div id="esGenerate" class="es-pane">
-            <div class="card card-pad">
-              <div class="card-t">从文档生成评测集</div>
-              <div class="es-gen-hint">选择输入文档 → 抽取知识点 → 生成评测集 → 经 m04 质量门禁 → 冻结为版本（doc_generated 来源）。下方列出已冻结版本，可直接用于评测或并入组合。</div>
-              <div id="esGenVersions" class="es-list"></div>
-            </div>
-          </div>
-
-          <div id="esUploaded" class="es-pane" hidden>
-            <div class="card card-pad">
-              <div class="card-t">外部上传评测集</div>
-              <div class="es-gen-hint">用户上传单轮 / 多轮评测集，经字段校验与质量评估后入库（uploaded 来源）。</div>
-              <div id="esUploadedList" class="es-list"></div>
-            </div>
-          </div>
-
-          <div id="esPublic" class="es-pane" hidden>
-            <div class="es-pub-grid">
-              <div class="card card-pad">
-                <div class="card-t"><i data-lucide="landmark" style="vertical-align:-2px"></i> 金融通用知识库</div>
-                <div id="esPubFinance" class="es-list"></div>
+          <div class="lib-split">
+            <!-- 左侧目录：评测集生成 / 评测集展示 -->
+            <div class="tree" id="esSubNav">
+              <div class="tree-bar"><span class="tree-bar-t">评测集</span></div>
+              <div class="tree-body">
+                <div class="tree-row active" data-sub="gen"><i data-lucide="sparkles"></i><span>评测集生成</span></div>
+                <div class="tree-row" data-sub="show"><i data-lucide="layers"></i><span>评测集展示</span></div>
               </div>
-              <div class="card card-pad">
-                <div class="card-t"><i data-lucide="shield-alert" style="vertical-align:-2px"></i> 风险合规知识库</div>
-                <div id="esPubRisk" class="es-list"></div>
+            </div>
+
+            <div id="esMain" class="es-main">
+              <!-- 评测集生成 -->
+              <div data-sub="gen" class="es-sub">
+                <div class="card card-pad">
+                  <div class="card-t">选择文件类型</div>
+                  <div class="seg-wrap"><span class="seg-label">从</span>
+                    <div class="seg" id="srcTypeSeg">
+                      <button class="on" data-type="doc">待生成问答文件</button>
+                      <button data-type="qa">仅泛化</button>
+                    </div>
+                  </div>
+                  <div class="src-list" id="srcList"><!-- 由 app.js 渲染 --></div>
+                </div>
+
+                <div class="card card-pad mt" id="studioOptCard">
+                  <div id="studioOpts"><!-- 由 app.js 渲染：按来源类型动态显示选项 --></div>
+                  <div class="studio-run-wrap"><button class="btn primary" id="studioRun"><i data-lucide="play"></i>开始生成</button></div>
+                </div>
+
+                <div class="card card-pad mt">
+                  <div class="card-t">运行监测</div>
+                  <div id="genProgress" class="gen-progress" hidden></div>
+                  <div id="monitorList"></div>
+                </div>
+              </div>
+
+              <!-- 评测集展示 -->
+              <div data-sub="show" class="es-sub" hidden>
+                <div class="seg-wrap mb16"><span class="seg-label">视图</span>
+                  <div class="seg" id="esViewSeg">
+                    <button class="on" data-es="generate">生成库</button>
+                    <button data-es="uploaded">上传库</button>
+                    <button data-es="public">公共库</button>
+                    <button data-es="custom">自定义评测集库</button>
+                    <button data-es="doclib">输入文档库</button>
+                  </div>
+                </div>
+
+                <!-- 生成库（原按文档问答库：质量与人工审核） -->
+                <div id="esGenerate" class="es-pane">
+                  <div class="card card-pad">
+                    <div class="card-t">生成库（按文档问答库 · 质量与人工审核）
+                      <div class="page-actions" style="float:right">
+                        <button class="btn ghost" id="qaNewFolderBtn"><i data-lucide="folder-plus"></i>新建目录</button>
+                        <button class="btn ghost" id="qaUploadBtn"><i data-lucide="upload"></i>上传评测集</button>
+                        <button class="btn ghost" id="qaImportBtn"><i data-lucide="file-input"></i>导入</button>
+                        <button class="btn ghost" id="qaLibExportBtn"><i data-lucide="download"></i>导出评测集</button>
+                      </div>
+                    </div>
+                    <div class="es-gen-hint">由输入文档经知识点抽取 → 评测集生成 → m04 质量门禁后入库，并保留人工审核状态（生成库来源）。</div>
+                    <div class="lib-split">
+                      <div class="tree" id="qaTree">
+                        <div class="tree-bar"><span class="tree-bar-t">目录</span><button class="tree-toggle" id="treeToggle2" title="隐藏/显示目录"><i data-lucide="chevron-left"></i></button></div>
+                      </div>
+                      <div id="qaContent"></div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- 上传库 -->
+                <div id="esUploaded" class="es-pane" hidden>
+                  <div class="card card-pad">
+                    <div class="card-t">上传库（外部上传评测集）</div>
+                    <div class="es-gen-hint">用户上传单轮 / 多轮评测集，经字段校验与质量评估后入库（上传库来源）。参与自定义评测集库时默认全选，不支持抽样。</div>
+                    <div id="esUploadedList" class="es-list"></div>
+                  </div>
+                </div>
+
+                <!-- 公共库：按 6 维度填抽取数量（后端后接，当前占位） -->
+                <div id="esPublic" class="es-pane" hidden>
+                  <div class="card card-pad">
+                    <div class="card-t">公共库（平台预置 · 按维度抽样）</div>
+                    <div class="es-gen-hint">平台预置公共评测集，按以下 6 个维度分别填写要抽取的题量（抽样满足数量即可，不足时取全量）。括号内为库内可用题量。</div>
+                    <div id="esPubDims" class="es-pub-dims"></div>
+                  </div>
+                </div>
+
+                <!-- 自定义评测集库：组合生成器 -->
+                <div id="esCustom" class="es-pane" hidden>
+                  <div class="card card-pad">
+                    <div class="card-t">自定义评测集库（组合生成）</div>
+                    <div class="es-gen-hint">从生成库（默认全选）、上传库（默认全选）、公共库（按上述维度填写的数量抽样）中合并，生成一份自定义评测集库，可用于后续批量评测。</div>
+                    <div class="gen-custom-sum">
+                      <div class="gcs-item"><span class="gcs-k">生成库</span><span class="gcs-v" id="gcsGen">—</span><label class="opt"><input type="checkbox" id="gcGenAll" checked /> <span>全选</span></label></div>
+                      <div class="gcs-item"><span class="gcs-k">上传库</span><span class="gcs-v" id="gcsUp">—</span><label class="opt"><input type="checkbox" id="gcUpAll" checked /> <span>全选</span></label></div>
+                      <div class="gcs-item"><span class="gcs-k">公共库</span><span class="gcs-v" id="gcsPub">—</span><label class="opt"><input type="checkbox" id="gcPubOn" checked /> <span>按填写数量抽样</span></label></div>
+                    </div>
+                    <div class="gen-custom-foot">
+                      <input type="text" class="gen-input" id="gcName" placeholder="自定义评测集库名称" />
+                      <button class="btn primary" id="gcBuildBtn"><i data-lucide="box"></i>生成自定义评测集库</button>
+                    </div>
+                    <div id="gcResult" class="es-list mt"></div>
+                  </div>
+                </div>
+
+                <!-- 输入文档库（保留原文档库界面：目录树 + 文档 + 解析 + 知识点 + 质量门禁 + 导出） -->
+                <div id="esDoc" class="es-pane" hidden>
+                  <div class="card card-pad">
+                    <div class="card-t">输入文档库
+                      <div class="page-actions" style="float:right">
+                        <button class="btn ghost" id="uploadBtn"><i data-lucide="upload"></i>上传文档</button>
+                        <input type="file" id="uploadInput" accept=".pdf,.doc,.docx,.txt,.md,.xlsx,.xls,.csv" multiple hidden />
+                        <input type="file" id="uploadFolderInput" webkitdirectory directory multiple hidden />
+                      </div>
+                    </div>
+                    <div class="es-gen-hint">文档接入、解析、在线查看与版本管理；抽取知识点并经过质量门禁后进入生成库。</div>
+                    <div class="lib-split">
+                      <div class="tree" id="docTree">
+                        <div class="tree-bar"><span class="tree-bar-t">目录</span><button class="tree-toggle" id="treeToggle" title="隐藏/显示目录"><i data-lucide="chevron-left"></i></button></div>
+                      </div>
+                      <div id="docContent"></div>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -195,23 +233,9 @@
         <!-- ============ 评测运行（m08：来源选择 / 发起 / 进度 / 结果） ============ -->
         <section class="view" data-view="evaluation" hidden>
           <div class="page-head">
-            <div><h1>评测运行</h1><p class="sub">基于生成库 / 公共库 / 上传库发起智能体批量评测</p></div>
-            <div class="page-actions"><button class="btn primary" id="evNewBtn"><i data-lucide="play"></i>发起评测</button></div>
+            <div><h1>评测运行</h1><p class="sub">配置目标智能体、选择评测库版本并查看评测报告</p></div>
           </div>
-
-          <div id="evRuns" class="ev-pane">
-            <div class="card card-pad">
-              <div class="card-t">评测运行记录</div>
-              <div id="evRunList" class="es-list"></div>
-            </div>
-          </div>
-
-          <div id="evDetail" class="ev-pane" hidden>
-            <div class="card card-pad">
-              <div class="card-t">运行进度与分层指标<button class="btn ghost sm ev-back-btn" style="float:right">返回运行列表</button></div>
-              <div id="evDetailBox" class="es-gen-hint">从「运行列表」点击一条查看进度与单题结果。</div>
-            </div>
-          </div>
+          <div id="evWorkspace"></div>
         </section>
 
         </div><!-- /split-left -->
@@ -250,14 +274,15 @@
   <!-- 应用脚本（按依赖顺序分文件加载，等价于原单文件 app.js，去掉 IIFE 包裹，统一为全局作用域） -->
   <script src="js/00-head.js?v=9"></script>
   <script src="js/01-data.js?v=9"></script>
-  <script src="js/02-nav.js?v=9"></script>
+  <script src="js/02-nav.js?v=11"></script>
   <script src="js/03-lib.js?v=9"></script>
   <script src="js/04-upload.js?v=9"></script>
   <script src="js/05-studio.js?v=9"></script>
   <script src="js/06-chat.js?v=9"></script>
   <script src="js/07-init.js?v=9"></script>
-  <script src="js/08-evalset.js?v=9"></script>
+  <script src="js/08-evalset.js?v=11"></script>
   <script src="js/09-evaluation.js?v=9"></script>
+  <script src="js/10-evaluation-workspace.js?v=3"></script>
   <script>if (window.lucide) lucide.createIcons();</script>
 </body>
 </html>

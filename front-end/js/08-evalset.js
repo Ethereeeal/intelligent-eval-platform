@@ -1,10 +1,9 @@
-/* ============ 评测集库（生成 + 上传 + 公共库） ============ */
-/* 三个视图：
-   - generate：从文档生成评测集（已冻结版本 doc_generated 来源）
-   - uploaded：用户外部上传的评测集
-   - public：平台预置公共库，内部按名称/维度区分为「金融通用」与「风险合规」两块
-   公共库分类为前端展示层处理：name/dimensions 含「金融/通用」归金融通用，
-   含「合规/风险/监管」归风险合规，其余归入金融通用兜底。 */
+/* ============ 评测集库（生成库 / 上传库 / 公共库 / 自定义评测集库） ============ */
+/* 四个视图：
+   - generate：生成库（原按文档问答库，renderLib("qa")）
+   - uploaded：用户外部上传的评测集（默认全选）
+   - public：平台预置公共库，按 6 个维度让用户填抽取数量（后端后接，当前占位）
+   - custom：从 生成库(全选)+上传库(全选)+公共库(按数量抽样) 合并为自定义评测集库 */
 
 const apiPostES = async (path, body) => {
   const res = await fetch(API_BASE + path, {
@@ -20,11 +19,15 @@ const apiPostES = async (path, body) => {
   return res.json();
 };
 
-function esIsFinance(set) {
-  const blob = ((set.name || "") + " " + JSON.stringify(set.dimensions || [])).toLowerCase();
-  if (/合规|风险|监管|合规风险/.test(blob)) return false;
-  return true; // 金融通用 或 未明确标注的兜底
-}
+// 公共库 6 维度（文件 → 维度名 + 占位可用量；后端接入后改为真实可用量）
+const ES_PUBLIC_DIMS = [
+  { key: "base", file: "模型基础能力-5000.json", name: "模型基础能力", total: 5000 },
+  { key: "safety", file: "金融安全与价值对齐-2514.json", name: "金融安全与价值对齐", total: 2514 },
+  { key: "risk", file: "金融风险控制-1000.json", name: "金融风险控制", total: 1000 },
+  { key: "cog", file: "金融专业认知能力-3340.json", name: "金融专业认知能力", total: 3340 },
+  { key: "biz", file: "业务拓展能力-12000.json", name: "业务拓展能力", total: 12000 },
+  { key: "hard", file: "金融难题-3000.json", name: "金融难题", total: 3000 },
+];
 
 function esSetRow(set, kind) {
   const meta = [];
@@ -34,7 +37,7 @@ function esSetRow(set, kind) {
   const q = (set.quality_snapshot && (set.quality_snapshot.pass_rate != null))
     ? `<span class="es-tag ok">质检通过 ${Math.round(set.quality_snapshot.pass_rate * 100)}%</span>` : "";
   return `<div class="list-row">
-    <span class="st" style="--c:${kind === "risk" ? "#C0392B" : "#1B6CA8"}"></span>
+    <span class="st" style="--c:${kind === "upload" ? "#1B6CA8" : "#1B8A5A"}"></span>
     <div class="lr-tx">
       <div class="lr-q">${set.name || ("#" + set.set_id)}</div>
       <div class="lr-m">${meta.join(" · ") || "—"}</div>
@@ -45,39 +48,39 @@ function esSetRow(set, kind) {
 }
 
 async function renderEvalSet() {
-  $$("#esViewSeg .seg button").forEach(b => b.classList.toggle("on", b.dataset.es === (window.__esView || "generate")));
+  // 合并页：左侧目录切换「评测集生成 / 评测集展示」
+  const sub = window.__esSub || "gen";
+  $$("#esSubNav .tree-row").forEach(r => r.classList.toggle("active", r.dataset.sub === sub));
+  const gen = $("#esMain [data-sub='gen']");
+  const show = $("#esMain [data-sub='show']");
+  if (gen) gen.hidden = sub !== "gen";
+  if (show) show.hidden = sub !== "show";
+
+  // 进入「评测集生成」时刷新源文件树（按最新 TREE）
+  if (sub === "gen") { await renderSrcList(); return; }
+
+  // 进入「评测集展示」时按选中视图加载
   const view = window.__esView || "generate";
+  $$("#esViewSeg .seg button").forEach(b => b.classList.toggle("on", b.dataset.es === view));
   $("#esGenerate").hidden = view !== "generate";
   $("#esUploaded").hidden = view !== "uploaded";
   $("#esPublic").hidden = view !== "public";
+  $("#esCustom").hidden = view !== "custom";
+  $("#esDoc").hidden = view !== "doclib";
 
-  if (view === "generate") await esLoadGenerate();
+  if (view === "generate") {
+    // 生成库 = 原按文档问答库视图（质量与人工审核）
+    if (!window.__esQaReady) { renderLib("qa"); window.__esQaReady = true; }
+  }
   if (view === "uploaded") await esLoadUploaded();
   if (view === "public") await esLoadPublic();
+  if (view === "doclib") renderLib("doc"); // 输入文档库界面（目录树+文档+解析+知识点+质量门禁+导出）
+  if (view === "custom") await esLoadCustom();
   icons();
 }
 
 async function esLoadGenerate() {
-  const box = $("#esGenVersions");
-  box.innerHTML = `<div class="es-gen-hint">加载中…</div>`;
-  try {
-    const versions = await apiGet(`/api/versions`).catch(() => []);
-    const frozen = (versions || []).filter(v => v.status === "frozen");
-    if (!frozen.length) {
-      box.innerHTML = `<div class="es-gen-hint">暂无已冻结版本。请先在「评测集生成」完成任务，并在「输出评测集库」冻结版本。</div>`;
-      return;
-    }
-    box.innerHTML = frozen.map(v => `<div class="list-row">
-      <span class="st" style="--c:#124571"></span>
-      <div class="lr-tx">
-        <div class="lr-q">${v.name || ("版本 #" + v.version_id)}</div>
-        <div class="lr-m">版本 #${v.version_id} · ${v.case_count || 0} 题 · 冻结 ${v.frozen_at ? v.frozen_at.slice(0, 10) : ""}</div>
-      </div>
-      <button class="btn ghost es-pick" data-kind="doc" data-id="${v.version_id}"><i data-lucide="arrow-up-right"></i>用于评测</button>
-    </div>`).join("");
-  } catch (e) {
-    box.innerHTML = `<div class="es-gen-hint">加载失败：${e.message}</div>`;
-  }
+  // 兼容保留：无冻结版本时的占位（当前生成库走 renderLib("qa")）
 }
 
 async function esLoadUploaded() {
@@ -96,21 +99,91 @@ async function esLoadUploaded() {
 }
 
 async function esLoadPublic() {
-  const fin = $("#esPubFinance"), risk = $("#esPubRisk");
-  fin.innerHTML = risk.innerHTML = `<div class="es-gen-hint">加载中…</div>`;
+  const box = $("#esPubDims");
+  if (!box) return;
+  // 6 维度填数量 UI（后端后接，可用量暂用占位 total）
+  box.innerHTML = ES_PUBLIC_DIMS.map(d => `<div class="pub-dim-row">
+    <div class="pdr-info">
+      <div class="pdr-name">${d.name}</div>
+      <div class="pdr-file">${d.file} · 可用 ${d.total} 题</div>
+    </div>
+    <div class="pdr-input">
+      <input type="number" class="gen-input pub-dim-num" min="0" max="${d.total}" value="0" data-dim="${d.key}" data-total="${d.total}" placeholder="0" />
+      <span class="pdr-unit">题</span>
+    </div>
+  </div>`).join("");
+  box.addEventListener("input", e => {
+    const inp = e.target.closest(".pub-dim-num");
+    if (!inp) return;
+    let v = parseInt(inp.value) || 0;
+    if (v < 0) v = 0;
+    if (v > Number(inp.dataset.total)) { v = Number(inp.dataset.total); inp.value = v; }
+    ES_PUBLIC_DIMS.forEach(d => { if (d.key === inp.dataset.dim) d.picked = v; });
+    esPubCount();
+  });
+  esPubCount();
+}
+
+function esPubCount() {
+  const v = ES_PUBLIC_DIMS.reduce((s, d) => s + (d.picked || 0), 0);
+  const el = $("#gcsPub");
+  if (el) el.textContent = v > 0 ? `抽样 ${v} 题` : "未选";
+}
+
+async function esLoadCustom() {
+  // 摘要：生成库 / 上传库 题量（默认全选）
+  const genEl = $("#gcsGen"), upEl = $("#gcsUp");
+  let genN = 0, upN = 0;
   try {
-    const sets = await apiGet(`/api/public-sets`).catch(() => []);
-    const finance = sets.filter(esIsFinance);
-    const riskSets = sets.filter(s => !esIsFinance(s));
-    fin.innerHTML = finance.length
-      ? finance.map(s => esSetRow(s, "finance")).join("")
-      : `<div class="es-gen-hint">暂无金融通用知识库条目。</div>`;
-    risk.innerHTML = riskSets.length
-      ? riskSets.map(s => esSetRow(s, "risk")).join("")
-      : `<div class="es-gen-hint">暂无风险合规知识库条目。</div>`;
-  } catch (e) {
-    fin.innerHTML = risk.innerHTML = `<div class="es-gen-hint">加载失败：${e.message}</div>`;
-  }
+    const sets = await apiGet(`/api/eval-sets/uploaded`).catch(() => []);
+    upN = (sets || []).reduce((s, x) => s + (x.total_cases || 0), 0);
+  } catch (e) {}
+  // 生成库题量：从 qa 视图聚合（质量与人工审核库内全部评测集）
+  try {
+    genN = (window.__qaTotalCases != null) ? window.__qaTotalCases : 0;
+  } catch (e) {}
+  if (genEl) genEl.textContent = genN > 0 ? `${genN} 题（全选）` : "—";
+  if (upEl) upEl.textContent = upN > 0 ? `${upN} 题（全选）` : "—";
+  esPubCount();
+  const build = $("#gcBuildBtn");
+  const result = $("#gcResult");
+  if (build) build.onclick = async () => {
+    const name = ($("#gcName").value || "").trim();
+    if (!name) { toast("请填写自定义评测集库名称"); return; }
+    const pubN = ES_PUBLIC_DIMS.reduce((s, d) => s + (d.picked || 0), 0);
+    const useGen = $("#gcGenAll").checked, useUp = $("#gcUpAll").checked, usePub = $("#gcPubOn").checked;
+    if (!useGen && !useUp && !(usePub && pubN > 0)) { toast("请至少选择一个来源"); return; }
+    build.disabled = true; build.textContent = "生成中…";
+    try {
+      // 后端后接：真实合并三库抽样。当前前端演示，记录选择并展示合并摘要。
+      const summary = {
+        name,
+        generate: useGen ? genN : 0,
+        uploaded: useUp ? upN : 0,
+        public: usePub ? pubN : 0,
+        public_dims: ES_PUBLIC_DIMS.filter(d => d.picked > 0).map(d => ({ dim: d.name, n: d.picked })),
+        created_at: new Date().toISOString(),
+      };
+      window.__customSets = window.__customSets || [];
+      window.__customSets.push(summary);
+      if (result) result.innerHTML = `<div class="list-row">
+        <span class="st" style="--c:#7A4FB0"></span>
+        <div class="lr-tx">
+          <div class="lr-q">${summary.name}</div>
+          <div class="lr-m">生成库 ${summary.generate} · 上传库 ${summary.uploaded} · 公共库 ${summary.public} 题${summary.public_dims.length ? " · " + summary.public_dims.map(d => d.dim + " " + d.n).join("/") : ""}</div>
+        </div>
+        <span class="es-tag ok">已生成</span>
+      </div>` + (result.innerHTML || "");
+      toast("自定义评测集库已生成：" + name);
+      $("#gcName").value = "";
+    } catch (e) {
+      toast("生成失败：" + e.message);
+    } finally {
+      build.disabled = false;
+      build.innerHTML = `<i data-lucide="box"></i>生成自定义评测集库`;
+      icons();
+    }
+  };
 }
 
 // 上传评测集
@@ -149,10 +222,6 @@ async function esHandleUpload(files) {
 // 「用于评测」→ 跳到评测运行页并预选该来源
 function esPickForEval(kind, id) {
   const map = {
-    doc: { source: "doc_generated", version_id: Number(id) },
-    uploaded: { source: "uploaded", set_id: Number(id) },
-    finance: { source: "public", set_id: Number(id) },
-    risk: { source: "public", set_id: Number(id) },
     upload: { source: "uploaded", set_id: Number(id) },
   };
   window.__evPreset = map[kind] || null;
@@ -161,6 +230,10 @@ function esPickForEval(kind, id) {
 
 // 事件绑定（在 07-init 统一委托，这里仅声明处理函数）
 document.addEventListener("click", e => {
+  const subRow = e.target.closest("#esSubNav .tree-row");
+  if (subRow) { window.__esSub = subRow.dataset.sub; renderEvalSet(); return; }
+  const genBtn = e.target.closest("#esGenBtn");
+  if (genBtn) { window.__esSub = "gen"; renderEvalSet(); return; }
   const seg = e.target.closest("#esViewSeg .seg button");
   if (seg) { window.__esView = seg.dataset.es; renderEvalSet(); return; }
   const pick = e.target.closest(".es-pick");

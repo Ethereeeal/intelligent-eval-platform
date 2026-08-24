@@ -103,7 +103,7 @@
             const pg = job.progress || 0;
             DOCS[id].parseProgress = Math.max(30, Math.min(99, pg));
             DOCS[id].status = `知识点抽取中 ${Math.round(pg)}%`;
-            if (state.view === "doclib" && state.sel.doc === id) renderDocProgress(id);
+            if ((state.view === "doclib" || (state.view === "evalset" && window.__esView === "doclib")) && state.sel.doc === id) renderDocProgress(id);
             if (job.finished || job.status === "completed" || job.status === "failed") {
               clearInterval(poll);
               await loadData();                    // 重新拉取后端最新文档/知识点（覆盖临时文档）

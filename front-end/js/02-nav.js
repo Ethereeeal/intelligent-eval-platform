@@ -1,20 +1,17 @@
   /* ---- 评测集生成：选项随来源类型动态渲染 ---- */
   const UPLOAD_DIR = "uploadTargetDir"; // sessionKey for picked upload dir
 
-  /* ---------------- 五大栏目 ---------------- */
+  /* ---------------- 栏目 ---------------- */
   const NAV = [
     { view: "overview", label: "概览", icon: "layout-dashboard" },
-    { view: "doclib", label: "输入文档库", icon: "folder-open" },
-    { view: "studio", label: "评测集生成", icon: "wand-2", badge: { unread: true } },
-    { view: "qalib", label: "评测集库", icon: "message-square-text", badge: { unread: true } },
-    { view: "evalset", label: "评测集库", icon: "library-books" },
+    { view: "evalset", label: "评测集", icon: "layers", badge: { unread: true } },
     { view: "evaluation", label: "评测运行", icon: "gauge" }
   ];
 
   // 未读计数：表示「刚生成完成、用户尚未点进去查看」的评测集集数量。
   // 起始为真实数据里有评测集的文档数；点击进入对应栏目后即标为已读（清零）。
   function unreadCount(view) {
-    if (view === "studio" || view === "qalib") {
+    if (view === "evalset") {
       return Object.keys(DOCS).filter(id => (DOCS[id].qa || []).length > 0).length;
     }
     return 0;
@@ -37,11 +34,8 @@
     $$("#nav .nav-item").forEach(el => el.classList.toggle("active", el.dataset.view === view));
     // 提醒点：点击即已读（变白）
     if (n && n.badge) { n.badge.unread = false; renderNav(); syncBell(); }
-    if (view === "doclib") renderLib("doc");
-    if (view === "qalib") renderLib("qa");
-    if (view === "studio") renderSrcList(); // 每次进入「评测集生成」都按最新 TREE 刷新源文件树
-    if (view === "evalset") renderEvalSet();
-    if (view === "evaluation") renderEvaluation();
+    if (view === "evalset") renderEvalSet(); // 评测集页：默认进入「评测集生成」子视图；含输入文档库/生成库/上传库/公共库/自定义库
+    if (view === "evaluation") window.renderEvaluation();
   }
 
   function syncBell() {
@@ -627,4 +621,3 @@
     if (TREE.children) walk(TREE.children, "");
     return res;
   }
-
