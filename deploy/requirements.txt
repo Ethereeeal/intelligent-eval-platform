@@ -29,3 +29,4 @@ openai>=1.30.0
 # 文档解析（按输入类型选装；当前 parser 仅支持 txt/md）
 PyMuPDF>=1.24.0                  # PDF（政策 / 财报常见），import 名 fitz
 python-docx>=1.1.0               # Word
+openpyxl>=3.1.0                  # Excel 解析与评测原始报告导出

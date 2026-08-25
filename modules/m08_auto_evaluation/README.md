@@ -71,6 +71,7 @@ POST /api/evaluation-runs {composition_id, adapter, adapter_config}
 | GET | `/api/evaluation-runs` | 运行列表 |
 | GET | `/api/evaluation-runs/{run_id}` | 运行进度 + 指标汇总 |
 | GET | `/api/evaluation-runs/{run_id}/results` | 单题结果 + 分层指标汇总 |
+| POST | `/api/evaluation-runs/{run_id}/export` | 导出 Excel 原始报告；`result_ids` 为空时导出全部，传入列表时导出筛选结果 |
 | GET | `/api/evaluation-runs/{run_id}/failures` | 该运行的失败记录（`E2E` 端到端失败或 `D9` 运行异常） |
 | POST | `/api/evaluation-runs/{run_id}/retry` | 重跑（新 run，回归比较） |
 | GET | `/api/error-book` | ErrorBook 查询（智能体失败诊断与优化分析，支持 diagnosis/status 过滤 + 聚类） |

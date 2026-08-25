@@ -1,6 +1,13 @@
 /* 评测工作台：配置与结果两个二级页面。 */
 (() => {
-  const state = window.__evWorkspace = window.__evWorkspace || { tab: "config", compositionId: null, runId: null, results: [], threshold: .5 };
+  const state = window.__evWorkspace = window.__evWorkspace || {
+    tab: "config",
+    compositionId: null,
+    runId: null,
+    results: [],
+    filteredResults: [],
+    threshold: .5,
+  };
   const $w = () => document.getElementById("evWorkspace");
   const post = async (path, body) => {
     const r = await fetch(API_BASE + path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -8,6 +15,38 @@
     return r.json();
   };
   const esc = v => String(v == null ? "" : v).replace(/[&<>"']/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
+  const parseServerDate = value => {
+    if (value instanceof Date) return value;
+    const text = String(value || "");
+    return new Date(text && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(text) ? `${text}Z` : text);
+  };
+  const formatDateTime = value => {
+    const date = parseServerDate(value);
+    if (Number.isNaN(date.getTime())) return "—";
+    return new Intl.DateTimeFormat("zh-CN", {
+      year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false,
+    }).format(date).replaceAll("/", "-");
+  };
+  const defaultRunName = compositionName => `${compositionName}_${formatDateTime(new Date()).replace(/[\s:]/g, "-")}`;
+  const formatDuration = seconds => {
+    if (!Number.isFinite(seconds) || seconds < 0) return "计算中";
+    const rounded = Math.max(0, Math.round(seconds));
+    if (rounded < 60) return `约 ${rounded} 秒`;
+    const minutes = Math.floor(rounded / 60), remain = rounded % 60;
+    if (minutes < 60) return `约 ${minutes} 分 ${remain} 秒`;
+    const hours = Math.floor(minutes / 60), remainMinutes = minutes % 60;
+    return `约 ${hours} 小时 ${remainMinutes} 分`;
+  };
+  const estimateRemaining = run => {
+    const finished = Number(run.finished || 0), total = Number(run.total || 0);
+    if (!run.started_at || finished < 1 || total <= finished) return total && total <= finished ? "即将完成" : "计算中";
+    const elapsedSeconds = Math.max(0, (Date.now() - parseServerDate(run.started_at).getTime()) / 1000);
+    return formatDuration(elapsedSeconds / finished * (total - finished));
+  };
+  const maskHeaders = headers => Object.fromEntries(Object.keys(headers || {}).map(key => [key, "••••••"]));
+  const runStatusLabel = status => ({ pending: "等待中", running: "运行中", done: "已完成", failed: "失败" })[status] || status || "未知";
+  const caseStatusLabel = status => ({ passed: "通过", failed: "未通过", error: "异常", unscored: "未评分", pending: "等待中" })[status] || status || "—";
 
   function shell(content) {
     $w().innerHTML = `<div class="ev-layout"><aside class="ev-side"><button class="ev-side-item ${state.tab === "config" ? "on" : ""}" data-ev-tab="config"><i data-lucide="sliders-horizontal"></i><span>评测配置</span></button><button class="ev-side-item ${state.tab === "results" ? "on" : ""}" data-ev-tab="results"><i data-lucide="chart-no-axes-combined"></i><span>评测结果</span></button></aside><div class="ev-main">${content}</div></div>`;
@@ -57,9 +96,78 @@
   async function start() {
     if (!state.compositionId) return toast("请先从评测库选择一个评测集");
     try {
-      const run = await post("/api/evaluation-runs", { composition_id: state.compositionId, name: null, adapter: state.adapter, adapter_config: adapterConfig() });
-      state.runId = run.run_id; state.tab = "results"; render(); toast("已发起评测运行");
+      const compositions = await apiGet("/api/compositions").catch(() => []);
+      const composition = compositions.find(item => Number(item.composition_id) === Number(state.compositionId));
+      if (!composition) return toast("所选评测集版本不存在，请重新选择");
+      openRunConfirmation(composition, adapterConfig());
     } catch (e) { toast("发起失败：" + e.message); }
+  }
+
+  function openRunConfirmation(composition, config) {
+    const modal = document.createElement("div");
+    modal.className = "modal-mask";
+    const adapterLabel = state.adapter === "http" ? "通用 HTTP" : "OpenAI 兼容接口";
+    const requestSummary = state.adapter === "http" ? {
+      method: config.method,
+      url: config.url,
+      headers: maskHeaders(config.headers),
+      body: (() => { try { return JSON.parse(config.body_template || "{}"); } catch { return config.body_template; } })(),
+      answer_path: config.answer_path,
+      timeout_seconds: config.timeout_seconds,
+    } : {
+      api_base: config.api_base,
+      model: config.model,
+      api_key: config.api_key ? "••••••" : "未填写",
+      system_prompt: config.system_prompt || "未设置",
+      request_body: {
+        model: config.model || "<model>",
+        messages: [
+          ...(config.system_prompt ? [{ role: "system", content: config.system_prompt }] : []),
+          { role: "user", content: "{{question}}" },
+        ],
+      },
+    };
+    modal.innerHTML = `<div class="modal ev-confirm-modal">
+      <div class="modal-head"><span>确认发起评测</span><button class="modal-x" aria-label="关闭">×</button></div>
+      <div class="modal-body">
+        <label class="es-field" for="evConfirmName">运行名称</label>
+        <input class="es-input" id="evConfirmName" maxlength="255" value="${esc(defaultRunName(composition.name || `评测集-${composition.composition_id}`))}" />
+        <div class="ev-confirm-grid">
+          <section class="ev-confirm-card"><div class="ev-confirm-label">请求配置</div><b>${esc(adapterLabel)}</b><pre>${esc(JSON.stringify(requestSummary, null, 2))}</pre></section>
+          <section class="ev-confirm-card"><div class="ev-confirm-label">可执行评测集</div><b>${esc(composition.name || `评测集 #${composition.composition_id}`)}</b><dl><div><dt>版本</dt><dd>#${composition.composition_id}</dd></div><div><dt>来源数</dt><dd>${Array.isArray(composition.items) ? composition.items.length : 0}</dd></div><div><dt>创建时间</dt><dd>${esc(formatDateTime(composition.created_at))}</dd></div></dl></section>
+        </div>
+        <p class="ev-confirm-note"><i data-lucide="shield-check"></i>密钥及请求头敏感值仅以掩码展示，不会写入评测报告。</p>
+      </div>
+      <div class="modal-foot"><button class="btn ghost modal-cancel">返回修改</button><button class="btn primary" id="evConfirmStart"><i data-lucide="play"></i>确认发起</button></div>
+    </div>`;
+    document.body.appendChild(modal);
+    icons();
+    const close = () => modal.remove();
+    modal.querySelector(".modal-x").onclick = close;
+    modal.querySelector(".modal-cancel").onclick = close;
+    modal.addEventListener("click", event => { if (event.target === modal) close(); });
+    modal.querySelector("#evConfirmStart").onclick = async event => {
+      const name = modal.querySelector("#evConfirmName").value.trim();
+      if (!name) return toast("请填写运行名称");
+      const button = event.currentTarget;
+      button.disabled = true;
+      button.innerHTML = '<span class="spinner"></span>正在发起';
+      try {
+        const run = await post("/api/evaluation-runs", { composition_id: state.compositionId, name, adapter: state.adapter, adapter_config: config });
+        state.runId = run.run_id;
+        state.tab = "results";
+        close();
+        render();
+        toast("评测已发起，正在执行跑批");
+      } catch (error) {
+        button.disabled = false;
+        button.innerHTML = '<i data-lucide="play"></i>确认发起';
+        icons();
+        toast("发起失败：" + error.message);
+      }
+    };
+    modal.querySelector("#evConfirmName").focus();
+    modal.querySelector("#evConfirmName").select();
   }
 
   function metrics(summary, rows) {
@@ -69,28 +177,78 @@
   }
 
   async function results() {
-    const runs = await apiGet("/api/evaluation-runs").catch(() => []);
+    const [runs, compositions] = await Promise.all([
+      apiGet("/api/evaluation-runs").catch(() => []),
+      apiGet("/api/compositions").catch(() => []),
+    ]);
     if (!state.runId && runs[0]) state.runId = runs[0].run_id;
     let data = { results: [], summary: {} }, run = null;
     if (state.runId) { data = await apiGet(`/api/evaluation-runs/${state.runId}/results`).catch(() => data); run = runs.find(x => x.run_id === state.runId); }
     state.results = data.results || [];
-    shell(`<div class="ev-result-head"><div><label class="es-field">评测运行</label><select class="es-input" id="evRunSelect"><option value="">请选择运行</option>${runs.map(r => `<option value="${r.run_id}" ${r.run_id === state.runId ? "selected" : ""}>#${r.run_id} ${esc(r.name || "未命名运行")} · ${esc(r.status)}</option>`).join("")}</select></div><div class="ev-threshold"><label class="es-field">通过阈值</label><input class="es-input" id="evThreshold" type="number" min="0" max="1" step=".05" value="${state.threshold}"/></div></div>${run && run.status === "running" ? `<div class="ev-progress"><div class="ev-bar"><span style="width:${run.progress || 0}%"></span></div><div class="ev-progress-t">跑批中 ${run.finished || 0}/${run.total || 0}</div></div>` : ""}${metrics(data.summary || {}, state.results)}<div class="card card-pad ev-report"><div class="card-t">原始评测报告</div><div class="ev-filters"><input class="es-input" id="evSearch" placeholder="搜索问题、标准答案或智能体回答"/><select class="es-input" id="evStatus"><option value="">全部状态</option><option value="passed">通过</option><option value="failed">未通过</option><option value="error">异常</option><option value="diagnosis">有 ErrorBook</option></select><button class="btn ghost" id="evLow">仅低于阈值</button></div><div class="ev-table-wrap"><table class="ev-table"><thead><tr><th>问题 / 标准答案</th><th>智能体回答 A'</th><th>得分</th><th>耗时</th><th>状态 / 归因</th></tr></thead><tbody id="evReportRows"></tbody></table></div></div>`);
-    document.getElementById("evRunSelect").onchange = e => { state.runId = Number(e.target.value) || null; render(); };
+    const groups = compositions.map(composition => ({
+      ...composition,
+      runs: runs.filter(item => Number(item.composition_id) === Number(composition.composition_id)),
+    })).filter(group => group.runs.length);
+    const orphanRuns = runs.filter(item => !compositions.some(composition => Number(composition.composition_id) === Number(item.composition_id)));
+    if (orphanRuns.length) groups.push({ composition_id: "unknown", name: "历史评测集", runs: orphanRuns });
+    const selectedComposition = run ? compositions.find(item => Number(item.composition_id) === Number(run.composition_id)) : null;
+    const catalog = runs.length ? groups.map(group => {
+      const selected = run && String(group.composition_id) === String(run.composition_id);
+      return `<details class="ev-run-group" ${selected ? "open" : ""}><summary><span><i data-lucide="folder${selected ? "-open" : ""}"></i><b>${esc(group.name || `评测集 #${group.composition_id}`)}</b></span><small>版本 #${esc(group.composition_id)} · ${group.runs.length} 次</small></summary><div class="ev-run-items">${group.runs.map(item => `<button class="ev-run-item ${item.run_id === state.runId ? "on" : ""}" data-run-id="${item.run_id}"><span class="ev-run-status ${esc(item.status)}"></span><span><b>${esc(item.name || `运行 #${item.run_id}`)}</b><small>${esc(formatDateTime(item.created_at))} · ${esc(runStatusLabel(item.status))}</small></span></button>`).join("")}</div></details>`;
+    }).join("") : `<div class="ev-empty-catalog"><i data-lucide="folder-search"></i><span>暂无评测结果</span></div>`;
+    const progress = run && run.status === "running" ? `<section class="ev-progress-card"><div class="ev-progress-head"><div><span class="ev-running-dot"></span><b>评测执行中</b><small>完成后将自动刷新指标与原始报告</small></div><strong>${Number(run.progress || 0)}%</strong></div><div class="ev-bar"><span style="width:${Number(run.progress || 0)}%"></span></div><div class="ev-progress-meta"><span>${Number(run.finished || 0)} / ${Number(run.total || 0)} 题</span><span><i data-lucide="clock-3"></i>预计剩余 ${esc(estimateRemaining(run))}</span></div></section>` : "";
+    const content = run ? `<div class="ev-result-title"><div><span class="es-tag">${esc(runStatusLabel(run.status))}</span><h2>${esc(run.name || `运行 #${run.run_id}`)}</h2><p>${esc(selectedComposition?.name || `评测集 #${run.composition_id}`)} · 版本 #${esc(run.composition_id)} · ${esc(formatDateTime(run.created_at))}</p></div><label class="ev-threshold">通过阈值<input class="es-input" id="evThreshold" type="number" min="0" max="1" step=".05" value="${state.threshold}"/></label></div>${progress}${metrics(data.summary || {}, state.results)}<div class="card card-pad ev-report"><div class="ev-report-head"><div><div class="card-t">原始评测报告</div><p>完整保留问题、标准答案、智能体回答、评分与归因信息。</p></div><div class="ev-export-wrap"><button class="btn ghost" id="evExportToggle"><i data-lucide="download"></i>导出报告<i data-lucide="chevron-down"></i></button><div class="ev-export-popover" id="evExportPopover" hidden><label><input type="checkbox" id="evExportFiltered"/>仅导出当前筛选结果</label><small>默认导出当前运行的全部原始报告</small><button class="btn primary" id="evExportConfirm"><i data-lucide="file-spreadsheet"></i>导出 Excel</button></div></div></div><div class="ev-filters"><input class="es-input" id="evSearch" placeholder="搜索问题、标准答案或智能体回答"/><select class="es-input" id="evStatus"><option value="">全部状态</option><option value="passed">通过</option><option value="failed">未通过</option><option value="error">异常</option><option value="diagnosis">有 ErrorBook</option></select></div><div class="ev-table-wrap"><table class="ev-table"><thead><tr><th>问题 / 标准答案</th><th>智能体回答 A'</th><th>得分</th><th>耗时</th><th>状态 / 归因</th></tr></thead><tbody id="evReportRows"></tbody></table></div></div>` : `<div class="ev-result-empty"><span><i data-lucide="chart-no-axes-combined"></i></span><h2>选择一次评测运行</h2><p>从左侧评测集版本目录中展开并选择运行，即可查看指标和原始报告。</p><button class="btn primary" id="evConfigBtn">前往评测配置</button></div>`;
+    shell(`<div class="ev-results-layout"><aside class="ev-run-catalog"><div class="ev-catalog-head"><b>结果目录</b><small>按可执行评测集版本归档</small></div>${catalog}</aside><div class="ev-result-content">${content}</div></div>`);
+    document.querySelectorAll("[data-run-id]").forEach(button => button.onclick = () => { state.runId = Number(button.dataset.runId); render(); });
+    if (!run) { icons(); return; }
     ["evSearch", "evStatus", "evThreshold"].forEach(id => document.getElementById(id).oninput = filterRows);
-    document.getElementById("evLow").onclick = e => { e.currentTarget.classList.toggle("on"); filterRows(); };
+    const exportToggle = document.getElementById("evExportToggle"), exportPopover = document.getElementById("evExportPopover");
+    exportToggle.onclick = event => { event.stopPropagation(); exportPopover.hidden = !exportPopover.hidden; };
+    exportPopover.onclick = event => event.stopPropagation();
+    document.getElementById("evExportConfirm").onclick = exportReport;
     filterRows(); icons();
-    if (run && run.status === "running") setTimeout(() => { if (state.tab === "results") render(); }, 2000);
+    if (run && run.status === "running") {
+      const pollingRunId = run.run_id;
+      setTimeout(() => { if (state.tab === "results" && state.runId === pollingRunId) render(); }, 2000);
+    }
   }
 
   function filterRows() {
     const q = document.getElementById("evSearch").value.toLowerCase(), status = document.getElementById("evStatus").value;
     state.threshold = Number(document.getElementById("evThreshold").value || .5);
-    const low = document.getElementById("evLow").classList.contains("on");
-    const rows = state.results.filter(r => { const score = (r.scores || {}).score; const hay = `${r.question} ${r.gold_answer} ${r.answer}`.toLowerCase(); return (!q || hay.includes(q)) && (!status || (status === "diagnosis" ? r.diagnosis : r.status === status)) && (!low || (score != null && score < state.threshold)); });
-    document.getElementById("evReportRows").innerHTML = rows.length ? rows.map(r => { const s = r.scores || {}, diag = r.diagnosis || {}; return `<tr><td><b>${esc(r.question)}</b><small>标准答案：${esc(r.gold_answer || "—")}</small></td><td>${esc(r.answer || r.error_message || "—")}</td><td>${s.score == null ? "—" : Math.round(s.score * 100) + ""}</td><td>${s.latency_ms == null ? "—" : s.latency_ms + " ms"}</td><td><span class="es-tag ${r.status === "passed" ? "ok" : r.status === "error" ? "bad" : "warn"}">${esc(r.status || "—")}</span>${diag.root_cause ? `<small class="ev-errorbook">${esc(diag.root_cause)}</small>` : ""}</td></tr>`; }).join("") : `<tr><td colspan="5" class="es-gen-hint">没有符合条件的结果。</td></tr>`;
+    const rows = state.results.filter(r => { const hay = `${r.question} ${r.gold_answer} ${r.answer}`.toLowerCase(); return (!q || hay.includes(q)) && (!status || (status === "diagnosis" ? r.diagnosis : r.status === status)); });
+    state.filteredResults = rows;
+    document.getElementById("evReportRows").innerHTML = rows.length ? rows.map(r => { const s = r.scores || {}, diagnosis = typeof r.diagnosis === "string" ? r.diagnosis : r.diagnosis?.root_cause; return `<tr><td><b>${esc(r.question)}</b><small>标准答案：${esc(r.gold_answer || "—")}</small></td><td>${esc(r.answer || r.error_message || "—")}</td><td>${s.score == null ? "—" : Math.round(s.score * 100) + ""}</td><td>${s.latency_ms == null ? "—" : s.latency_ms + " ms"}</td><td><span class="es-tag ${r.status === "passed" ? "ok" : r.status === "error" ? "bad" : "warn"}">${esc(caseStatusLabel(r.status))}</span>${diagnosis ? `<small class="ev-errorbook">${esc(diagnosis)}</small>` : ""}</td></tr>`; }).join("") : `<tr><td colspan="5" class="es-gen-hint">没有符合条件的结果。</td></tr>`;
+  }
+
+  async function exportReport() {
+    if (!state.runId) return;
+    const filteredOnly = document.getElementById("evExportFiltered").checked;
+    if (filteredOnly && !state.filteredResults.length) return toast("当前筛选条件下没有可导出的结果");
+    const button = document.getElementById("evExportConfirm");
+    button.disabled = true;
+    button.textContent = "正在生成…";
+    try {
+      const response = await fetch(`${API_BASE}/api/evaluation-runs/${state.runId}/export`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ result_ids: filteredOnly ? state.filteredResults.map(item => item.result_id) : null }),
+      });
+      if (!response.ok) { const error = await response.json().catch(() => ({})); throw new Error(error.detail || response.status); }
+      const blob = await response.blob();
+      const disposition = response.headers.get("Content-Disposition") || "";
+      const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+      const filename = encodedName ? decodeURIComponent(encodedName) : `评测报告-${state.runId}.xlsx`;
+      const url = URL.createObjectURL(blob), link = document.createElement("a");
+      link.href = url; link.download = filename; document.body.appendChild(link); link.click(); link.remove();
+      URL.revokeObjectURL(url);
+      document.getElementById("evExportPopover").hidden = true;
+      toast(filteredOnly ? "已导出当前筛选结果" : "已导出全部原始报告");
+    } catch (error) { toast("导出失败：" + error.message); }
+    finally { button.disabled = false; button.innerHTML = '<i data-lucide="file-spreadsheet"></i>导出 Excel'; icons(); }
   }
 
   async function render() { if (!$w()) return; if (state.tab === "config") await config(); else await results(); }
   window.renderEvaluation = render;
-  document.addEventListener("click", e => { const tab = e.target.closest("[data-ev-tab]"); if (tab) { state.tab = tab.dataset.evTab; render(); } if (e.target.closest("#evConfigBtn")) { state.tab = "config"; render(); } });
+  document.addEventListener("click", e => { const tab = e.target.closest("[data-ev-tab]"); if (tab) { state.tab = tab.dataset.evTab; render(); } if (e.target.closest("#evConfigBtn")) { state.tab = "config"; render(); } const popover = document.getElementById("evExportPopover"); if (popover && !e.target.closest(".ev-export-wrap")) popover.hidden = true; });
 })();

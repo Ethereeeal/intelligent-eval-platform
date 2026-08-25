@@ -12,10 +12,17 @@
 """
 from __future__ import annotations
 
+from io import BytesIO
+from urllib.parse import quote
+
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import StreamingResponse
+from openpyxl import Workbook
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
 
 from modules.m05_dataset_lifecycle.services.composition import resolve_composition
-from modules.m08_auto_evaluation.schemas import EvaluationRunRequest
+from modules.m08_auto_evaluation.schemas import EvaluationExportRequest, EvaluationRunRequest
 from modules.m08_auto_evaluation.services.adapter import (
     ADAPTER_REGISTRY,
     AdapterError,
@@ -105,6 +112,92 @@ def evaluation_run_results(run_id: int):
     _get_run_or_404(run_id)
     results = _db.list_evaluation_results(run_id)
     return {"results": results, "summary": aggregate(results)}
+
+
+def _build_evaluation_workbook(run: dict, results: list[dict]) -> bytes:
+    """生成便于测试人员筛选和归因的 Excel 原始报告。"""
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "原始评测报告"
+    headers = [
+        "序号", "问题", "标准答案", "智能体回答", "得分", "状态", "耗时(ms)",
+        "维度", "难度", "来源", "归因", "错误信息", "用例ID",
+    ]
+    sheet.append(headers)
+    header_fill = PatternFill("solid", fgColor="6750A4")
+    for cell in sheet[1]:
+        cell.fill = header_fill
+        cell.font = Font(color="FFFFFF", bold=True)
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    for index, item in enumerate(results, start=1):
+        scores = item.get("scores") or {}
+        sheet.append([
+            index,
+            item.get("question") or "",
+            item.get("gold_answer") or "",
+            item.get("answer") or "",
+            scores.get("score"),
+            item.get("status") or "",
+            scores.get("latency_ms"),
+            item.get("dimension") or "",
+            item.get("difficulty") or "",
+            item.get("source") or "",
+            item.get("diagnosis") or "",
+            item.get("error_message") or "",
+            item.get("case_uid") or "",
+        ])
+    for row in sheet.iter_rows(min_row=2):
+        for cell in row:
+            cell.alignment = Alignment(vertical="top", wrap_text=True)
+    widths = [8, 42, 42, 42, 10, 12, 12, 16, 12, 16, 16, 32, 24]
+    for index, width in enumerate(widths, start=1):
+        sheet.column_dimensions[get_column_letter(index)].width = width
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = sheet.dimensions
+    sheet.row_dimensions[1].height = 24
+
+    summary = workbook.create_sheet("运行摘要")
+    composition_id = run.get("composition_id")
+    summary_rows = [
+        ("运行名称", run.get("name") or f"运行 #{run.get('run_id')}"),
+        ("运行ID", run.get("run_id")),
+        ("可执行评测集版本", f"#{composition_id}" if composition_id is not None else "—"),
+        ("适配器", run.get("adapter") or ""),
+        ("状态", run.get("status") or ""),
+        ("结果数量", len(results)),
+        ("创建时间", run.get("created_at") or ""),
+        ("开始时间", run.get("started_at") or ""),
+        ("完成时间", run.get("finished_at") or ""),
+    ]
+    for key, value in summary_rows:
+        summary.append([key, value])
+    summary.column_dimensions["A"].width = 22
+    summary.column_dimensions["B"].width = 48
+    for cell in summary[1]:
+        cell.font = Font(bold=True)
+
+    output = BytesIO()
+    workbook.save(output)
+    return output.getvalue()
+
+
+@evaluation_router.post("/evaluation-runs/{run_id}/export")
+def export_evaluation_run(run_id: int, payload: EvaluationExportRequest):
+    run = _get_run_or_404(run_id)
+    results = _db.list_evaluation_results(run_id)
+    if payload.result_ids is not None:
+        selected_ids = set(payload.result_ids)
+        results = [item for item in results if item.get("result_id") in selected_ids]
+    content = _build_evaluation_workbook(run, results)
+    base_name = (run.get("name") or f"评测报告-{run_id}").replace("/", "-").replace("\\", "-")
+    filename = f"{base_name}.xlsx"
+    headers = {"Content-Disposition": f"attachment; filename=report-{run_id}.xlsx; filename*=UTF-8''{quote(filename)}"}
+    return StreamingResponse(
+        BytesIO(content),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers=headers,
+    )
 
 
 @evaluation_router.get("/evaluation-runs/{run_id}/failures")

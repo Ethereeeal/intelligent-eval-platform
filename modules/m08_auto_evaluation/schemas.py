@@ -11,3 +11,9 @@ class EvaluationRunRequest(BaseModel):
     name: str | None = None
     adapter: str = "mock"
     adapter_config: dict | None = None
+
+
+class EvaluationExportRequest(BaseModel):
+    """导出一次运行的全部结果，或指定的页面筛选结果。"""
+
+    result_ids: list[int] | None = None

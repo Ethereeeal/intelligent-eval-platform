@@ -1,5 +1,9 @@
 import unittest
+from io import BytesIO
 
+from openpyxl import load_workbook
+
+from modules.m08_auto_evaluation.api import _build_evaluation_workbook
 from modules.m08_auto_evaluation.services.adapter import OpenAiCompatibleAdapter
 from modules.m08_auto_evaluation.services.diagnosis import diagnose
 from modules.m08_auto_evaluation.services.optimization import build_optimization
@@ -14,6 +18,37 @@ class _MeasuredAdapter(OpenAiCompatibleAdapter):
 
 
 class M08DemoTests(unittest.TestCase):
+    def test_evaluation_report_export_contains_raw_rows(self):
+        content = _build_evaluation_workbook(
+            {
+                "run_id": 12,
+                "composition_id": 5,
+                "name": "客服回归评测",
+                "adapter": "http",
+                "status": "done",
+                "created_at": "2026-08-25T10:00:00",
+            },
+            [{
+                "result_id": 1,
+                "case_uid": "case-1",
+                "question": "如何查询余额？",
+                "gold_answer": "登录后查询",
+                "answer": "请登录手机银行查询",
+                "scores": {"score": 0.9, "latency_ms": 120},
+                "status": "passed",
+                "dimension": "准确性",
+                "difficulty": "easy",
+                "source": "uploaded",
+                "diagnosis": None,
+                "error_message": None,
+            }],
+        )
+        workbook = load_workbook(BytesIO(content), read_only=True, data_only=True)
+        report = workbook["原始评测报告"]
+        self.assertEqual(report["B2"].value, "如何查询余额？")
+        self.assertEqual(report["E2"].value, 0.9)
+        self.assertEqual(workbook["运行摘要"]["B3"].value, "#5")
+
     def test_multi_turn_usage_accumulates_model_calls(self):
         adapter = _MeasuredAdapter()
         result = adapter.run_multi(
