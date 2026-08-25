@@ -5,7 +5,7 @@
   const NAV = [
     { view: "overview", label: "概览", icon: "layout-dashboard" },
     { view: "doclib", label: "文档库管理", icon: "folder-kanban" },
-    { view: "evalset", label: "评测集库", icon: "library-books", badge: { unread: true } },
+    { view: "evalset", label: "评测集库管理", icon: "library", badge: { unread: true } },
     { view: "evaluation", label: "评测运行", icon: "gauge" }
   ];
 
@@ -36,8 +36,7 @@
     // 提醒点：点击即已读（变白）
     if (n && n.badge) { n.badge.unread = false; renderNav(); syncBell(); }
     if (view === "evalset") {
-      if ((window.__esSub || "gen") === "gen") renderEvalSetGenerate();
-      else renderEvalSetLibrary();
+      renderEvalSetLibrary();
     }
     if (view === "doclib") renderLib("doc");
     if (view === "evaluation") window.renderEvaluation();

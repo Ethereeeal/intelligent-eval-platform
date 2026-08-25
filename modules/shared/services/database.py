@@ -360,6 +360,12 @@ class DatabaseService:
                     conn.execute(text("ALTER TABLE generated_case ADD COLUMN folder_path VARCHAR(512) NULL"))
                 if "purpose" not in gcols:
                     conn.execute(text("ALTER TABLE generated_case ADD COLUMN purpose VARCHAR(16) NULL"))
+        # uploaded_eval_set.folder_path：上传库目录层级（相对「上传库」根，空=根目录）
+        if "uploaded_eval_set" in inspector.get_table_names():
+            ucols = {c["name"] for c in inspector.get_columns("uploaded_eval_set")}
+            if "folder_path" not in ucols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE uploaded_eval_set ADD COLUMN folder_path VARCHAR(512) NULL"))
         # eiu.document_id：冗余存储归属文件，使 EIU 可按文件目录组织（去掉 corpus 维度）
         if "eiu" in inspector.get_table_names():
             eiu_cols = {c["name"] for c in inspector.get_columns("eiu")}
@@ -1913,6 +1919,7 @@ class DatabaseService:
         template_type: str = "single",
         source_file: str | None = None,
         dimension: str | None = None,
+        folder_path: str | None = None,
     ) -> int:
         with SessionLocal() as session:
             row = UploadedEvalSetRow(
@@ -1920,6 +1927,7 @@ class DatabaseService:
                 template_type=template_type,
                 source_file=source_file,
                 dimension=dimension,
+                folder_path=folder_path,
             )
             session.add(row)
             session.commit()
@@ -1933,6 +1941,7 @@ class DatabaseService:
         template_type: str,
         source_file: str | None,
         dimension: str | None,
+        folder_path: str | None = None,
         cases: list[dict],
         quality_snapshot: dict,
     ) -> dict:
@@ -1943,6 +1952,7 @@ class DatabaseService:
                 template_type=template_type,
                 source_file=source_file,
                 dimension=dimension,
+                folder_path=folder_path,
                 review_status="quality_checked",
                 quality_snapshot=quality_snapshot,
                 total_cases=len(cases),
@@ -2052,6 +2062,7 @@ class DatabaseService:
             "template_type": row.template_type,
             "source_file": row.source_file,
             "dimension": row.dimension,
+            "folder_path": row.folder_path,
             "review_status": row.review_status,
             "quality_snapshot": row.quality_snapshot,
             "total_cases": row.total_cases,
@@ -2147,6 +2158,17 @@ class DatabaseService:
             rows = (
                 session.query(PublicEvalCaseRow)
                 .filter(PublicEvalCaseRow.set_id == set_id)
+                .order_by(PublicEvalCaseRow.case_id)
+                .all()
+            )
+            return [self._public_case_to_dict(r) for r in rows]
+
+    def list_public_cases_by_dimension(self, dimension: str) -> list[dict]:
+        """返回指定公共评测维度的所有有效样本，供组合按维度抽样。"""
+        with SessionLocal() as session:
+            rows = (
+                session.query(PublicEvalCaseRow)
+                .filter(PublicEvalCaseRow.dimension == dimension)
                 .order_by(PublicEvalCaseRow.case_id)
                 .all()
             )
@@ -2491,6 +2513,7 @@ class UploadedEvalSetRow(Base):
     template_type: Mapped[str] = mapped_column(String(16), nullable=False, default="single")
     source_file: Mapped[str | None] = mapped_column(String(255), nullable=True)
     dimension: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    folder_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     review_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     quality_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     total_cases: Mapped[int] = mapped_column(Integer, default=0)

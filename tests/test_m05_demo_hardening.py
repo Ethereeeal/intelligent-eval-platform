@@ -37,6 +37,68 @@ class _UploadedSetDatabase:
         return {"set_id": 1, "quality": kwargs["quality_snapshot"], "total_cases": len(kwargs["cases"])}
 
 
+class _ExternalMaterializeDatabase:
+    def __init__(self):
+        self.saved = []
+
+    def list_uploaded_cases(self, set_id):
+        return []
+
+    def get_uploaded_set(self, set_id):
+        return None
+
+    def list_public_cases(self, set_id):
+        return []
+
+    def list_public_cases_by_dimension(self, dimension):
+        if dimension == "base":
+            return [{"q": "基础问题", "a": "基础答案", "evidence": "公共证据"}]
+        return []
+
+    def save_eval_case(self, **kwargs):
+        self.saved.append(kwargs)
+
+
+class _FreezeMetadataDatabase:
+    def __init__(self):
+        self.snapshot_metadata = None
+        self.case_count = 0
+
+    def get_latest_version_number(self):
+        return None
+
+    def save_dataset_version(self, **kwargs):
+        self.snapshot_metadata = kwargs["snapshot_metadata"]
+        return 1
+
+    def list_generated_cases(self):
+        return []
+
+    def dedup_exact_cases(self, cases):
+        return {"keep": cases}
+
+    def list_uploaded_cases(self, set_id):
+        return [{"q": "上传问题", "a": "上传答案"}]
+
+    def get_uploaded_set(self, set_id):
+        return {"name": "上传集"}
+
+    def list_public_cases(self, set_id):
+        return []
+
+    def list_public_cases_by_dimension(self, dimension):
+        return []
+
+    def save_eval_case(self, **kwargs):
+        pass
+
+    def update_dataset_version(self, version_id, **kwargs):
+        self.case_count = kwargs["case_count"]
+
+    def get_dataset_version(self, version_id):
+        return {"version_id": version_id, "case_count": self.case_count, "snapshot_metadata": self.snapshot_metadata}
+
+
 class _PublicSetDatabase:
     def save_public_set(self, **kwargs):
         self.set_kwargs = kwargs
@@ -141,6 +203,7 @@ class M05DemoHardeningTests(unittest.TestCase):
             name="multi",
             template_type="multi",
             dimension=None,
+            folder_path="客服/多轮",
             cases=[
                 {
                     "session_id": "s1",
@@ -150,6 +213,7 @@ class M05DemoHardeningTests(unittest.TestCase):
         )
         self.assertEqual(database.payload["cases"][0]["q"], "final")
         self.assertEqual(database.payload["cases"][0]["a"], "two")
+        self.assertEqual(database.payload["folder_path"], "客服/多轮")
         self.assertEqual(result["quality"]["data_completeness_rate"], 1.0)
 
     def test_public_sets_start_as_quality_checked(self):
@@ -193,6 +257,29 @@ class M05DemoHardeningTests(unittest.TestCase):
         self.assertTrue(errors)
         with self.assertRaises(ValueError):
             resolve_composition(database, 1)
+
+    def test_public_dimension_quota_materializes_cases(self):
+        database = _ExternalMaterializeDatabase()
+        added = DatasetLifecycleService(database)._materialize_external(
+            version_id=7,
+            public_selections=[{"dimension": "base", "count": 1}],
+        )
+        self.assertEqual(added, 1)
+        self.assertEqual(database.saved[0]["source"], "public")
+        self.assertEqual(database.saved[0]["question"], "基础问题")
+
+    def test_generated_library_is_recorded_as_document_intermediate_artifact(self):
+        database = _FreezeMetadataDatabase()
+        result = DatasetLifecycleService(database).freeze_version(
+            name="来源追溯集",
+            uploaded_set_ids=[1],
+        )
+        self.assertEqual(result["case_count"], 1)
+        self.assertEqual(database.snapshot_metadata["generated_library"], {
+            "role": "intermediate_artifact",
+            "origin": "document_library",
+            "pipeline": ["m03_generation", "m04_quality_governance"],
+        })
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
   <script src="lucide.min.js"></script>
-  <link rel="stylesheet" href="styles.css?v=12" />
+  <link rel="stylesheet" href="styles.css?v=14" />
   <script src="chart.umd.min.js"></script>
 </head>
 <body>
@@ -108,10 +108,10 @@
           </div>
         </section>
 
-        <!-- ============ 评测集库（页面内分为生成与展示） ============ -->
+        <!-- ============ 评测集库管理 ============ -->
         <section class="view" data-view="evalset" hidden>
           <div class="page-head">
-            <div><h1>评测集库</h1><p class="sub">评测集生成与展示管理（生成库 / 上传库 / 公共库 / 评测集库）</p></div>
+            <div><h1>评测集库管理</h1><p class="sub">统一管理生成库、上传库、公共库与评测集库</p></div>
             <div class="page-actions">
               <button class="btn primary" id="esGenBtn"><i data-lucide="plus"></i>生成评测集</button>
               <button class="btn ghost" id="esUploadBtn"><i data-lucide="upload"></i>上传评测集</button>
@@ -120,19 +120,26 @@
           </div>
 
           <div class="lib-split">
-            <!-- 左侧目录：评测集生成 / 评测集展示 -->
+            <!-- 左侧目录：四类评测集库及其库文档 -->
             <div class="tree" id="esSubNav">
-              <div class="tree-bar"><span class="tree-bar-t">评测集</span></div>
               <div class="tree-body">
-                <div class="tree-row active" data-sub="gen"><i data-lucide="sparkles"></i><span>评测集生成</span></div>
-                <div class="tree-node es-show-node">
-                  <div class="tree-row" data-sub="show"><i data-lucide="layers"></i><span>评测集展示</span><i data-lucide="chevron-down" class="tw-chev"></i></div>
+                <div class="tree-node es-library-node">
+                  <div class="tree-row" data-es="generate" aria-expanded="true"><i data-lucide="folder-kanban"></i><span>生成库</span><i data-lucide="chevron-down" class="tw-chev"></i></div>
                   <div class="tree-children open">
-                    <div class="tree-row tree-child" data-es="generate"><i data-lucide="folder-kanban"></i><span>生成库</span></div>
-                    <div class="tree-row tree-child" data-es="uploaded"><i data-lucide="folder-up"></i><span>上传库</span></div>
-                    <div class="tree-row tree-child" data-es="public"><i data-lucide="folder-open"></i><span>公共库</span></div>
-                    <div class="tree-row tree-child" data-es="custom"><i data-lucide="folder-cog"></i><span>评测集库</span></div>
+                    <div id="qaTree" class="es-library-tree"></div>
                   </div>
+                </div>
+                <div class="tree-node es-library-node">
+                  <div class="tree-row" data-es="uploaded" aria-expanded="true"><i data-lucide="folder-up"></i><span>上传库</span><i data-lucide="chevron-down" class="tw-chev"></i></div>
+                  <div id="esUploadedTree" class="tree-children open"></div>
+                </div>
+                <div class="tree-node es-library-node">
+                  <div class="tree-row" data-es="public" aria-expanded="true"><i data-lucide="folder-open"></i><span>公共库</span><i data-lucide="chevron-down" class="tw-chev"></i></div>
+                  <div id="esPublicTree" class="tree-children open"></div>
+                </div>
+                <div class="tree-node es-library-node">
+                  <div class="tree-row" data-es="custom" aria-expanded="true"><i data-lucide="folder-cog"></i><span>评测集库</span><i data-lucide="chevron-down" class="tw-chev"></i></div>
+                  <div id="esCustomTree" class="tree-children open"></div>
                 </div>
               </div>
             </div>
@@ -168,19 +175,7 @@
                 <!-- 生成库（原按文档问答库：质量与人工审核） -->
                 <div id="esGenerate" class="es-pane">
                   <div class="card card-pad">
-                    <div class="card-t">生成库 · 库文档目录（质量与人工审核）
-                      <div class="page-actions" style="float:right">
-                        <button class="btn ghost" id="qaNewFolderBtn"><i data-lucide="folder-plus"></i>新建目录</button>
-                        <button class="btn ghost" id="qaUploadBtn"><i data-lucide="upload"></i>上传评测集</button>
-                        <button class="btn ghost" id="qaImportBtn"><i data-lucide="file-input"></i>导入</button>
-                        <button class="btn ghost" id="qaLibExportBtn"><i data-lucide="download"></i>导出评测集</button>
-                      </div>
-                    </div>
-                    <div class="es-gen-hint">由输入文档经知识点抽取 → 评测集生成 → m04 质量门禁后入库，并保留人工审核状态（生成库来源）。</div>
-                    <div class="lib-split">
-                      <div class="tree" id="qaTree">
-                        <div class="tree-bar"><span class="tree-bar-t">目录</span><button class="tree-toggle" id="treeToggle2" title="隐藏/显示目录"><i data-lucide="chevron-left"></i></button></div>
-                      </div>
+                    <div class="lib-split qa-library-content">
                       <div id="qaContent"></div>
                     </div>
                   </div>
@@ -189,38 +184,25 @@
                 <!-- 上传库 -->
                 <div id="esUploaded" class="es-pane" hidden>
                   <div class="card card-pad">
-                    <div class="card-t">上传库 · 库文档目录</div>
-                    <div class="es-gen-hint">用户上传单轮 / 多轮评测集，经字段校验与质量评估后入库（上传库来源）。参与自定义评测集库时默认全选，不支持抽样。</div>
                     <div id="esUploadedList" class="es-list"></div>
                   </div>
                 </div>
 
-                <!-- 公共库：按 6 维度填抽取数量（后端后接，当前占位） -->
+                <!-- 公共库 -->
                 <div id="esPublic" class="es-pane" hidden>
                   <div class="card card-pad">
-                    <div class="card-t">公共库 · 库文档目录</div>
-                    <div class="es-gen-hint">平台预置公共评测集，按以下 6 个维度分别填写要抽取的题量（抽样满足数量即可，不足时取全量）。括号内为库内可用题量。</div>
-                    <div id="esPubDims" class="es-pub-dims"></div>
+                    <div id="esPublicList" class="es-list"></div>
                   </div>
                 </div>
 
-                <!-- 自定义评测集库：组合生成器 -->
+                <!-- 评测集库 -->
                 <div id="esCustom" class="es-pane" hidden>
                   <div class="card card-pad">
-                    <div class="card-t">评测集库 · 库文档目录（组合生成）</div>
-                    <div class="es-gen-hint">从生成库（默认全选）、上传库（默认全选）、公共库（按上述维度填写的数量抽样）中合并，生成一份自定义评测集库，可用于后续批量评测。</div>
-                    <div class="gen-custom-sum">
-                      <div class="gcs-item"><span class="gcs-k">生成库</span><span class="gcs-v" id="gcsGen">—</span><label class="opt"><input type="checkbox" id="gcGenAll" checked /> <span>全选</span></label></div>
-                      <div class="gcs-item"><span class="gcs-k">上传库</span><span class="gcs-v" id="gcsUp">—</span><label class="opt"><input type="checkbox" id="gcUpAll" checked /> <span>全选</span></label></div>
-                      <div class="gcs-item"><span class="gcs-k">公共库</span><span class="gcs-v" id="gcsPub">—</span><label class="opt"><input type="checkbox" id="gcPubOn" checked /> <span>按填写数量抽样</span></label></div>
-                    </div>
-                    <div class="gen-custom-foot">
-                      <input type="text" class="gen-input" id="gcName" placeholder="自定义评测集库名称" />
-                      <button class="btn primary" id="gcBuildBtn"><i data-lucide="box"></i>生成自定义评测集库</button>
-                    </div>
-                    <div id="gcResult" class="es-list mt"></div>
+                    <div id="esCustomList" class="es-list"></div>
                   </div>
                 </div>
+
+                <div id="esLibraryDocDetail" class="es-pane" hidden></div>
 
               </div>
             </div>
@@ -271,13 +253,13 @@
   <!-- 应用脚本（按依赖顺序分文件加载，等价于原单文件 app.js，去掉 IIFE 包裹，统一为全局作用域） -->
   <script src="js/00-head.js?v=9"></script>
   <script src="js/01-data.js?v=9"></script>
-  <script src="js/02-nav.js?v=13"></script>
-  <script src="js/03-lib.js?v=10"></script>
+  <script src="js/02-nav.js?v=15"></script>
+  <script src="js/03-lib.js?v=18"></script>
   <script src="js/04-upload.js?v=9"></script>
-  <script src="js/05-evalset-generate.js?v=1"></script>
+  <script src="js/05-evalset-generate.js?v=5"></script>
   <script src="js/06-chat.js?v=9"></script>
   <script src="js/07-init.js?v=9"></script>
-  <script src="js/08-evalset-library.js?v=2"></script>
+  <script src="js/08-evalset-library.js?v=23"></script>
   <script src="js/09-evaluation.js?v=9"></script>
   <script src="js/10-evaluation-workspace.js?v=3"></script>
   <script>if (window.lucide) lucide.createIcons();</script>

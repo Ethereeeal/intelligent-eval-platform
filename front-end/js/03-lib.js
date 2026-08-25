@@ -142,9 +142,11 @@
       // 查看具体文档时，左目录已无导航价值，自动收起使评测集内容占满浏览器宽度
       const qaSplit = $("#qaContent").closest(".lib-split");
       const qaTreeEl = qaSplit ? qaSplit.querySelector(".tree") : null;
-      if (qaTreeEl) qaTreeEl.classList.add("collapsed");
-      if (qaSplit) qaSplit.classList.add("tree-hidden");
-      const rbEl = $(".tree-reopen"); if (rbEl) rbEl.classList.toggle("show", true);
+      if (qaTreeEl) {
+        qaTreeEl.classList.add("collapsed");
+        if (qaSplit) qaSplit.classList.add("tree-hidden");
+        const rbEl = $(".tree-reopen"); if (rbEl) rbEl.classList.toggle("show", true);
+      }
       // 删除文档后选中可能失效：自动回退到第一个仍有评测集的文档，否则展示空态
       if (!docId || !DOCS[docId]) {
         const first = Object.keys(DOCS).find(id => (DOCS[id].qa || []).length);
@@ -178,8 +180,8 @@
     // 打开「输出评测集库」栏目时，默认展开目录：renderLibContent 在查看具体集时会折叠目录，
     // 故在渲染内容之后再强制展开并取消隐藏，确保刚进入栏目时目录始终是展开态。
     if (mode === "qa") {
-      const qaSplit = $(treeId) && $(treeId).closest(".lib-split");
-      if (qaSplit) { qaSplit.classList.remove("tree-hidden"); qaSplit.querySelector(".tree").classList.remove("collapsed"); }
+      const qaSplit = $("#qaContent") && $("#qaContent").closest(".qa-library-content");
+      if (qaSplit) qaSplit.classList.remove("tree-hidden");
       const rb = $(".tree-reopen"); if (rb) rb.classList.remove("show");
       // 注：各节点的展开/折叠由 QA_COLLAPSED 记忆并在 qaTreeHTML 中渲染，
       // 此处只负责恢复整个目录面板的显示，不再强制展开所有节点。
@@ -230,22 +232,10 @@
   }
 
   function qaTreeHTML() {
-    let html = `<div class="tree-h up-title">评测集目录</div>`;
-    html += `<div class="lib-hint"><i data-lucide="info"></i><div><b>评测集库</b>：目录与「输入文档库」同构，评测集集随源文档目录自动归位；可新建文件夹、移动、重命名，并支持按目录导出。</div></div>`;
     const folders = qaFolderTree();
     const setsByPath = qaSetsByPath();
-    const total = Object.values(setsByPath).reduce((s, arr) => s + arr.length, 0);
-    const collapsed = !!window.QA_COLLAPSED[`${QA_ROOT.key}:`];
-    html += `<div class="tree-node">
-      <div class="tree-row${collapsed ? " collapsed" : ""}" data-qa-folder="1" data-qa-root="1" data-root-key="${QA_ROOT.key}" data-path="" data-name="${QA_ROOT.name}">
-        <i data-lucide="folder" class="tw-ic"></i><span class="tw-name">${QA_ROOT.name}</span><span class="tw-count">${total}</span><i data-lucide="chevron-down" class="tw-chev"></i>
-      </div>
-      <div class="tree-children${collapsed ? "" : " open"}">
-        ${folders.map(f => qaFolderNodeHTML(f, "", QA_ROOT, setsByPath)).join("")}
-        ${(setsByPath[""] || []).map(id => qaChildRowHTML(id, QA_ROOT, "")).join("")}
-      </div>
-    </div>`;
-    return html;
+    return `${folders.map(f => qaFolderNodeHTML(f, "", QA_ROOT, setsByPath)).join("")}
+      ${(setsByPath[""] || []).map(id => qaChildRowHTML(id, QA_ROOT, "")).join("")}`;
   }
 
   // 递归渲染用户文件夹节点（与输入库 treeNodeHTML 同构）
@@ -291,6 +281,7 @@
         row.classList.toggle("collapsed");
         // 记住折叠态，重渲染后保持
         window.QA_COLLAPSED[`${row.dataset.rootKey}:${row.dataset.path || ""}`] = row.classList.contains("collapsed");
+        renderQaFolderLanding(row.dataset.name, row.dataset.path || "");
       });
       row.addEventListener("dragover", (e) => {
         e.preventDefault(); e.stopPropagation();
@@ -328,6 +319,29 @@
       if (dot === "qa-folder") showQaFolderContextMenu(e, btn);
       else showQaContextMenu(e, btn);
     });
+  }
+
+  // 生成库文件夹的落地页：按当前目录路径汇总文档，避免依赖输入文档树的同名节点。
+  function renderQaFolderLanding(name, path) {
+    const docIds = Object.keys(DOCS).filter(id => {
+      const doc = DOCS[id];
+      const folderPath = (doc.qa || []).find(row => row.folderPath)?.folderPath || doc.qaFolderPath || "";
+      return folderPath === path || folderPath.startsWith(path + "/");
+    });
+    state.folderSel.qa = null;
+    const box = $("#qaContent");
+    if (!box) return;
+    box.innerHTML = `<div class="lib-head"><div class="lh-ic"><i data-lucide="folder-open"></i></div><div><div class="lh-title">${escapeHTML(name)}</div><div class="lh-sub">${docIds.length} 个评测集文档</div></div></div>${docIds.length ? `<div class="es-list"></div>` : emptyState("该目录下无评测集", "此目录及其子目录暂未生成评测集。")}`;
+    // 不依赖评测集库模块的首页行渲染，避免脚本加载顺序耦合。
+    if (docIds.length) {
+      box.querySelector(".es-list").innerHTML = docIds.map(id => `<div class="list-row es-home-doc" role="button" tabindex="0" data-qa-folder-doc="${id}"><span class="st" style="--c:#1B8A5A"></span><div class="lr-tx"><div class="lr-q">${escapeHTML(DOCS[id].name)}</div><div class="lr-m">${(DOCS[id].qa || []).length} 题</div></div><i data-lucide="chevron-right" class="lr-chev"></i></div>`).join("");
+      box.querySelectorAll("[data-qa-folder-doc]").forEach(item => item.onclick = () => {
+        const docId = item.dataset.qaFolderDoc;
+        state.sel.qa = docId;
+        renderLibContent("qa", docId);
+      });
+    }
+    icons();
   }
 
   // 将某库文档下的全部评测集移动到目标目录：调用后端逐条落库
@@ -668,7 +682,8 @@
     });
     return r;
   }
-  function qaRowHTML(q) {
+  function qaRowHTML(q, options = {}) {
+    const editable = options.editable !== false;
     // 仿 Excel：问题/答案分列，证据为原文语句，来源文档用 / 分级显示。
     return `<div class="qa-row" data-id="${q.id}">
       <div class=" qa-cell qa-q-cell" data-c="q"><span title="${escapeHTML(q.q)}">${escapeHTML(q.q)}</span></div>
@@ -677,40 +692,34 @@
       <div class="qa-cell qa-review-cell" data-c="review">${reviewBadge(q)}</div>
       <div class="qa-cell qa-ev-cell" data-c="evidence"><span title="${escapeHTML(q.evidence || "（无）")}">${escapeHTML(q.evidence || "（无）")}</span></div>
       <div class="qa-cell qa-src-cell" data-c="src"><span title="${escapeHTML(q.src || "（无）")}">${escapeHTML(q.src || "（无）")}</span></div>
-      <span class="ds-actions">
+      ${editable ? `<span class="ds-actions">
         <button class="btn ghost sm" data-act="qa-del" title="删除"><i data-lucide="trash-2"></i></button>
-      </span>
+      </span>` : ""}
     </div>`;
   }
-  function qaBlockHTML(rows, chartId, addDocId) {
+  function qaBlockHTML(rows, chartId, addDocId, options = {}) {
+    const editable = options.editable !== false;
+    const allowAdd = options.allowAdd === true;
     // 难度分布：简单 / 中等 / 难
     const c = { "简单": 0, "中等": 0, "难": 0 };
     rows.forEach(r => { c[r.diff] = (c[r.diff] || 0) + 1; });
-    // 质量与人工审核：显示完整评测集 + 通过/驳回比例（去掉质量均分）
-    const rr = reviewRatio(rows);
-    const review = rows.filter(r => r.review === "待审核");
     return `
-      <div class="sec-toggle qa-review-toggle" id="qaReviewToggle"><span class="t-arr">▸</span>质量与人工审核（通过 / 驳回比例）</div>
       <div class="ds-grid">
         <div class="ds-block"><div class="ds-title">难度分布（简单 / 中等 / 难）</div><div class="chart-box"><canvas id="${chartId}"></canvas></div></div>
-        <div class="ds-block qa-review-block collapsed" id="qaReviewBlock"><div class="ds-title">质量与人工审核（通过 / 驳回比例）</div>
-          <div class="stat-row"><span>通过比例</span><b>${rr.total ? Math.round(rr.pass / rr.total * 100) : 0}%</b></div>
-          <div class="stat-row"><span>驳回比例</span><b>${rr.total ? Math.round(rr.reject / rr.total * 100) : 0}%</b></div>
-          <div class="stat-row"><span>待审核</span><b>${rr.pending}</b></div>
-          <div class="review-list mt"><div class="review-tip">待审核评测集（需人工查看完整内容）</div>${review.length ? review.map(r => `<div class="review-item"><div class="ri-q">${r.q}</div><div class="ri-a">${r.a}</div><div class="ri-actions"><button class="btn ghost sm" data-rv="pass" data-id="${r.id}"><i data-lucide="check"></i>通过</button><button class="btn ghost sm" data-rv="rej" data-id="${r.id}"><i data-lucide="x"></i>驳回</button></div></div>`).join("") : '<div class="muted">无待审核项</div>'}</div>
+        <div class="ds-block qa-review-block"><div class="ds-title">评测集质量指标</div>
+          <div class="qa-quality-metrics" data-qa-quality-metrics>正在读取后端质量指标…</div>
         </div>
       </div>
       <div class="sec-h mt">评测集</div>
       <div class="qa-toolbar">
-        <div class="qa-add-wrap">
+        ${editable ? `${allowAdd ? `<div class="qa-add-wrap">
           <button class="btn primary sm" data-act="qa-add"><i data-lucide="plus"></i>新增评测集</button>
           <div class="qa-add-menu" id="qaAddMenu">
             <button data-add="single">新增单个评测集</button>
             <button data-add="file">从文件导入（含质量门禁审核）</button>
             <button data-add="tmpl">下载新增模板</button>
           </div>
-        </div>
-        <button class="btn ghost sm" id="qaExportBtn"><i data-lucide="download"></i>导出评测集</button>
+        </div>` : ""}<button class="btn ghost sm" id="qaExportBtn"><i data-lucide="download"></i>导出评测集</button>` : ""}
         <div class="qa-toolbar-right">
           <div class="qa-search"><i data-lucide="search"></i><input id="qaSearch" type="text" placeholder="搜索问题/答案/证据/来源…" /></div>
           <button class="btn ghost icon-only sm" id="qaFullscreenBtn" title="全屏查看"><i data-lucide="maximize"></i></button>
@@ -727,10 +736,21 @@
             <div class="qa-cell qa-src-cell">来源文档<span class="col-filter" data-filter="src"><i data-lucide="filter"></i></span><span class="qa-resize" data-resize="5"></span></div>
             <div class="qa-cell qa-act-cell">操作</div>
           </div>
-          <div id="qaRows">${rows.map(qaRowHTML).join("")}</div>
+          <div id="qaRows">${rows.map(row => qaRowHTML(row, options)).join("")}</div>
         </div>
       </div>`;
   }
+  window.renderReadonlyQaDetail = function(target, name, rows) {
+    const chartId = "esReadonlyQaChart";
+    target.innerHTML = `<div class="lib-head"><div class="lh-ic"><i data-lucide="message-square-text"></i></div><div><div class="lh-title">${escapeHTML(name)}</div><div class="lh-sub">评测集 · ${rows.length} 条</div></div></div>${qaBlockHTML(rows, chartId, null, { editable: false })}`;
+    const canvas = target.querySelector(`#${chartId}`);
+    if (canvas && window.Chart) {
+      const counts = { "简单": 0, "中等": 0, "难": 0 };
+      rows.forEach(row => { counts[row.diff] = (counts[row.diff] || 0) + 1; });
+      new Chart(canvas, { type: "doughnut", data: { labels: ["简单", "中等", "难"], datasets: [{ data: [counts["简单"], counts["中等"], counts["难"]], backgroundColor: ["#5FBF97", "#E0A85E", "#E08AA0"], borderWidth: 0 }] }, options: { maintainAspectRatio: false, cutout: "62%", plugins: { legend: { position: "bottom", labels: { font: { size: 11 } } } } } });
+    }
+    icons();
+  };
   function findDocOfQa(qid) { for (const id in DOCS) if (DOCS[id].qa.some(q => q.id === qid)) return id; return null; }
   function currentQaDoc() {
     if (state.folderSel.qa) { const ids = descendantDocs(findNode(state.folderSel.qa)); return ids[0]; }
@@ -761,6 +781,22 @@
         type: "doughnut",
         data: { labels: ["简单", "中等", "难"], datasets: [{ data: [c["简单"], c["中等"], c["难"]], backgroundColor: ["#5FBF97", "#E0A85E", "#E08AA0"], borderWidth: 0 }] },
         options: { maintainAspectRatio: false, cutout: "62%", plugins: { legend: { position: "bottom", labels: { font: { size: 11 } } } } }
+      });
+    }
+    const qualityTarget = $("#qaContent [data-qa-quality-metrics]");
+    const qualityDocId = currentQaDoc();
+    if (qualityTarget && qualityDocId) {
+      const documentId = Number(String(qualityDocId).replace(/^doc/, ""));
+      apiGet(`/api/quality-check/results?document_id=${documentId}`).then(summary => {
+        if (!qualityTarget.isConnected || currentQaDoc() !== qualityDocId) return;
+        const checkLabels = { answerability: "可回答性", faithfulness: "答案忠实性", uniqueness: "唯一性", evidence_sufficiency: "证据充分性", question_relevance: "问题相关性" };
+        const checks = Object.entries(summary.by_check_type || {}).map(([key, value]) => `<div class="stat-row"><span>${checkLabels[key] || key}</span><b>${Number(value.passed || 0)} 通过 / ${Number(value.failed || 0)} 未通过</b></div>`).join("");
+        const failedCases = (summary.failed_cases || []).slice(0, 3).map(item => `<div class="review-item"><div class="ri-q">样本 #${escapeHTML(String(item.case_id))} · ${(item.failed_checks || []).map(key => checkLabels[key] || key).join("、")}</div><div class="ri-a">${escapeHTML(item.reason || "未提供失败原因")}</div></div>`).join("");
+        qualityTarget.innerHTML = `<div class="stat-row"><span>评测集总量</span><b>${Number(summary.total_cases || 0)}</b></div>
+          <div class="stat-row"><span>质量通过</span><b>${Number(summary.passed || 0)}</b></div>
+          <div class="stat-row"><span>质量未通过</span><b>${Number(summary.failed || 0)}</b></div>${checks || `<div class="muted">尚未获得五项质量检查结果</div>`}${failedCases ? `<div class="review-list mt"><div class="review-tip">失败样本（最多展示 3 条）</div>${failedCases}</div>` : ""}`;
+      }).catch(() => {
+        if (qualityTarget.isConnected && currentQaDoc() === qualityDocId) qualityTarget.innerHTML = `<div class="muted">暂无后端质量指标</div>`;
       });
     }
     const addBtn = $("#qaContent [data-act='qa-add']");

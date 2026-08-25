@@ -117,6 +117,7 @@ def import_uploaded_set(
     dimension: str | None,
     cases: list[dict],
     source_file: str | None = None,
+    folder_path: str | None = None,
 ) -> dict:
     """格式校验 → 质量评估 → 入库（review_status=quality_checked，提示性门禁由前端确认后发布）。"""
     if template_type not in ("single", "multi"):
@@ -130,6 +131,7 @@ def import_uploaded_set(
         name=name,
         template_type=template_type,
         source_file=source_file,
+        folder_path=folder_path,
         dimension=dimension,
         cases=normalized_cases,
         quality_snapshot=quality,

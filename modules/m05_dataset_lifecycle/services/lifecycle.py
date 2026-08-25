@@ -84,30 +84,61 @@ class DatasetLifecycleService:
     def freeze_version(
         self,
         *,
+        name: str | None = None,
         created_by: str | None = None,
         document_ids: list[int] | None = None,
+        uploaded_set_ids: list[int] | None = None,
+        public_selections: list[dict] | None = None,
+        generation_config: dict | None = None,
     ) -> dict:
-        reason = self._empty_reason(document_ids=document_ids)
-        if reason:
+        """冻结生成库为不可变版本，并把用户指定的上传库 / 公共库题一并物化进同一版本。
+
+        方案 B（物化进 version）：
+        评测集在冻结阶段一次性定稿——生成库是由文档库文档经 m03 生成、m04 质检形成的
+        中间产物（native），再与选中的上传库 / 公共库题快照进
+        同一个 dataset_version 的 eval_case，用 source 字段区分（native / uploaded / public）。
+        冻结后该版本是一个真正完整、不可变的评测集，两次评测取同一版本得到完全相同的
+        题目，满足审计溯源与失败本诊断需求。
+
+        public_selections 每项形如 {"set_id": int, "count": int}，按公共库维度（每个 set
+        对应一个维度文件）抽取指定题数。
+        """
+        has_external = bool(uploaded_set_ids) or any(
+            int(item.get("count", 0)) > 0 for item in (public_selections or []) if isinstance(item, dict)
+        )
+        reason = self._empty_reason(document_ids=document_ids) if document_ids else None
+        if reason and not has_external:
             # 不创建空集、不进入发布流程（FR-DS-EMPTY-002）
             raise ValueError(f"无问题可生成：{reason}")
 
         latest = self.db.get_latest_version_number()
         version_number = _next_version_number(latest)
 
-        # 落库覆盖率报告（m02），回填 coverage_report_id（FR-DS-003 外键）
-        coverage_report_id = save_coverage_report(
-            snapshot_metadata={
-                "frozen_at": datetime.utcnow().isoformat() + "Z",
-            },
-        )
-        coverage = self.db.get_latest_coverage_report() or {}
-        # 发布门禁（FR-COVER-002）：85% / P0=100% / 对账率=100%，不达标阻断冻结
-        assert_coverage_gate(coverage)
+        # 文档来源沿用覆盖率门禁；纯外部组合不依赖 EIU 覆盖率。
+        coverage_report_id = None
+        coverage = {}
+        if document_ids:
+            coverage_report_id = save_coverage_report(
+                snapshot_metadata={"frozen_at": datetime.utcnow().isoformat() + "Z"},
+            )
+            coverage = self.db.get_latest_coverage_report() or {}
+            assert_coverage_gate(coverage)
         snapshot_metadata = self._build_snapshot_metadata(
             coverage=coverage,
             created_by=created_by,
         )
+        snapshot_metadata.update({
+            "composition_name": name or f"评测集库 {version_number}",
+            "generation_config": generation_config or {},
+            "document_ids": document_ids or [],
+            "generated_library": {
+                "role": "intermediate_artifact",
+                "origin": "document_library",
+                "pipeline": ["m03_generation", "m04_quality_governance"],
+            },
+            "uploaded_set_ids": uploaded_set_ids or [],
+            "public_selections": public_selections or [],
+        })
 
         version_id = self.db.save_dataset_version(
             version_number=version_number,
@@ -119,7 +150,39 @@ class DatasetLifecycleService:
         )
         # 把通过门禁的 generated_case 快照为不可变 eval_case 副本（按选择合并 + 精确去重）
         case_count = self._snapshot_cases(version_id=version_id, document_ids=document_ids)
+        # 方案 B：把选中的上传库 / 公共库题物化进同一版本
+        case_count += self._materialize_external(
+            version_id=version_id,
+            uploaded_set_ids=uploaded_set_ids,
+            public_selections=public_selections,
+        )
         self.db.update_dataset_version(version_id, case_count=case_count, freeze=True)
+        return self.db.get_dataset_version(version_id)
+
+    def materialize_external(
+        self,
+        *,
+        version_id: int,
+        uploaded_set_ids: list[int] | None = None,
+        public_selections: list[dict] | None = None,
+    ) -> dict:
+        """对已冻结的生成库版本追加物化外部题（上传库 / 公共库）。
+
+        用于"生成时未选外部题，后续在评测集库页面追加纳入"的场景。物化题写入同一
+        version 的 eval_case（source=uploaded / public），并返回更新后的版本。
+        """
+        version = self.db.get_dataset_version(version_id)
+        if version is None:
+            raise ValueError(f"version {version_id} 不存在")
+        if version.get("status") != "frozen":
+            raise ValueError("仅冻结版本可物化追加外部题")
+        added = self._materialize_external(
+            version_id=version_id,
+            uploaded_set_ids=uploaded_set_ids,
+            public_selections=public_selections,
+        )
+        new_count = self.db.count_eval_cases(version_id) + added
+        self.db.update_dataset_version(version_id, case_count=new_count)
         return self.db.get_dataset_version(version_id)
 
     def _snapshot_cases(
@@ -154,6 +217,68 @@ class DatasetLifecycleService:
             )
             count += 1
         return count
+
+    def _materialize_external(
+        self,
+        *,
+        version_id: int,
+        uploaded_set_ids: list[int] | None = None,
+        public_selections: list[dict] | None = None,
+    ) -> int:
+        """把上传库 / 公共库的选中题物化进指定 version 的 eval_case（方案 B 核心）。
+
+        - 上传库：uploaded_set_ids 中每个 set 的全部题（默认全选）落为 source=uploaded。
+        - 公共库：public_selections 每项可为 {"set_id": int, "count": int} 或
+          {"dimension": str, "count": int}，从指定评测集或维度中随机抽取题目，
+          落为 source=public。
+
+        返回本次物化的题数。公共库真实数据未导入时（list 为空）按 0 题处理，不报错，
+        保证机制可跑、后端数据接入后自动生效。
+        """
+        import random
+
+        added = 0
+        base_uid = f"ext_{version_id:04d}"
+
+        for set_id in uploaded_set_ids or []:
+            cases = self.db.list_uploaded_cases(set_id)
+            set_name = (self.db.get_uploaded_set(set_id) or {}).get("name", f"uploaded#{set_id}")
+            for idx, case in enumerate(cases):
+                self.db.save_eval_case(
+                    version_id=version_id,
+                    case_uid=f"{base_uid}_up_{set_id}_{idx:06d}",
+                    question=case["q"],
+                    gold_answer=case.get("a"),
+                    evidence=case.get("evidence"),
+                    source="uploaded",
+                    review_status="quality_checked",
+                )
+                added += 1
+
+        for sel in public_selections or []:
+            set_id = sel.get("set_id")
+            dimension = str(sel.get("dimension") or "").strip()
+            count = int(sel.get("count", 0))
+            if count <= 0 or (not set_id and not dimension):
+                continue
+            cases = self.db.list_public_cases(set_id) if set_id else self.db.list_public_cases_by_dimension(dimension)
+            if not cases:
+                continue
+            sampled = cases if count >= len(cases) else random.sample(cases, count)
+            public_key = set_id if set_id else dimension
+            for idx, case in enumerate(sampled):
+                self.db.save_eval_case(
+                    version_id=version_id,
+                    case_uid=f"{base_uid}_pub_{public_key}_{idx:06d}",
+                    question=case["q"],
+                    gold_answer=case.get("a"),
+                    evidence=case.get("evidence"),
+                    source="public",
+                    review_status="quality_checked",
+                )
+                added += 1
+
+        return added
 
     def _build_snapshot_metadata(
         self, *, coverage: dict, created_by: str | None

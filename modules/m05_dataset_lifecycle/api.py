@@ -33,6 +33,7 @@ class UploadedSetRequest(BaseModel):
     template_type: str = "single"
     dimension: str | None = None
     source_file: str | None = None
+    folder_path: str | None = None
     cases: list[dict]
 
 
@@ -54,6 +55,28 @@ class CompositionRequest(BaseModel):
     name: str
     items: list[dict]
     created_by: str | None = None
+
+
+class FreezeRequest(BaseModel):
+    """冻结生成库并物化外部题（方案 B：物化进 version）。
+
+    uploaded_set_ids：纳入的上传库 set id 列表（默认全选传全部）。
+    public_selections：公共库各维度抽样，每项 {"set_id": int, "count": int}。
+    """
+
+    name: str | None = Field(default=None, max_length=255)
+    created_by: str | None = None
+    document_ids: list[int] | None = None
+    uploaded_set_ids: list[int] | None = None
+    public_selections: list[dict] | None = None
+    generation_config: dict | None = None
+
+
+class MaterializeRequest(BaseModel):
+    """对已冻结版本追加物化外部题。"""
+
+    uploaded_set_ids: list[int] | None = None
+    public_selections: list[dict] | None = None
 
 
 class DimensionCreate(BaseModel):
@@ -85,12 +108,30 @@ _MAX_UPLOAD_CASES = 100_000
 # 版本
 # ----------------------------------------------------------------------
 @router.post("/freeze")
-def freeze_version(
-    created_by: str | None = None,
-    document_ids: list[int] | None = Query(default=None, description="按选择合并：仅冻结所选文档的可发布评测项，并在合并时精确去重。"),
-):
+def freeze_version(payload: FreezeRequest):
+    """冻结生成库为不可变版本，并把选中的上传库 / 公共库题一并物化进同一版本（方案 B）。"""
     try:
-        return _service.freeze_version(created_by=created_by, document_ids=document_ids)
+        return _service.freeze_version(
+            name=payload.name,
+            created_by=payload.created_by,
+            document_ids=payload.document_ids,
+            uploaded_set_ids=payload.uploaded_set_ids,
+            public_selections=payload.public_selections,
+            generation_config=payload.generation_config,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/versions/{version_id}/materialize")
+def materialize_version(version_id: int, payload: MaterializeRequest):
+    """对已冻结的生成库版本追加物化外部题（上传库 / 公共库）。"""
+    try:
+        return _service.materialize_external(
+            version_id=version_id,
+            uploaded_set_ids=payload.uploaded_set_ids,
+            public_selections=payload.public_selections,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -223,6 +264,7 @@ def upload_eval_set(payload: UploadedSetRequest):
             template_type=payload.template_type,
             dimension=payload.dimension,
             source_file=payload.source_file,
+            folder_path=payload.folder_path,
             cases=payload.cases,
         )
     except ValueError as exc:

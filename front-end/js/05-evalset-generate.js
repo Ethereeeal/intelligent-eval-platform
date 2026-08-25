@@ -216,3 +216,109 @@
       const ko = $("#optKeepOrig"); if (ko) ko.onchange = () => { o.keepOriginal = ko.checked; };
     }
   }
+
+  function esGeneratorDifficulty(value) {
+    return ({ L1: "简单", L2: "中等", L3: "难" })[value] || value || "中等";
+  }
+
+  function esGeneratorCopyCase(item, fallbackSource, index) {
+    return {
+      id: `custom-${Date.now()}-${index}-${Math.random().toString(36).slice(2, 7)}`,
+      q: item.q || item.question || "",
+      a: item.a || item.answer || item.gold_answer || "",
+      evidence: Array.isArray(item.evidence) ? item.evidence.map(x => x.original_text || x.text || "").filter(Boolean).join("；") : (item.evidence || ""),
+      src: item.src || item.source || item.document_name || fallbackSource,
+      diff: esGeneratorDifficulty(item.diff || item.difficulty),
+    };
+  }
+
+  function esGeneratorFolderTree(items, attribute) {
+    const root = { folders: new Map(), items: [] };
+    items.forEach(item => {
+      const parts = String(item.folder_path || "").split("/").map(part => part.trim()).filter(Boolean);
+      let node = root;
+      parts.forEach(part => {
+        if (!node.folders.has(part)) node.folders.set(part, { folders: new Map(), items: [] });
+        node = node.folders.get(part);
+      });
+      node.items.push(item);
+    });
+    const render = node => {
+      const files = node.items.map(item => `<label class="ev-src-item"><input type="checkbox" ${attribute}="${escapeHTML(String(item.id))}"/>${escapeHTML(item.name)}<span class="es-generator-meta">${escapeHTML(item.meta)}</span></label>`).join("");
+      const folders = [...node.folders.entries()].map(([name, child]) => `<details class="es-generator-folder" open><summary><i data-lucide="folder"></i>${escapeHTML(name)}</summary>${render(child)}</details>`).join("");
+      return folders + files;
+    };
+    return render(root) || "暂无文件";
+  }
+
+  async function openEvalSetGeneratorModal() {
+    const [remoteUploads] = await Promise.all([apiGet(`/api/eval-sets/uploaded`).catch(() => [])]);
+    const uploadedSets = remoteUploads.length ? remoteUploads : ES_UPLOADED_SAMPLES;
+    const docs = Object.entries(DOCS).map(([id, doc]) => ({ id, name: doc.name, meta: `${(doc.kp || []).length} 知识点 · ${(doc.qa || []).length} 题`, folder_path: doc.folderPath || "" }));
+    const mask = document.createElement("div");
+    mask.className = "modal-mask";
+    mask.innerHTML = `<div class="modal modal-wide es-generator-modal">
+      <div class="modal-head"><span>生成评测集</span><button class="modal-x" type="button">×</button></div>
+      <div class="modal-body es-generator-body">
+        <label class="es-field">评测集名称</label><input class="es-input" id="esGeneratorName" value="组合评测集 ${new Date().toLocaleDateString("zh-CN")}" />
+        <section class="es-generator-section"><div class="es-generator-title">文档库</div><p class="es-generator-hint">从文档库中的任意文档多选，保留原有文件夹层级；所选文档会按已有生成能力补齐评测集。</p><div class="es-generator-list">${esGeneratorFolderTree(docs, "data-es-generator-doc")}</div></section>
+        <section class="es-generator-section"><div class="es-generator-title">生成策略</div><div class="es-generator-policy-grid"><div class="es-generator-policy"><span class="es-generator-policy-label">采样策略</span><div class="es-generator-policy-controls"><label class="opt"><input type="checkbox" id="esGeneratorCrossBlock" checked/><span>跨块问题组合</span></label><label class="opt"><input type="checkbox" id="esGeneratorCrossDoc" checked/><span>跨文档生成</span></label></div></div><div class="es-generator-policy"><span class="es-generator-policy-label">难度</span><div class="es-generator-policy-controls">${["简单", "中等", "难"].map(level => `<label class="diff-chk"><input type="checkbox" value="${level}" data-es-generator-difficulty checked/><span>${level}</span></label>`).join("")}</div></div></div></section>
+        <section class="es-generator-section"><div class="es-generator-title">上传库</div><p class="es-generator-hint">上传评测集按其文件夹层级展示。</p><div class="es-generator-list">${esGeneratorFolderTree(uploadedSets.map((set, index) => ({ id: index, name: set.name || `上传评测集 #${set.set_id}`, meta: `${set.total_cases || set.cases?.length || 0} 题`, folder_path: set.folder_path || "" })), "data-es-generator-upload")}</div></section>
+        <section class="es-generator-section"><div class="es-generator-title">公共库</div><p class="es-generator-hint">可按六个维度分别填写纳入题量，填写 0 表示不纳入。</p><div class="es-public-quota">${ES_PUBLIC_DIMS.map(dim => `<label><span>${escapeHTML(dim.name)}</span><input class="gen-input" type="number" min="0" max="${dim.total}" value="0" data-es-generator-public="${escapeHTML(dim.key)}"/><em>/ ${dim.total} 题</em></label>`).join("")}</div></section>
+      </div>
+      <div class="modal-foot"><button class="btn ghost modal-cancel" type="button">取消</button><button class="btn primary" id="esGeneratorSubmit" type="button"><i data-lucide="sparkles"></i>生成并存入评测集库</button></div>
+    </div>`;
+    document.body.appendChild(mask);
+    const close = () => mask.remove();
+    mask.querySelector(".modal-x").onclick = close;
+    mask.querySelector(".modal-cancel").onclick = close;
+    mask.querySelector("#esGeneratorSubmit").onclick = async () => {
+      const docIds = [...mask.querySelectorAll("[data-es-generator-doc]:checked")].map(input => input.dataset.esGeneratorDoc);
+      const uploadIndexes = [...mask.querySelectorAll("[data-es-generator-upload]:checked")].map(input => Number(input.dataset.esGeneratorUpload));
+      const publicQuota = Object.fromEntries([...mask.querySelectorAll("[data-es-generator-public]")].map(input => [input.dataset.esGeneratorPublic, Math.max(0, Math.min(Number(input.max), Number(input.value) || 0))]));
+      const difficulties = [...mask.querySelectorAll("[data-es-generator-difficulty]:checked")].map(input => input.value);
+      if (!docIds.length && !uploadIndexes.length && !Object.values(publicQuota).some(Boolean)) return toast("请至少选择文档、上传评测集或公共库题量", "warn");
+      if (!difficulties.length) return toast("请至少选择一种难度", "warn");
+      const submit = mask.querySelector("#esGeneratorSubmit");
+      submit.disabled = true;
+      submit.textContent = "生成中…";
+      const failedDocs = [];
+      for (const id of docIds) {
+        const doc = DOCS[id];
+        const documentId = Number(String(id).replace(/^doc/, ""));
+        if (!doc || !Number.isFinite(documentId) || !(doc.kp || []).length) continue;
+        try {
+          const response = await fetch(API_BASE + `/api/cases/generate?document_id=${documentId}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ angles: ["primary"], include_variations: false, dry_run: false }) });
+          if (!response.ok) throw new Error(String(response.status));
+          const qualityResponse = await fetch(API_BASE + `/api/quality-check?document_id=${documentId}`, { method: "POST" });
+          if (!qualityResponse.ok) throw new Error(`质量检查 ${qualityResponse.status}`);
+        } catch (error) { failedDocs.push(doc.name); }
+      }
+      const name = mask.querySelector("#esGeneratorName").value.trim() || "未命名评测集";
+      const uploadedSetIds = uploadIndexes.map(index => uploadedSets[index]?.set_id).filter(id => Number.isInteger(Number(id)));
+      if (uploadIndexes.length !== uploadedSetIds.length) { submit.disabled = false; submit.textContent = "生成并存入评测集库"; return toast("上传库样例不能永久保存，请选择已实际上传的评测集", "warn"); }
+      const generationConfig = { cross_block: mask.querySelector("#esGeneratorCrossBlock").checked, cross_document: mask.querySelector("#esGeneratorCrossDoc").checked, difficulties, output: "flat" };
+      const payload = {
+        name,
+        created_by: "web",
+        document_ids: docIds.map(id => Number(String(id).replace(/^doc/, ""))).filter(Number.isFinite),
+        uploaded_set_ids: uploadedSetIds.map(Number),
+        public_selections: ES_PUBLIC_DIMS.filter(dim => publicQuota[dim.key]).map(dim => ({ dimension: dim.key, count: publicQuota[dim.key] })),
+        generation_config: generationConfig,
+      };
+      try {
+        const response = await fetch(API_BASE + "/api/freeze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+        if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.detail || response.status); }
+        close();
+        window.__esView = "custom";
+        await renderEvalSetLibrary();
+        toast(failedDocs.length ? `已永久存入评测集库；${failedDocs.length} 个文档生成未完成` : "已永久存入评测集库");
+      } catch (error) {
+        submit.disabled = false;
+        submit.innerHTML = `<i data-lucide="sparkles"></i>生成并存入评测集库`;
+        icons();
+        toast("持久化失败：" + error.message, "warn");
+      }
+    };
+    icons();
+  }

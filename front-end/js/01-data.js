@@ -295,7 +295,7 @@
         DOCS[id] = {
           name: d.file_name, type: (d.file_type || "").replace(/^\./, "").toUpperCase(),
           size: fmtSize(d.file_size), status: statusCN(d.parse_status),
-          ver: "", updated: (d.created_at || "").slice(0, 10), purpose, qaFolderPath,
+          ver: "", updated: (d.created_at || "").slice(0, 10), purpose, folderPath: d.folder_path || "", qaFolderPath,
           preview: [],        // 文档原文改为「在线查看」时按需从后端 blocks 接口拉取
           versions: [],       // demo 后端未提供版本记录 → 留空
           kp, qa, review: []  // review：demo 未单独建模 → 留空
@@ -393,4 +393,3 @@
   };
 
   const charts = {};
-
