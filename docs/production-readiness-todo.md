@@ -7,6 +7,7 @@
 
 ## A. 已完成（2026-08 落地）
 
+- **生成库历史目录补树（2026-08-25）**：生成库左侧目录树在后端未登记目录记录、但已有评测集使用该路径时，按评测集实际 `folder_path` 补齐展示节点；历史“用户文件”等目录下的评测集可正常在树中显示和切换，不写入或改写后端目录数据。
 - **历史产品文档与生成产物核验（2026-08-25）**：核验当前持久化数据库仍保有“用户文件”目录下的 7 份银行产品文档，且每份均存在已生成评测集；未重复导入原始文件，避免覆盖当前数据或产生重复文档。
 - **评测集文档质量可视化（2026-08-25）**：生成库、上传库与评测集库的文档详情新增五维质量雷达图。生成库直接读取 m04 五项后端质检结果，并额外展示简单/中等/难的环形分布；上传库与评测集库依据已入库字段的完整性、有效性、去重、证据和问题质量计算结构化评分。公共库不参与质量评估，也不展示质量图表。
 - **生成库自动落库与回读（2026-08-25）**：生成评测集时，文档经 m03 生成并完成 m04 质检后立即重新读取后端 `generated_case`，刷新生成库目录与题量；生成库作为文档来源的可见中间产物独立存在，不依赖最终评测集库版本冻结。
@@ -51,6 +52,10 @@
 
 - **前端静态资源缓存版本修复（2026-08-24）**：导航脚本升级为新的查询版本号，避免 Nginx 的长期 immutable 缓存继续命中旧版三栏目导航，确保“文档库管理”栏目随发布版本加载。
 
+- **评测结果目录移到侧边栏 + 三点菜单（删除/导出）（2026-08-25）**：评测运行的「评测结果」页，把结果目录从主内容区移回左侧 `ev-side`（「评测结果」tab 下方），目录格式完全仿「评测集库管理」（`es-library-tree` + `tree-node`/`tree-row`/`tree-children` + `tw-ic`/`tw-name`/`tw-count`/`tw-chev`），按评测集版本分组、可展开收起，运行记录叶子节点带 `tree-dots` 三点。三点菜单（`ctx-popup`）提供「导出」「删除」两项：导出复用 `POST /api/evaluation-runs/{id}/export` 下载 xlsx；删除调用新增后端 `DELETE /api/evaluation-runs/{id}`。后端新增 `database.delete_evaluation_run`（级联清理 results + error_book）与 m08 `DELETE /api/evaluation-runs/{run_id}` 接口。交互改用**事件委托**到稳定的 `.ev-side-catalog` 父容器（修复子节点重渲染导致三点 listener 丢失的 bug，原单独绑定 dot 的 click 不触发）；三点按钮补 `width/height:22px` 样式使其可点击（原 svg 0 尺寸不可见不可点）。Playwright 端到端验证通过：目录在左侧栏、菜单含导出/删除、删除后运行从目录移除（1→0）、无报错。`docker compose build studio backend` 已固化。
+
+- **评测结果目录与评测集库完全对齐（2026-08-25）**：移除评测结果目录上方多余的「评测结果目录」标题字样；三点按钮改为与评测集库管理一致的结构 `<button class="tree-dots"><i data-lucide="more-horizontal"></i></button>`（原 `<i class="tree-dots">` 经 lucide 转 svg 后 class 丢失、尺寸 0 导致三点缺失）；删除 `.ev-side-catalog` 的自定义覆盖样式（`tree-row` padding/active 配色、`tree-dots` 22px+opacity），完全复用全局 `.es-library-tree`/`.tree-row`/`.tree-dots` 样式（含 16px 尺寸、hover 显示、全局 active 紫渐变），视觉与交互（hover 显示三点、菜单含导出/删除）与评测集库管理目录一致；Playwright 验证 `dotTag: BUTTON、16×16、hover display:flex、菜单[导出,删除]` 通过。
+
 - **文档库管理独立栏目（2026-08-24）**：将原评测集展示中的输入文档库移为顶级「文档库管理」栏目，位置紧跟概览；保留目录树、上传、解析、知识点、质量门禁与导出功能，评测集展示仅保留生成库、上传库、公共库与评测集库。
 
 - **评测集展示目录化与问题分类收敛（2026-08-24）**：移除展示页横向视图栏，改由左侧「评测集展示」展开选择生成库、上传库、公共库与评测集库；各库均以库文档目录为入口。生成库目录树从「泛化问题 / 基础问题」双根合并为单一「库文档」根，取消类型列、筛选与两类系统根的更多菜单；用户目录和库文档的导出、移动、重命名、删除等更多操作保持可用，后端历史类型字段继续兼容。
@@ -73,6 +78,8 @@
 - **上传内存炸弹修复**：precheck / upload / reupload 三个入口改为流式限长读取（1MB 分块，超限返回 413）；
 - **其他修复**：重复上传不再残留孤儿文件（查重通过后落盘）；confirm_token 过期清理；编排失败按实际阶段记录；reupload 未预期异常收敛为 500；前端 `fmtSize` 全局函数名冲突修复；
 - **CLAUDE.md 单源化**：改为 `@AGENTS.md` 导入入口，开发流程规范只维护一份，避免双份漂移；
+
+- **评测结果目录移到结果下方并仿评测集库目录（2026-08-25）**：将「评测运行 → 评测结果」页左侧的 `ev-run-catalog` 结果目录移到主内容区**评测结果下方**，并改为仿「评测集库管理」的目录树样式（`.es-library-tree` + `tree-node`/`tree-row`/`tree-children` + `tw-ic`/`tw-name`/`tw-chev`/`tw-count`）。按评测集版本分组（folder 节点），每组展开该版本的运行记录（状态图标 + 通过率/状态徽标），分组可展开收起，点击运行记录切换结果详情；单列布局（`.ev-results-single`）替代原两列 `ev-results-layout`，新增 `.ev-result-catalog-wrap` / `.ev-catalog-divider` 样式与分隔线。空状态文案同步改为「从下方目录选择」。前端 `10-evaluation-workspace.js` 与 `styles.css` 改动，`node --check` 通过、无 lint 错误。
 
 - **评测集物化进 version（方案 B，2026-08-24）**：采用方案 B（物化进 version）而非评测时拼组合——冻结阶段一次性定稿，保证同一版本两次评测题目完全一致，满足金融业务审计溯源与失败本诊断的可复现性；公共库抽样“用户要求数量”也只有在冻结时定稿才能兑现。后端改动：`freeze_version` 新增可选参数 `uploaded_set_ids` / `public_selections`，冻结时调用新增的 `_materialize_external` 把选中的上传库（默认全选，source=uploaded）与公共库（按维度 set 抽指定题数，source=public）题快照进同一 version 的 `eval_case`，`case_count` 含物化题；新增公开方法 `materialize_external` 与接口 `POST /api/versions/{version_id}/materialize`，支持对已冻结版本追加物化外部题（生成时未选、后续补充的场景）。公共库抽样按维度分：每个公共库 set 对应一个维度文件，`public_selections` 每项 `{set_id, count}` 即从该维度抽 count 题（随机抽，已接入真实数据后自动生效；当前未导入时按 0 题处理不报错）。`composition` 保留为内部机制（评测运行仍走 composition_id / 已冻结 version），前端 UI 未改动。后端 `py_compile` 通过；诊断均为项目既有类型推断告警，非本次引入。
 - **README 全面对齐**：m01/m02/m03/m04/m05 与根 README、docs/data-model.md（corpus 概念移除、Block 向量废弃、MySQL 存储体系、实际 API 路由、重传闭环描述）。

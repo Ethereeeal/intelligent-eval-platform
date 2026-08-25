@@ -93,6 +93,25 @@ def list_evaluation_runs():
     return _db.list_evaluation_runs()
 
 
+@evaluation_router.delete("/evaluation-runs/{run_id}")
+def delete_evaluation_run(run_id: int):
+    """删除评测运行及其关联结果（供前端目录三点菜单「删除」调用）。"""
+    _get_run_or_404(run_id)
+    deleted = _db.delete_evaluation_run(run_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="evaluation run not found")
+    try:
+        _db.save_audit(
+            operation="evaluation_run.delete",
+            target_type="evaluation_run",
+            target_id=str(run_id),
+            actor="web",
+        )
+    except Exception:  # noqa: BLE001 — 审计失败不阻断
+        pass
+    return {"ok": True, "run_id": run_id}
+
+
 def _get_run_or_404(run_id: int) -> dict:
     run = _db.get_evaluation_run(run_id)
     if run is None:

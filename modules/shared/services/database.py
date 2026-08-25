@@ -2366,6 +2366,22 @@ class DatabaseService:
             )
             return [self._evaluation_run_to_dict(r) for r in rows]
 
+    def delete_evaluation_run(self, run_id: int) -> bool:
+        """删除评测运行及其关联的单题结果、失败本记录（级联清理）。"""
+        with SessionLocal() as session:
+            run = session.get(EvaluationRunRow, run_id)
+            if run is None:
+                return False
+            session.query(EvaluationCaseResultRow).filter(
+                EvaluationCaseResultRow.run_id == run_id
+            ).delete()
+            session.query(ErrorBookItemRow).filter(
+                ErrorBookItemRow.run_id == run_id
+            ).delete()
+            session.delete(run)
+            session.commit()
+            return True
+
     def update_evaluation_run(self, run_id: int, **updates: object) -> dict | None:
         with SessionLocal() as session:
             row = session.get(EvaluationRunRow, run_id)

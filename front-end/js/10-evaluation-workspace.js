@@ -48,8 +48,8 @@
   const runStatusLabel = status => ({ pending: "等待中", running: "运行中", done: "已完成", failed: "失败" })[status] || status || "未知";
   const caseStatusLabel = status => ({ passed: "通过", failed: "未通过", error: "异常", unscored: "未评分", pending: "等待中" })[status] || status || "—";
 
-  function shell(content) {
-    $w().innerHTML = `<div class="ev-layout"><aside class="ev-side"><button class="ev-side-item ${state.tab === "config" ? "on" : ""}" data-ev-tab="config"><i data-lucide="sliders-horizontal"></i><span>评测配置</span></button><button class="ev-side-item ${state.tab === "results" ? "on" : ""}" data-ev-tab="results"><i data-lucide="chart-no-axes-combined"></i><span>评测结果</span></button></aside><div class="ev-main">${content}</div></div>`;
+  function shell(content, sideExtra) {
+    $w().innerHTML = `<div class="ev-layout"><aside class="ev-side"><button class="ev-side-item ${state.tab === "config" ? "on" : ""}" data-ev-tab="config"><i data-lucide="sliders-horizontal"></i><span>评测配置</span></button><button class="ev-side-item ${state.tab === "results" ? "on" : ""}" data-ev-tab="results"><i data-lucide="chart-no-axes-combined"></i><span>评测结果</span></button>${sideExtra || ""}</aside><div class="ev-main">${content}</div></div>`;
     icons();
   }
 
@@ -192,14 +192,47 @@
     const orphanRuns = runs.filter(item => !compositions.some(composition => Number(composition.composition_id) === Number(item.composition_id)));
     if (orphanRuns.length) groups.push({ composition_id: "unknown", name: "历史评测集", runs: orphanRuns });
     const selectedComposition = run ? compositions.find(item => Number(item.composition_id) === Number(run.composition_id)) : null;
-    const catalog = runs.length ? groups.map(group => {
+    const catalog = runs.length ? `<div class="es-library-tree ev-side-catalog">${groups.map(group => {
       const selected = run && String(group.composition_id) === String(run.composition_id);
-      return `<details class="ev-run-group" ${selected ? "open" : ""}><summary><span><i data-lucide="folder${selected ? "-open" : ""}"></i><b>${esc(group.name || `评测集 #${group.composition_id}`)}</b></span><small>版本 #${esc(group.composition_id)} · ${group.runs.length} 次</small></summary><div class="ev-run-items">${group.runs.map(item => `<button class="ev-run-item ${item.run_id === state.runId ? "on" : ""}" data-run-id="${item.run_id}"><span class="ev-run-status ${esc(item.status)}"></span><span><b>${esc(item.name || `运行 #${item.run_id}`)}</b><small>${esc(formatDateTime(item.created_at))} · ${esc(runStatusLabel(item.status))}</small></span></button>`).join("")}</div></details>`;
-    }).join("") : `<div class="ev-empty-catalog"><i data-lucide="folder-search"></i><span>暂无评测结果</span></div>`;
+      const runNode = item => {
+        const icon = item.status === "done" ? "circle-check" : item.status === "failed" ? "circle-x" : item.status === "running" ? "loader" : "clock";
+        const badge = item.status === "done" && item.pass_rate != null
+          ? `<span class="tw-count" style="color:#2f7d5b;background:rgba(47,125,91,.12)">${Math.round(item.pass_rate * 100)}%</span>`
+          : item.status === "failed" ? `<span class="tw-count" style="color:#c0392b;background:rgba(192,57,43,.12)">失败</span>`
+          : `<span class="tw-count">${esc(runStatusLabel(item.status))}</span>`;
+        return `<div class="tree-row ${item.run_id === state.runId ? "active" : ""}" data-run-id="${item.run_id}"><i data-lucide="${icon}" class="tw-ic"></i><span class="tw-name">${esc(item.name || `运行 #${item.run_id}`)}</span>${badge}<button class="tree-dots" data-run-dots="${item.run_id}" title="更多操作"><i data-lucide="more-horizontal"></i></button></div>`;
+      };
+      return `<div class="tree-node">
+        <div class="tree-row tree-folder" data-ev-group="${esc(String(group.composition_id))}"><i data-lucide="folder" class="tw-ic"></i><span class="tw-name">${esc(group.name || `评测集 #${group.composition_id}`)}</span><span class="tw-count">${group.runs.length}</span><i data-lucide="${selected ? "chevron-down" : "chevron-right"}" class="tw-chev"></i></div>
+        <div class="tree-children ${selected ? "open" : ""}">${group.runs.map(runNode).join("")}</div>
+      </div>`;
+    }).join("")}</div>` : `<div class="es-library-tree ev-side-catalog"><div class="ev-empty-catalog"><i data-lucide="folder-search"></i><span>暂无评测结果</span></div></div>`;
     const progress = run && run.status === "running" ? `<section class="ev-progress-card"><div class="ev-progress-head"><div><span class="ev-running-dot"></span><b>评测执行中</b><small>完成后将自动刷新指标与原始报告</small></div><strong>${Number(run.progress || 0)}%</strong></div><div class="ev-bar"><span style="width:${Number(run.progress || 0)}%"></span></div><div class="ev-progress-meta"><span>${Number(run.finished || 0)} / ${Number(run.total || 0)} 题</span><span><i data-lucide="clock-3"></i>预计剩余 ${esc(estimateRemaining(run))}</span></div></section>` : "";
-    const content = run ? `<div class="ev-result-title"><div><span class="es-tag">${esc(runStatusLabel(run.status))}</span><h2>${esc(run.name || `运行 #${run.run_id}`)}</h2><p>${esc(selectedComposition?.name || `评测集 #${run.composition_id}`)} · 版本 #${esc(run.composition_id)} · ${esc(formatDateTime(run.created_at))}</p></div><label class="ev-threshold">通过阈值<input class="es-input" id="evThreshold" type="number" min="0" max="1" step=".05" value="${state.threshold}"/></label></div>${progress}${metrics(data.summary || {}, state.results)}<div class="card card-pad ev-report"><div class="ev-report-head"><div><div class="card-t">原始评测报告</div><p>完整保留问题、标准答案、智能体回答、评分与归因信息。</p></div><div class="ev-export-wrap"><button class="btn ghost" id="evExportToggle"><i data-lucide="download"></i>导出报告<i data-lucide="chevron-down"></i></button><div class="ev-export-popover" id="evExportPopover" hidden><label><input type="checkbox" id="evExportFiltered"/>仅导出当前筛选结果</label><small>默认导出当前运行的全部原始报告</small><button class="btn primary" id="evExportConfirm"><i data-lucide="file-spreadsheet"></i>导出 Excel</button></div></div></div><div class="ev-filters"><input class="es-input" id="evSearch" placeholder="搜索问题、标准答案或智能体回答"/><select class="es-input" id="evStatus"><option value="">全部状态</option><option value="passed">通过</option><option value="failed">未通过</option><option value="error">异常</option><option value="diagnosis">有 ErrorBook</option></select></div><div class="ev-table-wrap"><table class="ev-table"><thead><tr><th>问题 / 标准答案</th><th>智能体回答 A'</th><th>得分</th><th>耗时</th><th>状态 / 归因</th></tr></thead><tbody id="evReportRows"></tbody></table></div></div>` : `<div class="ev-result-empty"><span><i data-lucide="chart-no-axes-combined"></i></span><h2>选择一次评测运行</h2><p>从左侧评测集版本目录中展开并选择运行，即可查看指标和原始报告。</p><button class="btn primary" id="evConfigBtn">前往评测配置</button></div>`;
-    shell(`<div class="ev-results-layout"><aside class="ev-run-catalog"><div class="ev-catalog-head"><b>结果目录</b><small>按可执行评测集版本归档</small></div>${catalog}</aside><div class="ev-result-content">${content}</div></div>`);
-    document.querySelectorAll("[data-run-id]").forEach(button => button.onclick = () => { state.runId = Number(button.dataset.runId); render(); });
+    const content = run ? `<div class="ev-result-title"><div><span class="es-tag">${esc(runStatusLabel(run.status))}</span><h2>${esc(run.name || `运行 #${run.run_id}`)}</h2><p>${esc(selectedComposition?.name || `评测集 #${run.composition_id}`)} · 版本 #${esc(run.composition_id)} · ${esc(formatDateTime(run.created_at))}</p></div><label class="ev-threshold">通过阈值<input class="es-input" id="evThreshold" type="number" min="0" max="1" step=".05" value="${state.threshold}"/></label></div>${progress}${metrics(data.summary || {}, state.results)}<div class="card card-pad ev-report"><div class="ev-report-head"><div><div class="card-t">原始评测报告</div><p>完整保留问题、标准答案、智能体回答、评分与归因信息。</p></div><div class="ev-export-wrap"><button class="btn ghost" id="evExportToggle"><i data-lucide="download"></i>导出报告<i data-lucide="chevron-down"></i></button><div class="ev-export-popover" id="evExportPopover" hidden><label><input type="checkbox" id="evExportFiltered"/>仅导出当前筛选结果</label><small>默认导出当前运行的全部原始报告</small><button class="btn primary" id="evExportConfirm"><i data-lucide="file-spreadsheet"></i>导出 Excel</button></div></div></div><div class="ev-filters"><input class="es-input" id="evSearch" placeholder="搜索问题、标准答案或智能体回答"/><select class="es-input" id="evStatus"><option value="">全部状态</option><option value="passed">通过</option><option value="failed">未通过</option><option value="error">异常</option><option value="diagnosis">有 ErrorBook</option></select></div><div class="ev-table-wrap"><table class="ev-table"><thead><tr><th>问题 / 标准答案</th><th>智能体回答 A'</th><th>得分</th><th>耗时</th><th>状态 / 归因</th></tr></thead><tbody id="evReportRows"></tbody></table></div></div>` : `<div class="ev-result-empty"><span><i data-lucide="chart-no-axes-combined"></i></span><h2>选择一次评测运行</h2><p>从左侧「评测结果目录」中展开并选择运行，即可查看指标和原始报告。</p><button class="btn primary" id="evConfigBtn">前往评测配置</button></div>`;
+    shell(`<div class="ev-results-layout ev-results-single"><div class="ev-result-content">${content}</div></div>`, catalog);
+    // 仿评测集库目录交互（事件委托到稳定的父容器，子节点重建也不丢监听）
+    const catalogEl = $w().querySelector(".ev-side-catalog");
+    if (catalogEl) {
+      catalogEl.onclick = (e) => {
+        const dot = e.target.closest(".tree-dots[data-run-dots]");
+        if (dot) {
+          e.stopPropagation();
+          openRunMenu(Number(dot.dataset.runDots), dot);
+          return;
+        }
+        const folder = e.target.closest(".tree-row.tree-folder");
+        if (folder) {
+          const kids = folder.closest(".tree-node").querySelector(".tree-children");
+          if (kids) kids.classList.toggle("open");
+          const chev = folder.querySelector(".tw-chev");
+          if (chev) chev.setAttribute("data-lucide", kids.classList.contains("open") ? "chevron-down" : "chevron-right");
+          icons();
+          return;
+        }
+        const row = e.target.closest(".tree-row[data-run-id]");
+        if (row) { state.runId = Number(row.dataset.runId); render(); }
+      };
+    }
     if (!run) { icons(); return; }
     ["evSearch", "evStatus", "evThreshold"].forEach(id => document.getElementById(id).oninput = filterRows);
     const exportToggle = document.getElementById("evExportToggle"), exportPopover = document.getElementById("evExportPopover");
@@ -248,6 +281,49 @@
     finally { button.disabled = false; button.innerHTML = '<i data-lucide="file-spreadsheet"></i>导出 Excel'; icons(); }
   }
 
+  function openRunMenu(runId, anchor) {
+    closeRunMenu();
+    const menu = document.createElement("div");
+    menu.className = "ctx-popup ev-run-menu";
+    menu.innerHTML = `<button data-ev-act="export"><i data-lucide="download"></i>导出</button><button data-ev-act="delete" class="danger"><i data-lucide="trash-2"></i>删除</button>`;
+    document.body.appendChild(menu);
+    const rect = anchor.getBoundingClientRect();
+    const menuW = 132, menuH = 78;
+    let top = rect.bottom + 4, left = rect.right - menuW;
+    if (left < 8) left = 8;
+    if (top + menuH > window.innerHeight - 8) top = rect.top - menuH - 4;
+    menu.style.top = top + "px"; menu.style.left = left + "px";
+    icons();
+    menu.querySelector('[data-ev-act="export"]').onclick = e => { e.stopPropagation(); closeRunMenu(); exportRun(runId); };
+    menu.querySelector('[data-ev-act="delete"]').onclick = e => {
+      e.stopPropagation(); closeRunMenu();
+      if (!confirm(`确认删除运行 #${runId}？该操作将同时删除其全部单题结果与失败本记录，不可恢复。`)) return;
+      fetch(`${API_BASE}/api/evaluation-runs/${runId}`, { method: "DELETE" })
+        .then(async r => { if (!r.ok) { const e = await r.json().catch(() => ({})); throw new Error(e.detail || r.status); } return r.json(); })
+        .then(() => { toast(`已删除运行 #${runId}`); if (state.runId === runId) state.runId = null; render(); })
+        .catch(err => toast("删除失败：" + (err.message || err)));
+    };
+  }
+  function closeRunMenu() {
+    document.querySelectorAll(".ev-run-menu").forEach(m => m.remove());
+  }
+  async function exportRun(runId) {
+    try {
+      const response = await fetch(`${API_BASE}/api/evaluation-runs/${runId}/export`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ result_ids: null }),
+      });
+      if (!response.ok) { const error = await response.json().catch(() => ({})); throw new Error(error.detail || response.status); }
+      const blob = await response.blob();
+      const disposition = response.headers.get("Content-Disposition") || "";
+      const encodedName = disposition.match(/filename\*=UTF-8''([^;]+)/i)?.[1];
+      const filename = encodedName ? decodeURIComponent(encodedName) : `评测报告-${runId}.xlsx`;
+      const url = URL.createObjectURL(blob), link = document.createElement("a");
+      link.href = url; link.download = filename; document.body.appendChild(link); link.click(); link.remove();
+      URL.revokeObjectURL(url);
+      toast("已导出该运行报告");
+    } catch (error) { toast("导出失败：" + error.message); }
+  }
+
   async function render() {
     if (!$w()) return;
     shell(`<div class="card card-pad ev-load-state"><span class="spinner"></span><div><b>正在加载${state.tab === "config" ? "评测配置" : "评测结果"}</b><p class="es-gen-hint">正在连接后端并同步最新数据…</p></div></div>`);
@@ -260,5 +336,12 @@
     }
   }
   window.renderEvaluation = render;
-  document.addEventListener("click", e => { const tab = e.target.closest("[data-ev-tab]"); if (tab) { state.tab = tab.dataset.evTab; render(); } if (e.target.closest("#evConfigBtn")) { state.tab = "config"; render(); } const popover = document.getElementById("evExportPopover"); if (popover && !e.target.closest(".ev-export-wrap")) popover.hidden = true; });
+  document.addEventListener("click", e => {
+    const tab = e.target.closest("[data-ev-tab]");
+    if (tab) { state.tab = tab.dataset.evTab; render(); }
+    if (e.target.closest("#evConfigBtn")) { state.tab = "config"; render(); }
+    const popover = document.getElementById("evExportPopover");
+    if (popover && !e.target.closest(".ev-export-wrap")) popover.hidden = true;
+    if (!e.target.closest(".ev-run-menu") && !e.target.closest(".tree-dots")) closeRunMenu();
+  });
 })();

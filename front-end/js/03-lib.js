@@ -231,9 +231,27 @@
     return map;
   }
 
+  // 历史生成评测集可能只保留源文档的 folder_path，而没有在 folder 表创建同名目录。
+  // 目录树据此补齐展示节点，确保已有评测集不会因缺少 folder 记录而“无处可挂”。
+  function qaFolderTreeWithSetPaths(setsByPath) {
+    const roots = qaFolderTree();
+    Object.keys(setsByPath).filter(Boolean).forEach(path => {
+      let children = roots;
+      String(path).split("/").map(part => part.trim()).filter(Boolean).forEach(name => {
+        let node = children.find(item => item.name === name);
+        if (!node) {
+          node = { name, folderId: null, children: [], implicit: true };
+          children.push(node);
+        }
+        children = node.children;
+      });
+    });
+    return roots;
+  }
+
   function qaTreeHTML() {
-    const folders = qaFolderTree();
     const setsByPath = qaSetsByPath();
+    const folders = qaFolderTreeWithSetPaths(setsByPath);
     return `${folders.map(f => qaFolderNodeHTML(f, "", QA_ROOT, setsByPath)).join("")}
       ${(setsByPath[""] || []).map(id => qaChildRowHTML(id, QA_ROOT, "")).join("")}`;
   }
