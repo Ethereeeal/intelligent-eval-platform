@@ -66,6 +66,7 @@ def aggregate(results: list[dict]) -> dict:
     total_cost = 0.0
     for r in results:
         scores = r.get("scores") or {}
+        score = scores.get("score")
         total_latency += scores.get("latency_ms") or 0
         total_tokens += scores.get("tokens") or 0
         total_cost += scores.get("cost") or 0.0
@@ -73,12 +74,12 @@ def aggregate(results: list[dict]) -> dict:
             r.get("difficulty") or "unknown", {"total": 0, "passed": 0}
         )
         bucket["total"] += 1
-        if r.get("scores") and r["scores"].get("score", 0) >= 0.5:
+        if score is not None and score >= 0.5:
             bucket["passed"] += 1
         dim = r.get("dimension") or "none"
         dim_bucket = by_dimension.setdefault(dim, {"total": 0, "passed": 0})
         dim_bucket["total"] += 1
-        if r.get("scores") and r["scores"].get("score", 0) >= 0.5:
+        if score is not None and score >= 0.5:
             dim_bucket["passed"] += 1
     return {
         "total": len(results),

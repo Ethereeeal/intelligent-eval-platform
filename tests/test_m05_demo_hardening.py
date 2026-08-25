@@ -1,5 +1,6 @@
 import unittest
 
+from modules.shared.services.database import _serialize_text_value
 from modules.m05_dataset_lifecycle.services.lifecycle import DatasetLifecycleService
 from modules.m05_dataset_lifecycle.services.composition import (
     resolve_composition,
@@ -177,6 +178,14 @@ class _CompositionDatabase:
 
 
 class M05DemoHardeningTests(unittest.TestCase):
+    def test_structured_evidence_is_serialized_for_text_columns(self):
+        evidence = [{"document_id": 1, "quote": "授信期限不得超过一年"}]
+        self.assertEqual(
+            _serialize_text_value(evidence),
+            '[{"document_id": 1, "quote": "授信期限不得超过一年"}]',
+        )
+        self.assertEqual(_serialize_text_value("plain evidence"), "plain evidence")
+
     def test_frozen_versions_are_read_only(self):
         service = DatasetLifecycleService(_LifecycleDatabase("frozen"))
         with self.assertRaises(ValueError):

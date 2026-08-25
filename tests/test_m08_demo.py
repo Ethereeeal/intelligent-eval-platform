@@ -6,6 +6,7 @@ from openpyxl import load_workbook
 from modules.m08_auto_evaluation.api import _build_evaluation_workbook
 from modules.m08_auto_evaluation.services.adapter import OpenAiCompatibleAdapter
 from modules.m08_auto_evaluation.services.diagnosis import diagnose
+from modules.m08_auto_evaluation.services.metrics import aggregate
 from modules.m08_auto_evaluation.services.optimization import build_optimization
 
 
@@ -18,6 +19,22 @@ class _MeasuredAdapter(OpenAiCompatibleAdapter):
 
 
 class M08DemoTests(unittest.TestCase):
+    def test_aggregate_handles_error_results_without_scores(self):
+        summary = aggregate(
+            [{
+                "status": "error",
+                "scores": {"score": None},
+                "difficulty": "unknown",
+                "dimension": "rule",
+                "diagnosis": "D9",
+            }]
+        )
+        self.assertEqual(summary["error_count"], 1)
+        self.assertEqual(summary["scored"], 0)
+        self.assertIsNone(summary["passed_rate"])
+        self.assertEqual(summary["by_difficulty"]["unknown"]["passed"], 0)
+        self.assertEqual(summary["by_dimension"]["rule"]["passed"], 0)
+
     def test_evaluation_report_export_contains_raw_rows(self):
         content = _build_evaluation_workbook(
             {

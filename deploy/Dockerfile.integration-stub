@@ -1,0 +1,15 @@
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+RUN pip install --no-cache-dir \
+    --index-url https://mirrors.aliyun.com/pypi/simple/ \
+    "fastapi>=0.115.0" "uvicorn>=0.30.0"
+
+COPY tests/integration/stub_app.py /app/stub_app.py
+
+EXPOSE 8090
+CMD ["uvicorn", "stub_app:app", "--host", "0.0.0.0", "--port", "8090"]

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from datetime import datetime
@@ -25,6 +26,15 @@ from modules.shared.core.logging_config import get_logger
 
 logger = get_logger(__name__)
 _UNSET = object()
+
+
+def _serialize_text_value(value: object) -> str | None:
+    """Keep text values intact and encode structured payloads deterministically."""
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False, sort_keys=True)
 
 
 def repair_legacy_filename(value: str | None) -> str | None:
@@ -2012,7 +2022,7 @@ class DatabaseService:
                         set_id=row.set_id,
                         q=str(case["q"]),
                         a=str(case["a"]),
-                        evidence=case.get("evidence"),
+                        evidence=_serialize_text_value(case.get("evidence")),
                         dimension=case.get("dimension"),
                         session_id=case.get("session_id"),
                         turns=case.get("turns"),
@@ -2076,7 +2086,7 @@ class DatabaseService:
                         set_id=set_id,
                         q=str(case["q"]),
                         a=str(case["a"]),
-                        evidence=case.get("evidence"),
+                        evidence=_serialize_text_value(case.get("evidence")),
                         dimension=case.get("dimension"),
                         session_id=case.get("session_id"),
                         turns=case.get("turns"),
@@ -2191,7 +2201,7 @@ class DatabaseService:
                         set_id=set_id,
                         q=str(case["q"]),
                         a=str(case["a"]),
-                        evidence=case.get("evidence"),
+                        evidence=_serialize_text_value(case.get("evidence")),
                         dimension=case.get("dimension"),
                         no_evidence=1 if not case.get("evidence") else 0,
                         review_status="quality_checked",

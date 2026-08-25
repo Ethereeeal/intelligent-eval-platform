@@ -66,12 +66,6 @@ This project is indexed by GitNexus as **intelligent-eval-platform** (3226 symbo
 - 删除或归档条目必须注明去向，不允许无痕删除；
 - 状态更新与代码改动一起提交，保持文档与实现同步。
 
-### 3. 推送变更记录
-
-- 每次成功推送到远端后，必须读取并更新仓库根目录的 `read.md`；
-- 以推送后的远端分支 HEAD 为准，追加本次推送的日期、分支、提交范围、变更摘要与已执行的校验；
-- 若本次未产生新的远端提交（例如提示 `up to date`），不重复追加记录；
-- 记录不得包含令牌、密码、私有地址或其他敏感配置。后续任务开始时先读取本文件和 `AGENTS.md`，以便延续发布记录。
 <!-- review:end -->
 
 <!-- frontend-design:start -->

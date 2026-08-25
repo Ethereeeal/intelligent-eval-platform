@@ -54,7 +54,7 @@
   }
 
   async function config() {
-    const compositions = await apiGet("/api/compositions").catch(() => []);
+    const compositions = await apiGet("/api/compositions");
     if (window.__evSelectedCompositionId) { state.compositionId = Number(window.__evSelectedCompositionId); window.__evSelectedCompositionId = null; }
     shell(`<div class="card card-pad"><div class="card-t">请求体设置</div><div class="ev-call-types" id="evCallTypes"><button class="on" data-adapter="openai_compatible">OpenAI 兼容接口</button><button data-adapter="http">通用 HTTP</button><button data-adapter="mock">Mock 演示</button></div>
       <div id="evAdapterFields"></div></div>
@@ -96,7 +96,7 @@
   async function start() {
     if (!state.compositionId) return toast("请先从评测库选择一个评测集");
     try {
-      const compositions = await apiGet("/api/compositions").catch(() => []);
+      const compositions = await apiGet("/api/compositions");
       const composition = compositions.find(item => Number(item.composition_id) === Number(state.compositionId));
       if (!composition) return toast("所选评测集版本不存在，请重新选择");
       openRunConfirmation(composition, adapterConfig());
@@ -178,12 +178,12 @@
 
   async function results() {
     const [runs, compositions] = await Promise.all([
-      apiGet("/api/evaluation-runs").catch(() => []),
-      apiGet("/api/compositions").catch(() => []),
+      apiGet("/api/evaluation-runs"),
+      apiGet("/api/compositions"),
     ]);
     if (!state.runId && runs[0]) state.runId = runs[0].run_id;
     let data = { results: [], summary: {} }, run = null;
-    if (state.runId) { data = await apiGet(`/api/evaluation-runs/${state.runId}/results`).catch(() => data); run = runs.find(x => x.run_id === state.runId); }
+    if (state.runId) { data = await apiGet(`/api/evaluation-runs/${state.runId}/results`); run = runs.find(x => x.run_id === state.runId); }
     state.results = data.results || [];
     const groups = compositions.map(composition => ({
       ...composition,
@@ -248,7 +248,17 @@
     finally { button.disabled = false; button.innerHTML = '<i data-lucide="file-spreadsheet"></i>导出 Excel'; icons(); }
   }
 
-  async function render() { if (!$w()) return; if (state.tab === "config") await config(); else await results(); }
+  async function render() {
+    if (!$w()) return;
+    shell(`<div class="card card-pad ev-load-state"><span class="spinner"></span><div><b>正在加载${state.tab === "config" ? "评测配置" : "评测结果"}</b><p class="es-gen-hint">正在连接后端并同步最新数据…</p></div></div>`);
+    try {
+      if (state.tab === "config") await config(); else await results();
+    } catch (error) {
+      shell(`<div class="card card-pad ev-load-state ev-load-error"><span><i data-lucide="cloud-alert"></i></span><div><b>数据加载失败</b><p class="es-gen-hint">${esc(error.message || "无法连接后端服务")}</p><button class="btn ghost" id="evRetryLoad"><i data-lucide="refresh-cw"></i>重新加载</button></div></div>`);
+      document.getElementById("evRetryLoad").onclick = render;
+      icons();
+    }
+  }
   window.renderEvaluation = render;
   document.addEventListener("click", e => { const tab = e.target.closest("[data-ev-tab]"); if (tab) { state.tab = tab.dataset.evTab; render(); } if (e.target.closest("#evConfigBtn")) { state.tab = "config"; render(); } const popover = document.getElementById("evExportPopover"); if (popover && !e.target.closest(".ev-export-wrap")) popover.hidden = true; });
 })();
