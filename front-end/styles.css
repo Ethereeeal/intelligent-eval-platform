@@ -1101,7 +1101,7 @@ ul { list-style: none; }
 .ev-bar span { display: block; height: 100%; background: linear-gradient(90deg, var(--brand), var(--brand-2)); transition: width .4s ease; }
 .ev-progress-t { font-size: 12.5px; color: var(--ink-2); margin-top: 6px; }
 .ev-metrics { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 4px; }
-.ev-layout { display:grid; grid-template-columns:180px minmax(0,1fr); gap:18px; }
+.ev-layout { display:grid; grid-template-columns:240px minmax(0,1fr); gap:18px; }
 .ev-side { background:var(--surface); border:1px solid rgba(140,124,240,.14); border-radius:14px; padding:8px; height:max-content; }
 .ev-side-item { display:flex; align-items:center; gap:9px; width:100%; padding:11px 12px; border:0; border-radius:10px; background:none; color:var(--ink-2); font-weight:600; text-align:left; cursor:pointer; }
 .ev-side-item.on { background:var(--brand-tint-2); color:var(--brand-strong); }
