@@ -26,6 +26,40 @@ from modules.shared.core.logging_config import get_logger
 logger = get_logger(__name__)
 _UNSET = object()
 
+
+def repair_legacy_filename(value: str | None) -> str | None:
+    """Repair legacy Chinese filenames whose bytes were decoded as Latin-1.
+
+    Older uploads may contain either GB18030 or UTF-8 bytes represented as
+    Latin-1 characters. Only accept a decoded candidate when it contains at
+    least two CJK characters and is clearly less suspicious than the source,
+    so ordinary ASCII and correctly decoded Unicode names remain untouched.
+    """
+    if not value:
+        return value
+    try:
+        raw = value.encode("latin-1")
+    except UnicodeEncodeError:
+        return value
+
+    def quality(text_value: str) -> tuple[int, int]:
+        cjk = sum("\u3400" <= char <= "\u9fff" for char in text_value)
+        suspicious = sum(0x80 <= ord(char) <= 0xFF for char in text_value)
+        return cjk * 2 - suspicious, cjk
+
+    source_score, _ = quality(value)
+    candidates: list[str] = []
+    for encoding in ("utf-8", "gb18030"):
+        try:
+            candidates.append(raw.decode(encoding))
+        except UnicodeDecodeError:
+            continue
+    if not candidates:
+        return value
+    repaired = max(candidates, key=lambda item: quality(item)[0])
+    repaired_score, repaired_cjk = quality(repaired)
+    return repaired if repaired_cjk >= 2 and repaired_score > source_score else value
+
 # 10 种 EIU 类型（M02 SPEC 4.2）
 EIU_TYPES = {
     "definition",
@@ -318,6 +352,19 @@ class DatabaseService:
         from sqlalchemy import inspect
 
         inspector = inspect(engine)
+        # 历史上传曾将 GB18030/UTF-8 文件名字节按 Latin-1 入库；启动时定向修复，
+        # 仅更新可明确还原的 document.file_name，不改对象存储路径和业务关联。
+        if "document" in inspector.get_table_names():
+            with SessionLocal() as session:
+                repaired_count = 0
+                for row in session.query(DocumentRow).all():
+                    repaired_name = repair_legacy_filename(row.file_name)
+                    if repaired_name != row.file_name:
+                        row.file_name = repaired_name
+                        repaired_count += 1
+                if repaired_count:
+                    session.commit()
+                    logger.info("repaired %s legacy document filenames", repaired_count)
         if "generated_case" in inspector.get_table_names():
             cols = {c["name"] for c in inspector.get_columns("generated_case")}
             if "statement_norm" not in cols:

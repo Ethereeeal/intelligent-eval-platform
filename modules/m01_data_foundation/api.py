@@ -20,6 +20,7 @@ from modules.m01_data_foundation.schemas import (
 )
 from modules.m01_data_foundation.services.pipeline import PipelineService
 from modules.shared.core.config import settings
+from modules.shared.services.database import repair_legacy_filename
 
 logger = logging.getLogger(__name__)
 
@@ -112,7 +113,7 @@ def precheck_upload(
     - ok + same_name_elsewhere：其他位置有同名文件（弱提示，不拦截）。
     """
     content = _read_upload_with_limit(file)
-    file_name = file.filename or "upload.bin"
+    file_name = repair_legacy_filename(file.filename or "upload.bin") or "upload.bin"
     suffix = Path(file_name).suffix.lower()
     if suffix not in settings.allowed_extensions:
         raise HTTPException(
@@ -168,6 +169,7 @@ def upload_document(
     file: UploadFile = File(...),
 ):
     content = _read_upload_with_limit(file)
+    file_name = repair_legacy_filename(file.filename or "upload.bin") or "upload.bin"
     # 文档统一归属「文档库」根下的任意目录；未指定用途时默认基础问题输入（basic）
     if purpose is None or purpose not in SYSTEM_FOLDERS.values():
         purpose = "basic"
@@ -179,8 +181,8 @@ def upload_document(
         pipeline_service.database.ensure_folder_path(upload_user or "web", folder_path)
         result = pipeline_service.upload_document(
             minio_path="",  # 由 pipeline 内部存储后回填路径
-            file_name=file.filename or "upload.bin",
-            file_type=file.filename or "",
+            file_name=file_name,
+            file_type=file_name,
             content=content,
             upload_user=upload_user,
             folder_path=folder_path,
@@ -270,6 +272,7 @@ def reupload_document(
     confirm_token: str | None = Form(None),
 ):
     content = _read_upload_with_limit(file)
+    file_name = repair_legacy_filename(file.filename) if file.filename else None
     if confirm_token:
         file_hash = hashlib.sha256(content).hexdigest()
         token_error = _validate_confirm_token(confirm_token, document_id, file_hash)
@@ -281,7 +284,7 @@ def reupload_document(
                 target_type="document",
                 target_id=str(document_id),
                 actor="web",
-                detail={"file_hash": file_hash, "file_name": file.filename},
+                detail={"file_hash": file_hash, "file_name": file_name},
             )
         except Exception:  # noqa: BLE001 — 审计失败不阻断覆盖确认
             logger.warning("审计写入失败 document.overwrite_confirmed id=%s", document_id)
@@ -289,7 +292,7 @@ def reupload_document(
         result = pipeline_service.reupload_document(
             document_id=document_id,
             content=content,
-            file_name=file.filename,
+            file_name=file_name,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
