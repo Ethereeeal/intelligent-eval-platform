@@ -39,6 +39,88 @@ const ES_CUSTOM_SAMPLES = [
   { name: "信贷业务回归集（样例）", total_cases: 2, cases: [{ q: "贷款申请一般需要哪些基础材料？", a: "通常包括身份、收入或经营证明，以及申请产品要求的补充材料。", evidence: "贷款申请资料要求", src: "信贷业务回归集（样例）" }, { q: "还款日前如何确认应还金额？", a: "可在账单或还款计划页面查询本期应还本金、利息及到期日。", evidence: "还款服务说明", src: "信贷业务回归集（样例）" }] },
 ];
 
+const ES_QUALITY_DIMENSIONS = ["可回答性", "答案忠实性", "唯一性", "证据充分性", "问题相关性"];
+
+function esPercent(value) {
+  return Math.max(0, Math.min(100, Math.round(Number(value || 0) * 100)));
+}
+
+function esStructuralQuality(rows, snapshot) {
+  const total = rows.length;
+  const validQuestion = rows.filter(row => String(row.q || "").trim().length >= 2).length;
+  const validAnswer = rows.filter(row => String(row.a || "").trim().length > 0).length;
+  const validEvidence = rows.filter(row => String(row.evidence || "").trim() && row.evidence !== "—").length;
+  const uniqueQuestions = new Set(rows.map(row => String(row.q || "").trim().toLowerCase()).filter(Boolean)).size;
+  const fallback = total ? {
+    answerability: validQuestion / total,
+    faithfulness: validAnswer / total,
+    uniqueness: uniqueQuestions / total,
+    evidence_sufficiency: validEvidence / total,
+    question_relevance: validQuestion / total,
+  } : {};
+  const quality = snapshot || {};
+  return {
+    source: snapshot ? "入库质量检查" : "字段质量检查",
+    scores: [
+      esPercent(quality.valid_qa_ratio ?? fallback.answerability),
+      esPercent(quality.data_completeness_rate ?? fallback.faithfulness),
+      esPercent(quality.duplicate_question_ratio == null ? fallback.uniqueness : 1 - quality.duplicate_question_ratio),
+      esPercent(total ? 1 - (Number(quality.no_evidence_count || 0) / total) : fallback.evidence_sufficiency),
+      esPercent(fallback.question_relevance),
+    ],
+  };
+}
+
+function esGeneratedQuality(summary, rows) {
+  const byCheck = summary?.by_check_type || {};
+  const keys = ["answerability", "faithfulness", "uniqueness", "evidence_sufficiency", "question_relevance"];
+  if (!keys.some(key => byCheck[key])) return { ...esStructuralQuality(rows), source: "待后端质量检查" };
+  return {
+    source: "后端五项质量检查",
+    scores: keys.map(key => {
+      const item = byCheck[key] || {};
+      const checked = Number(item.passed || 0) + Number(item.failed || 0);
+      return checked ? Math.round(Number(item.passed || 0) / checked * 100) : 0;
+    }),
+  };
+}
+
+function esQualityDashboardHTML(kind, id, quality, rows) {
+  if (!quality || kind === "public") return "";
+  const chartKey = `${kind}-${String(id).replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+  const difficulty = { "简单": 0, "中等": 0, "难": 0 };
+  rows.forEach(row => { difficulty[row.diff] = (difficulty[row.diff] || 0) + 1; });
+  const qualityLegend = ES_QUALITY_DIMENSIONS.map((label, index) => `<span><i></i>${label}<b>${quality.scores[index]}%</b></span>`).join("");
+  return `<section class="es-quality-dashboard ${kind === "generate" ? "has-difficulty" : ""}">
+    <div class="es-quality-panel"><div class="es-quality-title"><span>五维质量评估</span><small>${escapeHTML(quality.source)}</small></div><div class="es-quality-chart"><canvas id="esQualityRadar-${chartKey}"></canvas></div><div class="es-quality-legend">${qualityLegend}</div></div>
+    ${kind === "generate" ? `<div class="es-quality-panel"><div class="es-quality-title"><span>难度分布</span><small>${rows.length} 题</small></div><div class="es-quality-chart"><canvas id="esDifficultyRing-${chartKey}"></canvas></div><div class="es-difficulty-legend"><span><i class="easy"></i>简单 <b>${difficulty["简单"]}</b></span><span><i class="medium"></i>中等 <b>${difficulty["中等"]}</b></span><span><i class="hard"></i>难 <b>${difficulty["难"]}</b></span></div></div>` : ""}
+  </section>`;
+}
+
+function esBindQualityCharts(target, kind, id, quality, rows) {
+  if (!quality || kind === "public" || !window.Chart) return;
+  const chartKey = `${kind}-${String(id).replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+  const registry = window.__esQualityCharts || (window.__esQualityCharts = {});
+  const mount = (key, canvas, config) => {
+    if (!canvas) return;
+    if (registry[key]) registry[key].destroy();
+    registry[key] = new Chart(canvas, config);
+  };
+  mount(`radar:${chartKey}`, target.querySelector(`#esQualityRadar-${chartKey}`), {
+    type: "radar",
+    data: { labels: ES_QUALITY_DIMENSIONS, datasets: [{ data: quality.scores, backgroundColor: "rgba(27, 108, 168, .16)", borderColor: "#1B6CA8", pointBackgroundColor: "#1B6CA8", pointRadius: 3, borderWidth: 2 }] },
+    options: { maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { r: { min: 0, max: 100, ticks: { display: false }, grid: { color: "rgba(18, 69, 113, .13)" }, angleLines: { color: "rgba(18, 69, 113, .13)" }, pointLabels: { font: { size: 11 }, color: "#52677e" } } } },
+  });
+  if (kind !== "generate") return;
+  const difficulty = { "简单": 0, "中等": 0, "难": 0 };
+  rows.forEach(row => { difficulty[row.diff] = (difficulty[row.diff] || 0) + 1; });
+  mount(`difficulty:${chartKey}`, target.querySelector(`#esDifficultyRing-${chartKey}`), {
+    type: "doughnut",
+    data: { labels: ["简单", "中等", "难"], datasets: [{ data: [difficulty["简单"], difficulty["中等"], difficulty["难"]], backgroundColor: ["#5FBF97", "#E0A85E", "#E08AA0"], borderWidth: 0 }] },
+    options: { maintainAspectRatio: false, cutout: "62%", plugins: { legend: { display: false } } },
+  });
+}
+
 function esHomeRow(item) {
   return `<div class="list-row es-home-doc" role="button" tabindex="0" data-es-doc-kind="${escapeHTML(item.kind)}" data-es-doc-id="${escapeHTML(String(item.id))}">
     <span class="st" style="--c:${item.color || "#1B6CA8"}"></span><div class="lr-tx"><div class="lr-q">${escapeHTML(item.name)}</div><div class="lr-m">${escapeHTML(item.meta || "0 题")}</div></div><i data-lucide="chevron-right" class="lr-chev"></i>
@@ -71,10 +153,14 @@ async function esOpenLibraryDocument(row) {
   detail.innerHTML = `<div class="card card-pad"><div id="esReadonlyQaDetail" class="es-readonly-qa"><div class="es-gen-hint">加载评测集详情…</div></div></div>`;
   const cacheKey = `${kind}:${id}`;
   let cases = window.__esDocumentRows?.[cacheKey];
+  let uploadedSnapshot = window.__esQualitySnapshots?.[cacheKey] || null;
   if (!cases && kind === "uploaded") {
     const sample = ES_UPLOADED_SAMPLES.find(item => String(item.set_id) === String(id));
     const result = sample ? sample : await apiGet(`/api/eval-sets/uploaded/${id}`).catch(() => null);
     cases = result?.cases || [];
+    uploadedSnapshot = result?.set?.quality_snapshot || null;
+    window.__esQualitySnapshots = window.__esQualitySnapshots || {};
+    window.__esQualitySnapshots[cacheKey] = uploadedSnapshot;
   }
   if (!cases && kind === "public") cases = ES_PUBLIC_DIMS.find(item => item.key === id)?.cases || [];
   if (!cases && kind === "custom" && String(id).startsWith("version:")) {
@@ -90,9 +176,16 @@ async function esOpenLibraryDocument(row) {
   }
   if (navigationToken !== window.__esNavigationToken || window.__esView !== kind) return;
   const rows = (cases || []).map((item, index) => ({ id: item.id || item.case_id || `${kind}-${id}-${index}`, q: item.q || item.question || "", a: item.a || item.answer || item.gold_answer || "", diff: item.diff || item.difficulty || "中等", review: item.review || item.review_status || "待审核", evidence: item.evidence || "", src: item.src || item.source || name }));
+  let quality = kind === "public" ? null : esStructuralQuality(rows, uploadedSnapshot);
+  if (kind === "generate") {
+    const documentId = Number(String(id).replace(/^doc/, ""));
+    const summary = Number.isFinite(documentId) ? await apiGet(`/api/quality-check/results?document_id=${documentId}`).catch(() => null) : null;
+    if (navigationToken !== window.__esNavigationToken || window.__esView !== kind) return;
+    quality = esGeneratedQuality(summary, rows);
+  }
   window.__esDocumentRows = window.__esDocumentRows || {};
   window.__esDocumentRows[cacheKey] = rows;
-  esRenderTemplateDetail($("#esReadonlyQaDetail"), { kind, id, name, rows, editable: kind !== "public" });
+  esRenderTemplateDetail($("#esReadonlyQaDetail"), { kind, id, name, rows, quality, editable: kind !== "public" });
   icons();
 }
 
@@ -168,10 +261,11 @@ function esShowGlobalUploadMenu(btn) {
 
 function esRenderTemplateDetail(target, detail, options = {}) {
   if (!target) return;
-  const { kind, id, name, rows, editable } = detail;
+  const { kind, id, name, rows, quality, editable } = detail;
   const fieldFilters = {};
   const filterHead = (label, field) => `${label}<button class="col-filter" data-es-focus-filter="${field}" title="筛选${label}"><i data-lucide="filter"></i></button>`;
   target.innerHTML = `${options.fullscreen ? "" : `<div class="lib-head"><div class="lh-ic"><i data-lucide="message-square-text"></i></div><div><div class="lh-title">${escapeHTML(name)}</div><div class="lh-sub">评测集 · ${rows.length} 条</div></div></div>`}
+    ${options.fullscreen ? "" : esQualityDashboardHTML(kind, id, quality, rows)}
     <div class="qa-toolbar">
       <div><button class="btn ghost sm" id="esCaseExport"><i data-lucide="download"></i>导出评测集</button></div>
       <div class="qa-toolbar-right"><div class="qa-search"><i data-lucide="search"></i><input id="esCaseSearch" type="text" placeholder="搜索问题/答案/证据/来源…" /></div>${options.fullscreen ? "" : `<button class="btn ghost icon-only sm" id="esCaseFullscreen" title="放大查看"><i data-lucide="maximize"></i></button>`}</div>
@@ -230,6 +324,7 @@ function esRenderTemplateDetail(target, detail, options = {}) {
       esRenderTemplateDetail(target, { ...detail, rows: window.__esDocumentRows[cacheKey] }, options);
     }));
   }
+  if (!options.fullscreen) esBindQualityCharts(target, kind, id, quality, rows);
   icons();
 }
 

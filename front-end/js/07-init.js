@@ -176,7 +176,6 @@
     };
     // 输入文档库：上传文档 → 选择目标目录（点击弹出 overlay 目录树）→ 自动抽取知识点
     const uploadInput = $("#uploadInput");
-    const folderInput = $("#uploadFolderInput");
     if (uploadInput) {
       // 点击上传按钮：弹出 overlay modal，内部为目录树选择器，可滚动/折叠
       $("#uploadBtn").onclick = () => {
@@ -189,9 +188,7 @@
           `<div class="up-modal-body"><div class="up-tree">${uploadTreeHTML([TREE])}</div></div>` +
           `<div class="up-modal-foot">` +
           `<button class="up-pick-file">上传文件</button>` +
-          `<button class="up-pick-folder">上传文件夹（保留目录结构）</button>` +
           `</div>` +
-          `<div class="up-hint">文档统一上传至「文档库」，可在其内部任意子目录间组织；上传后自动解析分块并抽取知识点。</div>` +
           `</div>`;
         document.body.appendChild(mask);
         if (window.lucide) window.lucide.createIcons();
@@ -217,16 +214,6 @@
           closeModal();
           uploadInput.click();
         };
-        // 选文件夹上传（保留目录结构）
-        if (folderInput) {
-          mask.querySelector(".up-pick-folder").onclick = () => {
-            if (!state._uploadFolderPath) { toast("请先选择目标目录", "warn"); return; }
-            closeModal();
-            folderInput.click();
-          };
-        } else {
-          mask.querySelector(".up-pick-folder").style.display = "none";
-        }
       };
       // 单文件上传：按已选 folder_path 上传
       uploadInput.addEventListener("change", e => {
@@ -235,20 +222,6 @@
         }
         uploadInput.value = "";
       });
-      // 文件夹上传：保留相对目录结构，每个文件 folder_path = 目标/相对路径
-      if (folderInput) {
-        folderInput.addEventListener("change", e => {
-          if (!state._uploadFolderPath) { toast("请先选择目标目录", "warn"); return; }
-          const base = state._uploadFolderPath;
-          const entries = [...e.target.files].map(f => {
-            let rel = (f.webkitRelativePath || f.relativePath || "").split("/").slice(0, -1).join("/");
-            const fp = rel ? `${base}/${rel}` : base;
-            return { file: f, folderPath: fp };
-          });
-          handleUploadSelection(entries);
-          folderInput.value = "";
-        });
-      }
     }
     setupChat();
   }

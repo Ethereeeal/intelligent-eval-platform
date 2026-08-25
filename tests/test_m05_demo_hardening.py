@@ -82,7 +82,7 @@ class _FreezeMetadataDatabase:
         return [{"q": "上传问题", "a": "上传答案"}]
 
     def get_uploaded_set(self, set_id):
-        return {"name": "上传集"}
+        return {"name": "上传集", "quality_snapshot": {"total": 1, "data_completeness_rate": 1, "valid_qa_ratio": 1, "duplicate_question_ratio": 0}}
 
     def list_public_cases(self, set_id):
         return []

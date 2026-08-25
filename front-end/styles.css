@@ -722,6 +722,18 @@ ul { list-style: none; }
 .es-template-head, .es-template-row { display: grid; grid-template-columns: minmax(160px, 1.2fr) minmax(160px, 1.2fr) minmax(130px, .9fr) minmax(130px, .9fr) 64px; min-width: 760px; }
 .es-template-filter-row { display: grid; grid-template-columns: var(--qa-cols, 220px 300px 72px 92px 300px 200px 76px); min-width: max-content; background: var(--surface); border-bottom: 1px solid var(--brand-tint); }
 .es-template-filter-row input { min-width: 0; margin: 7px 8px; border: 1px solid rgba(140,124,240,.2); border-radius: 7px; padding: 6px 8px; color: var(--ink); background: var(--surface-2); font-size: 12px; }
+.es-quality-dashboard { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; margin: 16px 0; }
+.es-quality-dashboard.has-difficulty { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.es-quality-panel { min-width: 0; padding: 15px 16px 13px; border: 1px solid rgba(27,108,168,.14); border-radius: 14px; background: linear-gradient(135deg, rgba(27,108,168,.075), rgba(255,255,255,.68)); }
+.es-quality-title { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; font-size: 13px; font-weight: 700; color: var(--ink); }
+.es-quality-title small { font-size: 11px; font-weight: 500; color: var(--ink-3); white-space: nowrap; }
+.es-quality-chart { position: relative; height: 210px; max-width: 330px; margin: 4px auto 2px; }
+.es-quality-legend, .es-difficulty-legend { display: flex; justify-content: center; flex-wrap: wrap; gap: 7px 13px; font-size: 11px; color: var(--ink-2); }
+.es-quality-legend span, .es-difficulty-legend span { display: inline-flex; align-items: center; gap: 4px; }
+.es-quality-legend i, .es-difficulty-legend i { width: 7px; height: 7px; border-radius: 50%; background: #1B6CA8; display: inline-block; }
+.es-quality-legend b, .es-difficulty-legend b { color: var(--ink); font-weight: 700; }
+.es-difficulty-legend i.easy { background: #5FBF97; }.es-difficulty-legend i.medium { background: #E0A85E; }.es-difficulty-legend i.hard { background: #E08AA0; }
+@media (max-width: 760px) { .es-quality-dashboard.has-difficulty { grid-template-columns: 1fr; } }
 .es-template-four .qa-col-head, .qa-row.es-template-four, .es-template-four .es-template-filter-row { grid-template-columns: var(--es-template-cols, 240px 320px 320px 220px 76px); min-width: 100%; }
 .es-template-four .qa-col-head > .qa-cell, .qa-row.es-template-four > .qa-cell { min-width: 0; }
 .es-template-head { background: var(--surface-2); color: var(--ink-2); font-size: 12px; font-weight: 700; }

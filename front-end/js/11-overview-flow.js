@@ -13,7 +13,7 @@
         <div class="flow-mode-node source-public"><span class="f-ic"><i data-lucide="badge-check"></i></span><b>公共评测库</b><small>内置通用维度题集</small></div>
       </div>
       <div class="flow-down" aria-hidden="true"><i data-lucide="arrow-down"></i></div>
-      <div class="flow-result-node"><span class="f-ic"><i data-lucide="library-big"></i></span><b>可执行评测集</b><small>选择或合并后的可复用版本</small></div>
+      <div class="flow-result-node"><span class="f-ic"><i data-lucide="library-big"></i></span><b>评测集库</b><small>选择或合并后的可复用版本</small></div>
       <div class="flow-down" aria-hidden="true"><i data-lucide="arrow-down"></i></div>
       <div class="flow-run-node"><span class="f-ic"><i data-lucide="gauge"></i></span><b>自动评测</b><small>运行、评分与问题归因</small></div>
     </div>`;

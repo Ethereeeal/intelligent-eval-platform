@@ -21,10 +21,6 @@ import json
 import re
 from datetime import datetime
 
-from modules.m02_eiu_coverage.services.coverage import (
-    assert_coverage_gate,
-    save_coverage_report,
-)
 from modules.shared.services.database import DatabaseService
 
 # m04 审核状态机中"可纳入冻结集"的终态（不纳入 blocked / retired / needs_revision）
@@ -78,6 +74,18 @@ class DatasetLifecycleService:
             all_cases = [c for c in all_cases if c.get("document_id") in doc_set]
         return [c for c in all_cases if c.get("review_status") in PUBLISHABLE_STATUSES]
 
+    def _assert_selected_uploads_quality(self, uploaded_set_ids: list[int] | None) -> None:
+        """上传集门禁：证据可缺失，但问题/答案完整、有效且不得存在重复题。"""
+        for set_id in uploaded_set_ids or []:
+            item = self.db.get_uploaded_set(set_id)
+            if item is None:
+                raise ValueError(f"上传评测集 {set_id} 不存在")
+            quality = item.get("quality_snapshot") or {}
+            if quality.get("total", item.get("total_cases", 0)) <= 0:
+                raise ValueError(f"上传评测集“{item.get('name', set_id)}”为空")
+            if quality.get("data_completeness_rate", 0) < 1 or quality.get("valid_qa_ratio", 0) < 1 or quality.get("duplicate_question_ratio", 0) > 0:
+                raise ValueError(f"上传评测集“{item.get('name', set_id)}”未通过质量门禁（需问题/答案完整、有效且无重复题）")
+
     # ------------------------------------------------------------------
     # 版本冻结
     # ------------------------------------------------------------------
@@ -114,15 +122,11 @@ class DatasetLifecycleService:
         latest = self.db.get_latest_version_number()
         version_number = _next_version_number(latest)
 
-        # 文档来源沿用覆盖率门禁；纯外部组合不依赖 EIU 覆盖率。
+        # 门禁以本次评测集为单位：文档题只接纳 m04 可发布态，上传集须通过自身质量检查。
+        # 全库覆盖率/Block 对账率仅作为平台健康指标，不阻断单次冻结。
         coverage_report_id = None
-        coverage = {}
-        if document_ids:
-            coverage_report_id = save_coverage_report(
-                snapshot_metadata={"frozen_at": datetime.utcnow().isoformat() + "Z"},
-            )
-            coverage = self.db.get_latest_coverage_report() or {}
-            assert_coverage_gate(coverage)
+        coverage = {"scope": "selected_eval_set"}
+        self._assert_selected_uploads_quality(uploaded_set_ids)
         snapshot_metadata = self._build_snapshot_metadata(
             coverage=coverage,
             created_by=created_by,

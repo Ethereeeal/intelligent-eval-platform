@@ -294,6 +294,20 @@
           if (!qualityResponse.ok) throw new Error(`质量检查 ${qualityResponse.status}`);
         } catch (error) { failedDocs.push(doc.name); }
       }
+      // m03 已将按文档生成的题持久化为 generated_case，m04 完成质检后立刻回读。
+      // 生成库以该中间产物为唯一数据源，不能等到最终评测集库冻结后才刷新前端状态。
+      if (docIds.length) {
+        try {
+          await loadData();
+          renderLib("qa");
+        } catch (error) {
+          submit.disabled = false;
+          submit.innerHTML = `<i data-lucide="sparkles"></i>生成并存入评测集库`;
+          icons();
+          toast("生成库落库后刷新失败，请重试：" + (error.message || error), "warn");
+          return;
+        }
+      }
       const name = mask.querySelector("#esGeneratorName").value.trim() || "未命名评测集";
       const uploadedSetIds = uploadIndexes.map(index => uploadedSets[index]?.set_id).filter(id => Number.isInteger(Number(id)));
       if (uploadIndexes.length !== uploadedSetIds.length) { submit.disabled = false; submit.textContent = "生成并存入评测集库"; return toast("上传库样例不能永久保存，请选择已实际上传的评测集", "warn"); }

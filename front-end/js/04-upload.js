@@ -119,13 +119,12 @@
                 return;
               }
               // 4) 入库 + 知识点抽取完成：不自动生成评测集。
-              //    EIU 已持久化在文档库，之后用户可在「评测集生成」界面手动选择该文档
-              //    触发 m03 生成 + m04 质检；删掉旧评测集库后 EIU 仍在，可随时重新生成。
+              //    EIU 已持久化在文档库，之后用户可在评测集库中选择该文档生成评测集。
               await loadData();
               state.sel.doc = realId;
               renderLib("doc");
               renderLibContent("doc", realId);
-              toast(`「${file.name}」已入库并抽取知识点，可在「评测集生成」界面手动生成评测集`);
+              toast(`「${file.name}」上传成功，可前往评测集库进行生成`);
               icons();
             }
           } catch (e) { /* 忽略单次轮询错误 */ }
@@ -136,7 +135,7 @@
         state.sel.doc = realId;
         renderLib("doc");
         renderLibContent("doc", realId);
-        toast(`「${file.name}」已上传入库（未触发知识点抽取）`);
+        toast(`「${file.name}」上传成功，可前往评测集库进行生成`);
         icons();
       }
     } catch (e) {
@@ -335,4 +334,3 @@
       } catch (e) { /* 忽略单次轮询错误 */ }
     }, 1500);
   }
-
