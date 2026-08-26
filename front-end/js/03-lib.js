@@ -83,6 +83,21 @@
     </div>`;
   }
 
+  function kpRouteBadgeHTML(k) {
+    if (!k.routeColor) return "";
+    const actionLabel = ({
+      pass: "通过", split: "拆分", merge: "合并", complete_context: "补充上下文",
+      reject: "排除", human_review: "人工复核"
+    }[k.reviewAction] || "");
+    const detail = [
+      k.routeLabel || "",
+      actionLabel ? `动作：${actionLabel}` : "",
+      k.reviewAttempts > 0 ? `审查 ${k.reviewAttempts} 次` : "",
+      ...(k.routeReasons || [])
+    ].filter(Boolean).join("；");
+    return `<span class="kp-route-badge ${escapeHTML(k.routeColor)}" title="${escapeHTML(detail)}">${escapeHTML(k.routeLabel || k.routeColor)}</span>`;
+  }
+
   // 知识点表：状态与四项检查优先，证据链支持跨 Block 追溯。
   function kpTableHTML(all) {
     return `<div class="kp-table kp-table-filterable">
@@ -98,13 +113,13 @@
       </div>
       ${all.map((k, i) => `<div class="kp-tr">
         <span class="kp-td kp-td-stmt kp-c-stmt"><b>#${i + 1}</b> ${escapeHTML(k.stmt)}</span>
-        <span class="kp-td kp-c-status"><span class="claim-status ${escapeHTML(k.qualityStatus || "candidate")}">${escapeHTML(k.qualityLabel || "候选")}</span></span>
-        <span class="kp-td kp-c-quality" title="${escapeHTML(k.qualityDetail || "")}">${escapeHTML(k.qualityText || "未检查")}</span>
+        <span class="kp-td kp-c-status">${["needs_review", "candidate"].includes(k.qualityStatus) ? `<button type="button" class="claim-status ${escapeHTML(k.qualityStatus || "candidate")} kp-review-action" data-eiu-id="${escapeHTML(String(k.id || "").replace(/^KP-/, ""))}" data-review-action="edit" title="点击处理该知识点">${escapeHTML(k.qualityLabel || "候选")}</button>` : `<span class="claim-status ${escapeHTML(k.qualityStatus || "candidate")}">${escapeHTML(k.qualityLabel || "候选")}</span>`}</span>
+        <span class="kp-td kp-c-quality" title="${escapeHTML(k.qualityDetail || "")}">${kpRouteBadgeHTML(k)}${escapeHTML(k.qualityText || "未检查")}</span>
         <span class="kp-td kp-c-prio">${escapeHTML(k.prio)}</span>
         <span class="kp-td kp-c-type"><span class="pill br">${escapeHTML(k.type)}</span></span>
         <span class="kp-td kp-td-ev kp-c-ev">${k.crossBlock ? '<span class="cross-block-tag">跨块</span> ' : ''}${escapeHTML(k.evidenceChain || k.ev)}</span>
         <span class="kp-td kp-td-src kp-c-src">${escapeHTML(k.src)}</span>
-        <span class="kp-td kp-review-actions">${k.qualityStatus === "needs_review" ? `<button class="btn ghost sm kp-review-action" data-eiu-id="${escapeHTML(String(k.id || "").replace(/^KP-/, ""))}" data-review-action="approve">通过</button><button class="btn ghost sm kp-review-action" data-eiu-id="${escapeHTML(String(k.id || "").replace(/^KP-/, ""))}" data-review-action="edit">编辑</button><button class="btn ghost sm kp-review-action danger" data-eiu-id="${escapeHTML(String(k.id || "").replace(/^KP-/, ""))}" data-review-action="reject">排除</button>` : ["verified", "rejected"].includes(k.qualityStatus) ? `<button class="btn ghost sm kp-review-action" data-eiu-id="${escapeHTML(String(k.id || "").replace(/^KP-/, ""))}" data-review-action="reopen">重新复核</button>` : '<span class="muted">—</span>'}</span>
+        <span class="kp-td kp-review-actions">${["needs_review", "candidate"].includes(k.qualityStatus) ? `<button class="btn ghost sm kp-review-action" data-eiu-id="${escapeHTML(String(k.id || "").replace(/^KP-/, ""))}" data-review-action="approve">通过</button><button class="btn ghost sm kp-review-action" data-eiu-id="${escapeHTML(String(k.id || "").replace(/^KP-/, ""))}" data-review-action="edit">编辑</button><button class="btn ghost sm kp-review-action danger" data-eiu-id="${escapeHTML(String(k.id || "").replace(/^KP-/, ""))}" data-review-action="reject">排除</button>` : ["verified", "rejected"].includes(k.qualityStatus) ? `<button class="btn ghost sm kp-review-action" data-eiu-id="${escapeHTML(String(k.id || "").replace(/^KP-/, ""))}" data-review-action="reopen">重新复核</button>` : '<span class="muted">—</span>'}</span>
       </div>`).join("")}
     </div>`;
   }
