@@ -1,18 +1,23 @@
 from __future__ import annotations
 
 import unittest
+from unittest.mock import Mock, patch
 
+from modules.m01_data_foundation.services.parser import DocumentParser
 from modules.m02_eiu_coverage.schemas import EiuMergeRequest, EiuSplitRequest, EiuUpdate
-from modules.m02_eiu_coverage.services.eiu_quality import EiuQualityEvaluator
-from modules.m02_eiu_coverage.services.llm_client import LLMClient
-from modules.m02_eiu_coverage.services.eiu_extractor import EiuExtractorService, _dedup_semantic, deterministic_extract
-from modules.m02_eiu_coverage.services.context_bundle import ContextBundleBuilder
+from modules.m02_eiu_coverage.services import eiu_extractor
 from modules.m02_eiu_coverage.services.claim_audit import (
     analyse_claim_relationships,
     audit_document_claim_coverage,
 )
-from modules.m01_data_foundation.services.parser import DocumentParser
-from unittest.mock import Mock
+from modules.m02_eiu_coverage.services.context_bundle import ContextBundleBuilder
+from modules.m02_eiu_coverage.services.eiu_extractor import (
+    EiuExtractorService,
+    _dedup_semantic,
+    deterministic_extract,
+)
+from modules.m02_eiu_coverage.services.eiu_quality import EiuQualityEvaluator
+from modules.m02_eiu_coverage.services.llm_client import LLMClient
 
 
 class M02HardeningTests(unittest.TestCase):
@@ -264,3 +269,115 @@ class M02HardeningTests(unittest.TestCase):
         self.assertEqual(items[0]["evidence_blocks"], [1])
         self.assertEqual(len(items[0]["source_candidate_ids"]), 2)
         self.assertIn("检测到 2 个业务谓词，需判断拆分或合并", items[0]["route_reasons"])
+
+    def test_model_item_without_block_id_is_bound_to_current_block(self) -> None:
+        service = EiuExtractorService()
+        service.llm.use_offline = False
+        service.llm.extract_json = Mock(return_value=[
+            {
+                "statement": "申请人应当按第十八条提供材料",
+                "review_action": "complete_context",
+                "evidence_block_ids": [1],
+            }
+        ])
+        blocks = [
+            {
+                "block_id": 1,
+                "document_id": 1,
+                "block_type": "paragraph",
+                "block_text": "第十八条 申请人应当按第十八条提供材料。",
+                "section_path": "授信",
+                "metadata_json": {"article_no": "第十八条"},
+            },
+            {
+                "block_id": 2,
+                "document_id": 1,
+                "block_type": "paragraph",
+                "block_text": "第十八条 材料应包括存单原件。",
+                "section_path": "授信",
+                "metadata_json": {"article_no": "第十八条"},
+            },
+        ]
+
+        items = service._extract_block(
+            blocks[0], {"file_name": "x.docx"}, ContextBundleBuilder(blocks).build_all()[1]
+        )
+
+        self.assertEqual(items[0]["block_id"], 1)
+        self.assertEqual(items[0]["evidence_blocks"], [1])
+
+    def test_unexpected_llm_review_error_falls_back_to_red_rule_candidate(self) -> None:
+        service = EiuExtractorService()
+        service.llm.use_offline = False
+        service.llm.extract_json = Mock(side_effect=KeyError("block_id"))
+        block = {
+            "block_id": 1,
+            "block_type": "paragraph",
+            "block_text": "应当提供存单原件。",
+            "section_path": "授信",
+        }
+
+        items = service._extract_block(block, {"file_name": "x.docx"}, {"prev": "", "next": ""})
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0]["route_color"], "red")
+        self.assertEqual(items[0]["review_action"], "human_review")
+        self.assertIn("KeyError", "".join(items[0]["route_reasons"]))
+
+    def test_one_failed_block_does_not_abort_document_extraction(self) -> None:
+        class FakeDatabase:
+            def __init__(self) -> None:
+                self.saved = []
+                self.job_updates = []
+                self.blocks = [
+                    {
+                        "block_id": 1,
+                        "document_id": 1,
+                        "block_type": "paragraph",
+                        "block_text": "第一段内容。",
+                        "section_path": "授信",
+                        "metadata_json": {},
+                    },
+                    {
+                        "block_id": 2,
+                        "document_id": 1,
+                        "block_type": "paragraph",
+                        "block_text": "申请人应当提供担保材料。",
+                        "section_path": "授信",
+                        "metadata_json": {},
+                    },
+                ]
+
+            def list_documents(self):
+                return [{"document_id": 1, "file_name": "x.docx"}]
+
+            def get_document_blocks(self, document_id):
+                return self.blocks
+
+            def delete_eius_by_document(self, *, document_id):
+                return 0
+
+            def update_job(self, job_id, **kwargs):
+                self.job_updates.append((job_id, kwargs))
+
+            def save_eius(self, *, items):
+                self.saved.extend(items)
+                return list(range(1, len(items) + 1))
+
+        service = EiuExtractorService()
+        service.database = FakeDatabase()
+        service._extract_block = Mock(side_effect=[
+            KeyError("block_id"),
+            [{"statement": "申请人应当提供担保材料", "eiu_type": "rule", "is_questionable": True}],
+        ])
+
+        with patch.object(eiu_extractor, "_dedup_semantic", side_effect=lambda items, *_args: items), \
+            patch.object(eiu_extractor, "_encode_one", return_value=None):
+            result = service._run_locked(job_id=99, document_id=1)
+
+        self.assertEqual(result["status"], "completed")
+        self.assertEqual(result["failed_blocks"], 1)
+        self.assertEqual(len(service.database.saved), 2)
+        self.assertEqual(service.database.saved[0]["extraction_model"], "eiu-extract-error")
+        self.assertEqual(service.database.saved[0]["block_id"], 1)
+        self.assertIn("失败 1 个 Block", service.database.job_updates[-1][1]["message"])

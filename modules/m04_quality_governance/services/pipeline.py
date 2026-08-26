@@ -71,8 +71,18 @@ class PipelineService:
                     case, preserve_status=case["review_status"] == "published"
                 )
             except Exception as exc:  # 单题异常不阻断批量流程
+                logger.exception(
+                    "质量检查异常 case_id=%s document_id=%s error_type=%s",
+                    case.get("case_id"),
+                    case.get("document_id"),
+                    type(exc).__name__,
+                )
                 summary.setdefault("errors", []).append(
-                    {"case_id": case["case_id"], "error": str(exc)}
+                    {
+                        "case_id": case["case_id"],
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                    }
                 )
                 continue
 

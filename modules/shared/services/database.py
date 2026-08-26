@@ -982,17 +982,43 @@ class DatabaseService:
         parent_path = "/".join(fp.split("/")[:-1])
         with SessionLocal() as session:
             row = self._folder_by_path(session, fp)
-            if row is None:
-                raise ValueError(f"文件夹不存在：{fp}")
-            # 递归收集该文件夹及其全部子孙 id
-            ids = [row.folder_id]
+            # 历史上传可能只保存了 document.folder_path，没有同步写入 folder 表。
+            # 这类“隐式目录”仍然是前端可见的文档目录，删除时按路径清理内容，
+            # 不能因为缺少 folder 行就返回 404。
+            ids: list[int] = []
+            if row is not None:
+                # 递归收集该文件夹及其全部子孙 id
+                ids = [row.folder_id]
 
-            def collect(pid: int) -> None:
-                for c in session.query(FolderRow).filter(FolderRow.parent_id == pid).all():
-                    ids.append(c.folder_id)
-                    collect(c.folder_id)
+                def collect(pid: int) -> None:
+                    for c in session.query(FolderRow).filter(FolderRow.parent_id == pid).all():
+                        ids.append(c.folder_id)
+                        collect(c.folder_id)
 
-            collect(row.folder_id)
+                collect(row.folder_id)
+            else:
+                # 没有 folder 记录时，用文档/评测集路径判断该历史目录是否真实存在。
+                doc_exists = (
+                    session.query(DocumentRow.document_id)
+                    .filter(
+                        (DocumentRow.folder_path == fp)
+                        | (DocumentRow.folder_path.startswith(fp + "/", autoescape=True))
+                    )
+                    .first()
+                    is not None
+                )
+                case_exists = (
+                    session.query(GeneratedCaseRow.case_id)
+                    .filter(
+                        (GeneratedCaseRow.folder_path == fp)
+                        | (GeneratedCaseRow.folder_path.startswith(fp + "/", autoescape=True))
+                    )
+                    .first()
+                    is not None
+                )
+                if not doc_exists and not case_exists:
+                    raise ValueError(f"文件夹不存在：{fp}")
+
             # 文档上移到父目录：去掉被删文件夹前缀段（不丢文档）
             for doc in session.query(DocumentRow).all():
                 dfp = doc.folder_path or ""
@@ -1015,7 +1041,11 @@ class DatabaseService:
                 synchronize_session=False
             )
             session.commit()
-            return {"deleted_folders": len(ids), "deleted_cases": deleted_cases}
+            return {
+                "deleted_folders": len(ids),
+                "deleted_cases": deleted_cases,
+                "deleted_implicit_path": row is None,
+            }
 
     def get_document_blocks(self, document_id: int) -> list[dict]:
         with SessionLocal() as session:

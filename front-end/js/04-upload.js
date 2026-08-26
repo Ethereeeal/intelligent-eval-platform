@@ -17,7 +17,7 @@
     const completed = jobs.filter(job => job.done).length;
     box.innerHTML = `<div class="doc-upload-progress-head"><strong>文档上传与解析</strong><b>${completed}/${jobs.length} 完成</b></div><div class="doc-upload-progress-list">${jobs.map(job => {
       const progress = Math.max(0, Math.min(100, Math.round(job.progress || 0)));
-      return `<div class="doc-upload-progress-row"><div class="doc-upload-progress-name"><span>${escapeHTML(job.fileName)}</span><b>${job.done ? (job.failed ? "失败" : "完成") : `${progress}%`}</b></div><div class="doc-upload-progress-track"><span class="${job.failed ? "failed" : ""}" style="width:${progress}%"></span></div><div class="doc-upload-progress-status">${escapeHTML(job.status || "处理中…")}</div></div>`;
+      return `<div class="doc-upload-progress-row"><div class="doc-upload-progress-name"><span>${escapeHTML(job.fileName)}</span><b>${job.done ? (job.failed ? "失败" : "完成") : progress > 30 ? `${progress}%` : "准备中"}</b></div><div class="doc-upload-progress-track"><span class="${job.failed ? "failed" : ""}" style="width:${progress}%"></span></div><div class="doc-upload-progress-status">${escapeHTML(job.status || "处理中…")}</div></div>`;
     }).join("")}</div>`;
   }
 
@@ -151,8 +151,10 @@
             const jr = await fetch(API_BASE + `/api/jobs/${jobId}`);
             if (!jr.ok) return;
             const job = await jr.json();
-            const pg = job.progress || 0;
-            updateUploadJob(id, { progress: Math.max(30, Math.min(99, pg)), status: `知识点抽取中 ${Math.round(pg)}%` });
+            const pg = Math.max(0, Math.min(100, Number(job.progress) || 0));
+            // 上传完成占 0–30%，EIU 抽取按后端每 10 个 Block 的离散进度映射到 30–99%。
+            const overallProgress = Math.max(30, Math.min(99, 30 + Math.round(pg * 0.69)));
+            updateUploadJob(id, { progress: overallProgress, status: "知识点抽取中" });
             if ((state.view === "doclib" || (state.view === "evalset" && window.__esView === "doclib")) && state.sel.doc === id) renderDocProgress(id);
             if (job.finished || job.status === "completed" || job.status === "failed") {
               clearInterval(poll);
@@ -208,7 +210,7 @@
     const bar = document.querySelector("#docContent .upload-prog-bar");
     const txt = document.querySelector("#docContent .upload-prog-txt");
     if (bar) bar.style.width = pg + "%";
-    if (txt) txt.textContent = pg >= 100 ? "解析完成 ✓" : `知识点解析中 ${pg}%`;
+    if (txt) txt.textContent = pg >= 100 ? "解析完成 ✓" : `解析进度 ${pg}%`;
   }
 
   /* ---------------- 混合上传：预检 → 异常确认 → 上传 ---------------- */

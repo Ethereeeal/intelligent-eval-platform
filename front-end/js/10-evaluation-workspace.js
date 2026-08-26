@@ -3,6 +3,7 @@
   const state = window.__evWorkspace = window.__evWorkspace || {
     tab: "config",
     compositionId: null,
+    selectedSource: null,
     runId: null,
     results: [],
     filteredResults: [],
@@ -69,19 +70,55 @@
   }
 
   async function config() {
-    const compositions = await apiGet("/api/compositions");
-    if (window.__evSelectedCompositionId) { state.compositionId = Number(window.__evSelectedCompositionId); window.__evSelectedCompositionId = null; }
+    const [compositionsResponse, versionsResponse] = await Promise.all([
+      apiGet("/api/compositions"),
+      apiGet("/api/versions"),
+    ]);
+    const compositions = Array.isArray(compositionsResponse) ? compositionsResponse : [];
+    const versions = Array.isArray(versionsResponse) ? versionsResponse : [];
+    if (window.__evSelectedCompositionId) {
+      state.compositionId = Number(window.__evSelectedCompositionId);
+      state.selectedSource = { kind: "composition", compositionId: state.compositionId };
+      window.__evSelectedCompositionId = null;
+    }
+    const representedVersionIds = new Set(
+      compositions.flatMap(composition => (composition.items || [])
+        .filter(item => item?.source === "doc_generated")
+        .map(item => Number(item.version_id)))
+        .filter(Number.isFinite),
+    );
+    const sourceItems = [
+      ...compositions.map(composition => ({ kind: "composition", id: Number(composition.composition_id), data: composition })),
+      ...versions
+        .filter(version => version?.status === "frozen" && Number.isFinite(Number(version.version_id)))
+        .filter(version => !representedVersionIds.has(Number(version.version_id)))
+        .map(version => ({ kind: "version", id: Number(version.version_id), data: version })),
+    ];
+    const itemIsSelected = item => item.kind === "version"
+      ? state.selectedSource?.kind === "version" && Number(state.selectedSource.versionId) === item.id
+      : state.selectedSource?.kind !== "version" && Number(state.compositionId) === item.id;
+    const sourceRows = sourceItems.map(item => {
+      const selected = itemIsSelected(item);
+      if (item.kind === "version") {
+        const version = item.data;
+        const label = version.name || version.snapshot_metadata?.composition_name || version.version_number || `评测集版本 #${item.id}`;
+        const meta = `${version.version_number || `版本 #${item.id}`} · ${Number(version.case_count || 0)} 题`;
+        return `<label class="ev-composition ${selected ? "selected" : ""}"><input type="radio" name="evComposition" value="version:${item.id}" ${selected ? "checked" : ""}/><span><b>${esc(label)}</b><small>${esc(meta)}</small></span></label>`;
+      }
+      const composition = item.data;
+      return `<label class="ev-composition ${selected ? "selected" : ""}"><input type="radio" name="evComposition" value="composition:${item.id}" ${selected ? "checked" : ""}/><span><b>${esc(composition.name || `评测集组合 #${item.id}`)}</b><small>组合 #${item.id} · ${Array.isArray(composition.items) ? composition.items.length : 0} 个来源</small></span></label>`;
+    }).join("");
     const profiles = loadProfiles();
     shell(`<div class="card card-pad"><div class="ev-config-head"><div><div class="card-t">请求体设置</div><p>配置可保存为浏览器内的复用模板，密钥和 Header 值不会保存。</p></div><div class="ev-profile-actions"><select class="es-input" id="evProfile"><option value="">选择已保存配置</option>${profiles.map(item => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join("")}</select><button class="btn ghost" id="evSaveProfile"><i data-lucide="save"></i>保存配置</button><button class="btn ghost" id="evTestAdapter"><i data-lucide="plug-zap"></i>测试通路</button></div></div><div class="ev-call-types" id="evCallTypes"><button class="on" data-adapter="openai_compatible">OpenAI 兼容接口</button><button data-adapter="http">通用 HTTP</button><button data-adapter="mock">Mock 演示</button></div>
       <div id="evAdapterFields"></div></div>
-      <div class="card card-pad ev-section"><div class="card-t">选择评测集</div><p class="es-gen-hint">仅可选择评测库中的正式评测集版本。单个来源也需先创建为评测库版本，以便追踪与复用。</p><div class="ev-set-actions"><button class="btn ghost" id="evCreateSet"><i data-lucide="combine"></i>创建 / 合并评测集</button></div><div class="ev-compositions">${compositions.length ? compositions.map(c => `<label class="ev-composition ${Number(c.composition_id) === state.compositionId ? "selected" : ""}"><input type="radio" name="evComposition" value="${c.composition_id}" ${Number(c.composition_id) === state.compositionId ? "checked" : ""}/><span><b>${esc(c.name)}</b><small>版本 #${c.composition_id} · ${Array.isArray(c.items) ? c.items.length : 0} 个来源</small></span></label>`).join("") : `<div class="es-gen-hint">暂无评测库版本，请先创建或合并评测集。</div>`}</div></div>
+      <div class="card card-pad ev-section"><div class="card-t">选择评测集</div><p class="es-gen-hint">评测库同时展示冻结版本和已创建的组合；冻结版本首次发起评测时会自动登记为可执行组合。</p><div class="ev-set-actions"><button class="btn ghost" id="evCreateSet"><i data-lucide="combine"></i>创建 / 合并评测集</button></div><div class="ev-compositions">${sourceRows || `<div class="es-gen-hint">暂无已冻结的评测集，请先生成并冻结评测集。</div>`}</div></div>
       <div class="ev-run-foot"><label class="es-field">运行名称（可选）</label><input class="es-input" id="evRunName" placeholder="例如：客服智能体 v0.1 回归测试"/><button class="btn primary" id="evStart"><i data-lucide="play"></i>发起评测</button></div>`);
     // Demo 不提供 Mock 入口；评测集以可展开的“评测库”目录展示。
     document.querySelector('[data-adapter="mock"]').remove();
     const compositionBox = document.querySelector(".ev-compositions");
     const folder = document.createElement("button");
     folder.type = "button"; folder.className = "ev-library-folder";
-    folder.innerHTML = `<i data-lucide="chevron-down"></i><i data-lucide="folder-open"></i><b>评测库</b><span>${compositions.length}</span>`;
+    folder.innerHTML = `<i data-lucide="chevron-down"></i><i data-lucide="folder-open"></i><b>评测库</b><span>${sourceItems.length}</span>`;
     compositionBox.parentNode.insertBefore(folder, compositionBox);
     folder.onclick = () => { const closed = compositionBox.classList.toggle("collapsed"); folder.querySelector("svg").setAttribute("data-lucide", closed ? "chevron-right" : "chevron-down"); icons(); };
     const nameInput = document.getElementById("evRunName");
@@ -89,7 +126,18 @@
     setAdapter(state.draftAdapter || "openai_compatible");
     if (state.draftConfig) applyAdapterConfig(state.adapter, state.draftConfig);
     document.querySelectorAll("#evCallTypes button").forEach(b => b.onclick = () => setAdapter(b.dataset.adapter));
-    document.querySelectorAll("input[name=evComposition]").forEach(i => i.onchange = () => { state.compositionId = Number(i.value); document.querySelectorAll(".ev-composition").forEach(x => x.classList.toggle("selected", x.querySelector("input").checked)); });
+    document.querySelectorAll("input[name=evComposition]").forEach(i => i.onchange = () => {
+      const [kind, rawId] = i.value.split(":");
+      const id = Number(rawId);
+      if (kind === "version") {
+        state.compositionId = null;
+        state.selectedSource = { kind: "version", versionId: id };
+      } else {
+        state.compositionId = id;
+        state.selectedSource = { kind: "composition", compositionId: id };
+      }
+      document.querySelectorAll(".ev-composition").forEach(x => x.classList.toggle("selected", x.querySelector("input").checked));
+    });
     document.getElementById("evCreateSet").onclick = () => {
       try { state.draftConfig = adapterConfig(); state.draftAdapter = state.adapter; } catch (_) { /* 输入未完成时仍允许先创建评测集 */ }
       window.__evalSetReturn = "evaluation";
@@ -168,10 +216,39 @@
   }
 
   async function start() {
-    if (!state.compositionId) return toast("请先从评测库选择一个评测集");
+    const selectedSource = state.selectedSource || (state.compositionId ? { kind: "composition", compositionId: Number(state.compositionId) } : null);
+    if (!selectedSource) return toast("请先从评测库选择一个评测集");
     try {
-      const compositions = await apiGet("/api/compositions");
-      const composition = compositions.find(item => Number(item.composition_id) === Number(state.compositionId));
+      const [compositionsResponse, versionsResponse] = await Promise.all([
+        apiGet("/api/compositions"),
+        apiGet("/api/versions"),
+      ]);
+      const compositions = Array.isArray(compositionsResponse) ? compositionsResponse : [];
+      const versions = Array.isArray(versionsResponse) ? versionsResponse : [];
+      let composition;
+      if (selectedSource.kind === "version") {
+        const version = versions.find(item => Number(item.version_id) === Number(selectedSource.versionId) && item.status === "frozen");
+        if (!version) return toast("所选冻结版本不存在或尚未冻结，请重新选择");
+        composition = compositions.find(item => (item.items || []).some(source => source?.source === "doc_generated" && Number(source.version_id) === Number(version.version_id)));
+        if (!composition) {
+          const name = version.name || version.snapshot_metadata?.composition_name || version.version_number || `评测集版本 #${version.version_id}`;
+          const created = await post("/api/compositions", {
+            name,
+            items: [{ source: "doc_generated", version_id: Number(version.version_id) }],
+            created_by: "web",
+          });
+          composition = {
+            composition_id: created.composition_id,
+            name,
+            items: [{ source: "doc_generated", version_id: Number(version.version_id) }],
+            created_at: version.created_at,
+          };
+        }
+        state.compositionId = Number(composition.composition_id);
+        state.selectedSource = { kind: "composition", compositionId: state.compositionId };
+      } else {
+        composition = compositions.find(item => Number(item.composition_id) === Number(selectedSource.compositionId));
+      }
       if (!composition) return toast("所选评测集版本不存在，请重新选择");
       openRunConfirmation(composition, adapterConfig());
     } catch (e) { toast("发起失败：" + e.message); }

@@ -1,6 +1,6 @@
 """M02 — EIU 抽取核心逻辑（SPEC §5.3 / §5.4 / §8）。
 
-逐 Block 调用 LLM 抽取可评测信息单元，复用 M01 的 doc_update_job 反馈进度：
+逐 Block 调用 LLM 抽取可评测信息单元，复用 M01 的 doc_update_job 反馈进度；每完成 10 个 Block 更新一次，最后一个 Block 收口：
   progress = 已处理段落 Block 数 / 总段落 Block 数 × 100
 无实质内容的 Block 写入排除记录（is_questionable=false + exclusion_reason），
 保证"实质 Block 对账率"可达 100%（SPEC §6.4 / §6.3）。
@@ -10,6 +10,7 @@ LLM 不可用（未安装 openai / API Key 为占位符）时，自动降级为�
 """
 from __future__ import annotations
 
+import logging
 import re
 import threading
 from pathlib import Path
@@ -18,7 +19,6 @@ from typing import Any
 from modules.m01_data_foundation.services.eiu_indexer import EiuFaissIndex
 from modules.m02_eiu_coverage.services.context_bundle import ContextBundleBuilder
 from modules.m02_eiu_coverage.services.eiu_quality import EiuQualityEvaluator
-from modules.m02_eiu_coverage.services.eiu_review import EiuReviewMixin
 from modules.m02_eiu_coverage.services.llm_client import LLMClient, LLMError
 from modules.shared.services.database import EIU_TYPES, PRIORITY_WEIGHT, DatabaseService
 
@@ -51,6 +51,8 @@ _EXCEPTION_RE = re.compile(r"除非|除外|例外|但(?:是)?|可放宽|不适�
 _LIST_RE = re.compile(r"(?:：|包括|如下|下列).{0,120}[、；]")
 _YELLOW_BLOCK_LENGTH = 320
 _REVIEW_ACTIONS = {"pass", "split", "merge", "complete_context", "reject", "human_review"}
+
+logger = logging.getLogger(__name__)
 
 
 # ----------------------------------------------------------------------
@@ -111,21 +113,46 @@ def _review_action(value: object) -> str:
     return action if action in _REVIEW_ACTIONS else "human_review"
 
 
+def _coerce_block_id(value: object) -> int | None:
+    """将模型/上下文中的 block_id 安全转换为正整数。"""
+    if isinstance(value, bool):
+        return None
+    try:
+        block_id = int(value)
+    except (TypeError, ValueError):
+        return None
+    return block_id if block_id > 0 else None
+
+
+def _bind_item_block_id(item: object, fallback_block_id: int) -> dict | None:
+    """确保待落库候选始终绑定一个可追溯的源 Block。"""
+    if not isinstance(item, dict):
+        return None
+    bound = dict(item)
+    bound["block_id"] = _coerce_block_id(bound.get("block_id")) or fallback_block_id
+    return bound
+
+
 def _review_evidence(context: dict, requested_ids: object, current_block_id: int) -> tuple[list[int], list[dict]]:
     """绑定文档上下文映射已解析进 Context Bundle 的证据；同一 Block 可承担多个角色。"""
     sources = context.get("evidence_sources") or []
     source_by_id: dict[int, dict] = {}
     for source in sources:
-        if not isinstance(source, dict) or source.get("block_id") is None:
+        if not isinstance(source, dict):
             continue
-        block_id = int(source["block_id"])
+        block_id = _coerce_block_id(source.get("block_id"))
+        if block_id is None:
+            continue
         roles = source.get("roles") or [source.get("role") or "context"]
         entry = source_by_id.setdefault(block_id, {"block_id": block_id, "roles": []})
         entry["roles"] = sorted(set(entry["roles"]).union(str(role) for role in roles if role))
     if not source_by_id:
         source_by_id[current_block_id] = {"block_id": current_block_id, "roles": ["current"]}
     ids = requested_ids if isinstance(requested_ids, list) else []
-    selected = [int(value) for value in ids if isinstance(value, int) and int(value) in source_by_id]
+    selected = [
+        block_id for value in ids
+        if (block_id := _coerce_block_id(value)) is not None and block_id in source_by_id
+    ]
     if not selected:
         selected = [current_block_id]
     selected = list(dict.fromkeys(selected))
@@ -485,7 +512,7 @@ def _dedup_semantic(
                 else:
                     for _seen_k, seen_vec in seen:
                         if seen_vec is not None:
-                            sim = sum(a * b for a, b in zip(vec, seen_vec))
+                            sim = sum(a * b for a, b in zip(vec, seen_vec, strict=True))
                             if sim >= SEMANTIC_DEDUP_THRESHOLD:
                                 dup = True
                                 break
@@ -522,10 +549,24 @@ def exclusion_item(block: dict, reason: str) -> dict:
     }
 
 
+def extraction_failure_item(block: dict, reason: str) -> dict:
+    """为抽取链路异常的 Block 生成可追溯的红色待复核记录。"""
+    item = exclusion_item(block, reason)
+    item.update(
+        {
+            "extraction_model": "eiu-extract-error",
+            "route_color": "red",
+            "route_reasons": [reason],
+            "review_action": "human_review",
+        }
+    )
+    return item
+
+
 # ----------------------------------------------------------------------
 # 抽取服务
 # ----------------------------------------------------------------------
-class EiuExtractorService(EiuReviewMixin):
+class EiuExtractorService:
     _run_lock = threading.Lock()
 
     def __init__(self) -> None:
@@ -568,8 +609,13 @@ class EiuExtractorService(EiuReviewMixin):
                 progress_end=progress_end,
             )
         except Exception as exc:  # noqa: BLE001 — 记录失败并置 job 状态
+            logger.exception("EIU corpus extraction failed", extra={"job_id": job_id})
             self.database.update_job(
-                job_id, status="failed", phase="eiu_extract", message=f"EIU 抽取失败: {exc}"
+                job_id,
+                status="failed",
+                phase="eiu_extract",
+                message=f"EIU 抽取失败: {type(exc).__name__}: {str(exc)[:160]}",
+                finished=True,
             )
             return {"job_id": job_id, "status": "failed", "message": str(exc)}
 
@@ -595,8 +641,16 @@ class EiuExtractorService(EiuReviewMixin):
                 progress_end=progress_end,
             )
         except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "EIU document extraction failed",
+                extra={"job_id": job_id, "document_id": document_id},
+            )
             self.database.update_job(
-                job_id, status="failed", phase="eiu_extract", message=f"EIU 抽取失败: {exc}"
+                job_id,
+                status="failed",
+                phase="eiu_extract",
+                message=f"EIU 抽取失败: {type(exc).__name__}: {str(exc)[:160]}",
+                finished=True,
             )
             return {"job_id": job_id, "status": "failed", "message": str(exc)}
 
@@ -663,25 +717,48 @@ class EiuExtractorService(EiuReviewMixin):
         neighbors = self._build_neighbors(document_blocks)
         quality_evaluators = {
             document["document_id"]: EiuQualityEvaluator(blocks)
-            for document, blocks in zip(documents, document_blocks)
+            for document, blocks in zip(documents, document_blocks, strict=True)
         }
+
         inserted = 0
         excluded = 0
+        failed_blocks = 0
         _sem_vecs: list[tuple[str, list[float]]] = []  # 已插入 EIU 的 (归一化statement, 向量)
         # P1：EIU 向量 FAISS 索引，语义去重用（与 _sem_vecs 精确层互补）
         _faiss_idx = EiuFaissIndex()
         for index, block in enumerate(substantive, start=1):
-            try:
-                items = self._extract_block(block, document_map[block["document_id"]], neighbors[block["block_id"]])
-            except LLMError as exc:
-                items = []
-                block_error = f"抽取失败: {str(exc)[:60]}"
-            else:
-                block_error = None
-            # 语义去重：精确层（归一化 key）+ 语义层（FAISS 检索），同义者标记排除
-            items = _dedup_semantic(items, _sem_vecs, _faiss_idx)
+            block_id = _coerce_block_id(block.get("block_id"))
+            if block_id is None:
+                raise ValueError("解析结果中的 Block 缺少有效 block_id")
             evaluator = quality_evaluators[block["document_id"]]
-            items = [evaluator.annotate(item, block) for item in items]
+            block_error = None
+            try:
+                items = self._extract_block(
+                    block,
+                    document_map[block["document_id"]],
+                    neighbors[block_id],
+                )
+                # 模型结果最终仍绑定当前 Block，避免异常响应在落库层触发 KeyError。
+                items = [
+                    bound
+                    for item in (items if isinstance(items, list) else [])
+                    if (bound := _bind_item_block_id(item, block_id)) is not None
+                ]
+                # 语义去重：精确层（归一化 key）+ 语义层（FAISS 检索），同义者标记排除
+                items = _dedup_semantic(items, _sem_vecs, _faiss_idx)
+                items = [evaluator.annotate(item, block) for item in items]
+            except Exception as exc:  # noqa: BLE001 — 单个 Block 失败不得中断整篇文档
+                failed_blocks += 1
+                items = []
+                block_error = f"抽取失败: {type(exc).__name__}: {str(exc)[:120]}"
+                logger.exception(
+                    "EIU block extraction failed",
+                    extra={
+                        "job_id": job_id,
+                        "document_id": block.get("document_id"),
+                        "block_id": block_id,
+                    },
+                )
             if items:
                 # P0：EIU 为核心实体，抽取时写入 statement 向量，落库供复用/跨块检索
                 for it in items:
@@ -699,27 +776,381 @@ class EiuExtractorService(EiuReviewMixin):
                 # 增量加入 FAISS 索引（语义层）
                 _faiss_idx.add_items([it for it in items if it.get("embedding_vector")])
             else:
-                exclusion = evaluator.annotate(
-                    exclusion_item(block, block_error or "段落无实质内容，未抽取到 EIU"),
-                    block,
+                reason = block_error or "段落无实质内容，未抽取到 EIU"
+                exclusion = (
+                    extraction_failure_item(block, reason)
+                    if block_error
+                    else exclusion_item(block, reason)
                 )
+                exclusion = evaluator.annotate(exclusion, block)
                 self.database.save_eius(
                     items=[exclusion],
                 )
                 excluded += 1
-            progress = progress_start + int(index / total * (progress_end - progress_start))
-            self.database.update_job(job_id, progress=progress)
+            # 进度按每完成 10 个 Block 推进一步，避免单个知识点抽取完成就频繁抖动；
+            # 最后一个 Block 无论是否凑满 10 个都推进到本阶段末点。
+            if index % 10 == 0 or index == total:
+                progress = progress_start + int(index / total * (progress_end - progress_start))
+                self.database.update_job(job_id, progress=progress)
 
         if finalize_job:
             self.database.update_job(
                 job_id, status="completed", phase="done", progress=progress_end,
-                message=f"EIU 抽取完成，共 {inserted} 条（排除 {excluded} 个段落）", finished=True,
+                message=(
+                    f"EIU 抽取完成，共 {inserted} 条（排除 {excluded} 个段落）"
+                    + (f"，失败 {failed_blocks} 个 Block" if failed_blocks else "")
+                ),
+                finished=True,
             )
         else:
             self.database.update_job(job_id, progress=progress_end)
         return {
             "job_id": job_id,
             "status": "completed",
-            "message": f"EIU 抽取完成，共 {inserted} 条",
+            "message": (
+                f"EIU 抽取完成，共 {inserted} 条"
+                + (f"，失败 {failed_blocks} 个 Block" if failed_blocks else "")
+            ),
             "count": inserted,
+            "failed_blocks": failed_blocks,
         }
+
+    @staticmethod
+    def _build_neighbors(document_blocks: list[list[dict]]) -> dict[int, dict[str, str]]:
+        """block_id → 前 1 / 后 1 个 Block 文本（上下文，SPEC §5.4 第 2 步）。"""
+        neighbors: dict[int, dict] = {}
+        for blocks in document_blocks:
+            neighbors.update(ContextBundleBuilder(blocks).build_all())
+        return neighbors
+
+    @staticmethod
+    def _review_cache_key(document: dict, block_id: int) -> tuple[str, int]:
+        document_key = str(document.get("document_id") or document.get("file_name") or "unknown")
+        return document_key, int(block_id)
+
+    def _take_article_review_cache(self, document: dict, block_id: int) -> list[dict] | None:
+        return self._article_review_cache.pop(self._review_cache_key(document, block_id), None)
+
+    def _partition_article_review_items(
+        self,
+        document: dict,
+        current_block_id: int,
+        context: dict,
+        raw_items: list[dict],
+    ) -> list[dict]:
+        """将条款批审响应按 block_id 分发；旧响应未标 block_id 时保持当前 Block 兼容。"""
+        article_ids = {
+            int(entry["block_id"])
+            for entry in context.get("article_batch") or []
+            if isinstance(entry, dict) and entry.get("block_id") is not None
+        }
+        if len(article_ids) < 2:
+            return raw_items
+
+        current_items: list[dict] = []
+        for raw_item in raw_items if isinstance(raw_items, list) else []:
+            item = _bind_item_block_id(raw_item, current_block_id)
+            if item is None:
+                continue
+            item_block_id = item["block_id"]
+            if item_block_id == current_block_id:
+                current_items.append(item)
+            elif item_block_id in article_ids:
+                cache_key = self._review_cache_key(document, item_block_id)
+                self._article_review_cache.setdefault(cache_key, []).append(item)
+            else:
+                # 防止模型误标 Block 后静默丢弃当前条款的结果。
+                current_items.append(item)
+        return current_items
+
+    @staticmethod
+    def _review_signature(raw_items: list[dict]) -> frozenset[tuple[str, str, str]]:
+        """仅比较模型给出的实质结论；单纯的 context_requests 不构成审查冲突。"""
+        signature: set[tuple[str, str, str]] = set()
+        for item in raw_items:
+            if not isinstance(item, dict):
+                continue
+            statement = _clean_statement(str(item.get("statement") or ""))
+            if not statement:
+                continue
+            signature.add((
+                str(item.get("block_id") or "current"),
+                _review_action(item.get("review_action")),
+                statement,
+            ))
+        return frozenset(signature)
+
+    def _extract_block(self, block: dict, document: dict, context: dict[str, str]) -> list[dict]:
+        """单 Block 抽取（三色路由：绿色规则直通，黄色局部 LLM 审查）。
+
+        写死项（不再让 LLM 自由裁量）：
+          - #2 EIU 类型判定：由 _classify 规则映射
+          - #3 优先级 P0/P1/P2：由 _classify 类型→优先级映射
+          - #5 constraints：由 _constraints_for 正则预抽
+          - #4 粗筛：is_skippable 前置拦截，减少送 LLM 的 Block 数
+        保留 LLM 项：
+          - #1 拆分：规则先拆，规则无法归类的复杂句才交 LLM 进一步拆分
+          - #4 语义排除（证据残缺不可出题）：仅对规则无法归类的 Block 用 LLM 判定
+
+        策略：规则先抽取候选，再按局部复杂度路由：
+          - 绿色：单一、直接、无引用/例外/列表依赖的候选，交确定性质量检查；
+          - 黄色：同条款多规则、引用、例外、表格、长 Block、P0 或规则兜底分类，
+            一次 LLM 调用对当前 Block 候选做拆分、合并、补全和证据判断；
+          - 红色：LLM 离线/失败或仍有质量疑点时进入 needs_review，不自动出题。
+
+        LLM 产出的每条 EIU 仍用规则重算 type/priority/constraints，保证字段口径稳定。
+
+        表格类文件（excel/csv）不做特殊化：与普通文档走同一套抽取流程，
+        一行内可抽 0..n 条 EIU（规则逐句分类先抽，规则无法归类时交 LLM）。
+
+        唯一例外：表头含「问题/question」列时，以问题列为抽取输入，
+        避免「答案」列混入 EIU statement（否则生成题目会泄露标准答案）。
+        """
+        # excel/csv 行若带「问题」列，用问题列文本作为 EIU 抽取输入（答案列不混入）
+        meta = block.get("metadata_json") or {}
+        if block.get("block_type") == "excel_row" and (meta.get("question") or "").strip():
+            text = str(meta.get("question")).strip()
+        else:
+            text = block["block_text"]
+        if is_skippable(text):                       # #4 粗筛写死，前置拦截
+            return []
+
+        # 1) 规则先抽（#2/#3/#5 写死在此完成）
+        rule_items = deterministic_extract(text)
+        for candidate_index, item in enumerate(rule_items, start=1):
+            item["block_id"] = block["block_id"]
+            item["candidate_id"] = block["block_id"] * 1000 + candidate_index
+            item["extraction_model"] = "hybrid-rule"
+            item["extraction_confidence"] = 0.9
+
+        yellow_reasons = _yellow_route_reasons(block, rule_items)
+        if rule_items and not yellow_reasons:
+            for item in rule_items:
+                item["route_color"] = "green"
+                item["route_reasons"] = ["单一直接候选，进入确定性验证"]
+                item["review_action"] = "pass"
+            return rule_items
+
+        if rule_items and self.llm.use_offline:
+            # 黄色候选不能因本地离线降级而变成绿色；后续 annotate 会强制 needs_review。
+            for item in rule_items:
+                item["force_needs_review"] = True
+                item["extraction_model"] = "hybrid-rule-yellow-pending"
+                item["route_color"] = "red"
+                item["route_reasons"] = yellow_reasons + ["LLM 当前不可用，转人工复核"]
+                item["review_action"] = "human_review"
+            return rule_items
+
+        # 2) 黄色候选或规则无法归类（复杂/语义句）→ 交给 LLM 做拆合与语义排除
+        if self.llm.use_offline:
+            return []  # 离线且规则无法归类，保守跳过，不杜撰
+
+        try:
+            review_attempts = 1
+            review_inconsistent = False
+            raw_items = self._take_article_review_cache(document, block["block_id"])
+            if raw_items is None:
+                user_prompt = self._build_user_prompt(
+                    block, document, context, rule_candidates=rule_items
+                )
+                raw_items = self._partition_article_review_items(
+                    document,
+                    block["block_id"],
+                    context,
+                    self.llm.extract_json(self.system_prompt, user_prompt),
+                )
+            initial_signature = self._review_signature(raw_items)
+            requests = _context_requests(raw_items)
+            resolver = context.get("_resolver")
+            if requests and resolver is not None:
+                expanded_context = resolver.expand(context, requests)
+                if expanded_context.get("resolved_requests"):
+                    review_attempts = 2
+                    raw_items = self._partition_article_review_items(
+                        document,
+                        block["block_id"],
+                        expanded_context,
+                        self.llm.extract_json(
+                            self.system_prompt,
+                            self._build_user_prompt(
+                                block, document, expanded_context, rule_candidates=rule_items
+                            ),
+                        ),
+                    )
+                    retried_signature = self._review_signature(raw_items)
+                    review_inconsistent = bool(
+                        initial_signature and retried_signature and initial_signature != retried_signature
+                    )
+                    context = expanded_context
+                elif rule_items:
+                    for candidate in rule_items:
+                        candidate["force_needs_review"] = True
+                        candidate["route_color"] = "red"
+                        candidate["review_action"] = "human_review"
+                        candidate["route_reasons"] = yellow_reasons + ["文档上下文映射未找到 LLM 请求的补充证据"]
+                    return rule_items
+        except LLMError:
+            if rule_items:
+                for item in rule_items:
+                    item["force_needs_review"] = True
+                    item["extraction_model"] = "hybrid-rule-yellow-pending"
+                    item["route_color"] = "red"
+                    item["route_reasons"] = yellow_reasons + ["LLM 审查调用失败，转人工复核"]
+                    item["review_action"] = "human_review"
+                return rule_items
+            return []
+        except Exception as exc:  # noqa: BLE001 — 模型响应/上下文异常转人工复核
+            logger.exception(
+                "EIU LLM review handling failed",
+                extra={
+                    "document_id": document.get("document_id"),
+                    "block_id": block.get("block_id"),
+                },
+            )
+            if rule_items:
+                for item in rule_items:
+                    item["force_needs_review"] = True
+                    item["extraction_model"] = "hybrid-rule-review-error"
+                    item["route_color"] = "red"
+                    item["route_reasons"] = yellow_reasons + [
+                        f"LLM 审查处理异常（{type(exc).__name__}），转人工复核"
+                    ]
+                    item["review_action"] = "human_review"
+                return rule_items
+            raise
+
+        items: list[dict] = []
+        seen: set[str] = set()
+        for item in raw_items:
+            if not isinstance(item, dict):
+                continue
+            action = _review_action(item.get("review_action"))
+            statement = _clean_statement(str(item.get("statement", "")))
+            if not statement or statement in seen:
+                continue
+            seen.add(statement)
+            # #2/#3/#5 写死：用规则对 LLM 拆分出的语句重新归类，覆盖 LLM 自由裁量
+            classification = _classify(statement)
+            if classification is None:
+                # 连规则都无法归类 → 视为 LLM 过度拆分，跳过该条（不杜撰类型）
+                continue
+            eiu_type, priority = classification
+            evidence_blocks, evidence_details = _review_evidence(
+                context, item.get("evidence_block_ids"), block["block_id"]
+            )
+            source_indexes = item.get("source_candidate_indexes")
+            source_candidate_ids = [
+                rule_items[index - 1]["candidate_id"]
+                for index in source_indexes
+                if isinstance(index, int) and 0 < index <= len(rule_items)
+            ] if isinstance(source_indexes, list) else []
+            is_questionable = bool(item.get("is_questionable", True)) and action != "reject"
+            normalized = {
+                "block_id": block["block_id"],
+                "statement": _truncate_statement(statement),
+                "eiu_type": eiu_type,
+                "content_priority": priority,
+                "constraints": _constraints_for(statement),
+                "evidence_blocks": evidence_blocks,
+                "evidence_details": evidence_details,
+                "source_candidate_ids": source_candidate_ids,
+                "is_questionable": is_questionable,
+                "exclusion_reason": (
+                    None if is_questionable
+                    else str(item.get("exclusion_reason") or "语义不可出题")[:128]
+                ),
+                "extraction_model": "hybrid-llm",
+                "extraction_confidence": 0.7,
+                "route_color": "yellow",
+                "route_reasons": yellow_reasons or ["规则无法稳定分类，进入 LLM 审查"],
+                "review_action": "human_review" if review_inconsistent else action,
+                "review_attempts": review_attempts,
+                "review_model": self.llm.model,
+                "review_prompt_version": "eiu-yellow-v1",
+            }
+            normalized.update(_claim_fields(statement, normalized["constraints"]))
+            if review_inconsistent:
+                normalized["route_reasons"] = [
+                    *(normalized.get("route_reasons") or []),
+                    "LLM 两次审查结论不一致，转人工复核",
+                ]
+            if action == "human_review" or review_inconsistent:
+                normalized["force_needs_review"] = True
+                normalized["route_color"] = "red"
+            items.append(normalized)
+        return items
+
+    @staticmethod
+    def _build_user_prompt(
+        block: dict,
+        document: dict,
+        context: dict[str, str],
+        *,
+        rule_candidates: list[dict] | None = None,
+    ) -> str:
+        # SPEC §5.3 User Prompt 模板
+        candidate_text = "（规则未抽到候选，请直接抽取）"
+        if rule_candidates:
+            candidate_text = "\n".join(
+                f"- {item.get('statement', '')}（{item.get('eiu_type', '')}/{item.get('content_priority', '')}）"
+                for item in rule_candidates
+            )
+        article_batch_text = "（当前条款没有可批审的其他 Block）"
+        article_batch = context.get("article_batch") or []
+        if len(article_batch) > 1:
+            batch_entries: list[str] = []
+            for entry in article_batch:
+                if not isinstance(entry, dict):
+                    continue
+                batch_block_id = entry.get("block_id")
+                batch_source = str(entry.get("text") or "")
+                batch_candidates = deterministic_extract(batch_source)
+                batch_candidate_text = "；".join(
+                    candidate.get("statement", "") for candidate in batch_candidates
+                ) or "（规则未抽到候选）"
+                batch_entries.append(
+                    f"- block_id={batch_block_id}: {batch_source}\n  规则候选: {batch_candidate_text}"
+                )
+            article_batch_text = "\n".join(batch_entries) or article_batch_text
+        batch_contract = (
+            "Each item must include block_id, selecting one block_id from the clause batch below.\n"
+            if len(article_batch) > 1 else ""
+        )
+        return (
+            "## 文档信息\n"
+            f"- 文档名: {document['file_name']}\n"
+            f"- 章节路径: {block['section_path']}\n"
+            "\n"
+            "## 上文（前一个 Block）\n"
+            f"{context['prev'] or '（无）'}\n"
+            "\n"
+            "## 当前段落\n"
+            f"{block['block_text']}\n"
+            "\n## Clause context (structured evidence)\n"
+            f"Parent clause: {context.get('parent') or 'none'}\n"
+            f"List lead: {context.get('lead') or 'none'}\n"
+            f"Same article: {context.get('same_article') or 'none'}\n"
+            f"Referenced articles: {context.get('references') or 'none'}\n"
+            f"Definitions: {context.get('definitions') or 'none'}\n"
+            f"Table headers: {context.get('table_headers') or 'none'}\n"
+            f"Allowed evidence blocks and roles: {context.get('evidence_catalog') or 'current'}\n"
+            f"Context-map expanded evidence: {context.get('expanded_context') or 'none'}\n"
+            f"Unresolved requests: {context.get('unresolved_requests') or 'none'}\n"
+            "\n"
+            "## 下文（后一个 Block）\n"
+            f"{context['next'] or '（无）'}\n"
+            "\n## 规则候选（黄色审查输入）\n"
+            f"{candidate_text}\n"
+            "\n## 同条款批审输入（按 block_id 返回）\n"
+            f"{article_batch_text}\n"
+            "\n## Review output contract\n"
+            "Return a JSON array. Each item must include review_action: pass, split, merge, complete_context, reject, or human_review.\n"
+            f"{batch_contract}"
+            "For split/merge, include source_candidate_indexes (1-based indexes from the rule candidates).\n"
+            "For evidence, include evidence_block_ids selected only from the Context Bundle source blocks.\n"
+            "If required evidence is absent, include context_requests with kind (definition/reference/condition/subject), query, and optional article_no; do not invent evidence.\n"
+            "Use human_review when evidence remains incomplete, a reference cannot be resolved, or the decision is uncertain.\n"
+            "\n请审查当前段落及上述候选：对同一事实的重复强调、包含关系或正反表述合并为一条完整 EIU；"
+            "需要独立判断真伪的规则才拆分；补全当前段落已明确支持的主体、条件和范围；"
+            "不得补写原文未出现的事实。若证据无法支持完整、可回答的陈述，则标记 is_questionable=false。"
+        )

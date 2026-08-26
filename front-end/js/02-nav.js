@@ -66,19 +66,40 @@
     return null;
   }
 
-  function treeNodeHTML(node) {
+  // 文档库目录的折叠态记忆：用户文件夹首次进入时默认展开，
+  // 「用户文件」首次进入时默认收起，之后以用户实际点击状态为准。
+  if (!window.DOC_COLLAPSED) window.DOC_COLLAPSED = {};
+
+  function findNodeByRelPath(relPath, node = TREE) {
+    const parts = String(relPath || "").split("/").map(s => s.trim()).filter(Boolean);
+    let current = node;
+    for (const part of parts) {
+      current = (current.children || []).find(child => !child.doc && child.name === part);
+      if (!current) return null;
+    }
+    return current;
+  }
+
+  function treeNodeHTML(node, parentPath = "") {
     if (node.doc) {
       return `<div class="tree-row" data-doc="${node.doc}" data-name="${node.name}"><i data-lucide="file-text" class="tw-ic"></i><span class="tw-name">${node.name}</span><button class="tree-dots" data-doc="${node.doc}" data-name="${node.name}" title="更多操作"><i data-lucide="more-horizontal"></i></button></div>`;
     }
     // 统一目录：所有文件夹（含根「文档库」）都支持新建子文件夹 / 上传 / 重命名 / 删除
     const isRoot = node === TREE;
     const rootAttr = isRoot ? ` data-root="1"` : "";
+    const relPath = isRoot ? "" : (parentPath ? `${parentPath}/${node.name}` : node.name);
+    const defaultCollapsed = !isRoot && node.name === "用户文件";
+    const collapsed = Object.prototype.hasOwnProperty.call(window.DOC_COLLAPSED, relPath)
+      ? !!window.DOC_COLLAPSED[relPath]
+      : defaultCollapsed;
+    const collapsedAttr = collapsed ? " collapsed" : "";
+    const pathAttr = ` data-path="${escapeHTML(relPath)}"`;
     const desc = node.desc ? `<div class="dir-desc">${node.desc}</div>` : "";
-    const dots = `<button class="tree-dots" data-folder="1"${rootAttr} data-name="${node.name}" title="更多操作"><i data-lucide="more-horizontal"></i></button>`;
+    const dots = `<button class="tree-dots" data-folder="1"${rootAttr}${pathAttr} data-name="${node.name}" title="更多操作"><i data-lucide="more-horizontal"></i></button>`;
     return `<div class="tree-node">
-      <div class="tree-row" data-folder="1"${rootAttr} data-name="${node.name}"><i data-lucide="folder" class="tw-ic"></i><span class="tw-name">${node.name}</span><span class="tw-count">${countDocs(node)}</span><i data-lucide="chevron-down" class="tw-chev"></i>${dots}</div>
+      <div class="tree-row${collapsedAttr}" data-folder="1"${rootAttr}${pathAttr} data-name="${node.name}" aria-expanded="${collapsed ? "false" : "true"}"><i data-lucide="folder" class="tw-ic"></i><span class="tw-name">${node.name}</span><span class="tw-count">${countDocs(node)}</span><i data-lucide="chevron-down" class="tw-chev"></i>${dots}</div>
       ${desc}
-      <div class="tree-children open">${node.children.map(treeNodeHTML).join("")}</div>
+      <div class="tree-children${collapsed ? "" : " open"}">${(node.children || []).map(child => treeNodeHTML(child, relPath)).join("")}</div>
     </div>`;
   }
 
@@ -106,9 +127,11 @@
         row.addEventListener("click", (e) => {
           if (e.target.closest(".tree-dots")) return;
           const kids = row.closest(".tree-node").querySelector(".tree-children");
-          if (kids) kids.classList.toggle("open");
-          row.classList.toggle("collapsed");
-          renderFolderContent(mode, findNode(row.dataset.name));
+          const expanded = kids ? kids.classList.toggle("open") : false;
+          row.classList.toggle("collapsed", !expanded);
+          row.setAttribute("aria-expanded", String(expanded));
+          window.DOC_COLLAPSED[row.dataset.path || ""] = !expanded;
+          renderFolderContent(mode, findNodeByRelPath(row.dataset.path || ""));
         });
         // 拖拽上传 / 文档移动到此目录
         if (mode === "doc") {
@@ -164,6 +187,7 @@
     const isFolder = !!btn.dataset.folder;
     const isRoot = !!btn.dataset.root;
     const name = btn.dataset.name || "";
+    const relPath = btn.dataset.path || "";
     const docId = btn.dataset.doc || "";
     const pop = document.createElement("div");
     pop.className = "ctx-popup";
@@ -187,11 +211,11 @@
         } else if (b.dataset.act === "ctx-rename") {
           renameFolderInline(container, mode, name);
         } else if (b.dataset.act === "ctx-delete") {
-          await deleteFolder(name);
+          await deleteFolder(name, relPath);
           renderLib(mode);
         } else if (b.dataset.act === "ctx-upload-here") {
           // 上传到此目录：用完整路径（含根「文档库」），根上传传空
-          const targetNode = isFolder ? findNode(name) : findNode(findNodeParent(name));
+          const targetNode = isFolder ? findNodeByRelPath(relPath) : findNode(findNodeParent(name));
           setUploadTarget(targetNode ? fullFolderPathOf(targetNode) : "");
           $("#uploadInput").click();
         } else if (b.dataset.act === "ctx-move") {
@@ -549,9 +573,9 @@
   }
 
   // 删除文件夹（持久化到后端）：后端递归删除 folder 记录，其下文档自动上移到父目录，不丢文档
-  async function deleteFolder(name) {
-    const node = findNode(name);
-    if (!node) return;
+  async function deleteFolder(name, relPathHint = "") {
+    const node = relPathHint ? findNodeByRelPath(relPathHint) : findNode(name);
+    if (!node || node === TREE) return false;
     const relPath = relPathOfNode(node);
     const parent = findParentOf(node, TREE.children);
     try {
@@ -559,11 +583,11 @@
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         toast(`删除失败：${err.detail || res.status}`, "warn");
-        return;
+        return false;
       }
     } catch (e) {
       toast("删除请求失败，请检查后端", "warn");
-      return;
+      return false;
     }
     // 前端同步：文件夹节点移除，其下文档节点上移到父级（DOCS 保留——后端文档已上移）
     const docsUnder = collectDocNodes(node);
@@ -574,7 +598,15 @@
     // 清理选中态
     if (state.sel.doc && !DOCS[state.sel.doc]) state.sel.doc = null;
     if (state.folderSel.doc === name) state.folderSel.doc = null;
+    // 删除后清理该路径下的折叠记忆，避免同名文件夹重新创建时继承旧状态。
+    Object.keys(window.DOC_COLLAPSED).forEach(path => {
+      if (path === relPath || path.startsWith(relPath + "/")) delete window.DOC_COLLAPSED[path];
+    });
+    // 文件夹删除会让后端同步改写文档 folder_path，并可能删除对应评测集。
+    // 重新拉取权威数据，确保输入库和评测集库都不再保留已删除目录。
+    await loadData();
     toast(`已删除文件夹「${name}」` + (docsUnder.length ? `，其中 ${docsUnder.length} 个文档已移至上级目录` : ""));
+    return true;
   }
 
   // 查找节点在其父 children 中的父节点

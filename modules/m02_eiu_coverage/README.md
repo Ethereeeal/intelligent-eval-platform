@@ -130,7 +130,8 @@ EIU (Evaluable Information Unit) = 一条能够被原文**独立证明或否定*
 
 **文档更新自动重抽（FR-CORPUS-004，覆盖式全量重算，进度由 doc_update_job 承载）：**
 - 重传触发后，先删除该文档旧版本的全部 block/向量/EIU/题目（整体作废），再全量重新分段 + BGE 向量化 + 抽 EIU。Demo 不做增量：BGE 语义分段会使 Block 边界随上下文偏移，难以可靠定位"哪些 Block 变了"，全量重算更简单稳妥。
-- 抽取进度通过 job 的 `progress` 反馈：progress = 已抽 Block 数 / 总 Block 数。
+- 抽取进度通过 job 的 `progress` 反馈：按每完成 10 个 Block 更新一次，最后一个 Block 收口到完成。
+- LLM 响应中的 `block_id` 视为不可信输入：缺失或非法时回退到当前 Block；单个 Block 的模型、上下文或规范化异常会记录为红色待复核记录，并继续处理后续 Block，不会中断整篇文档。
 - 写库后由 05 §3.3 覆盖重建逻辑整体替换该文档的 EIU 与题面，不做 `superseded/conflicted/deprecated` 旧版本残留。
 - 抽取全程异步，前端以 job 进度为准，不阻塞其他操作。
 
