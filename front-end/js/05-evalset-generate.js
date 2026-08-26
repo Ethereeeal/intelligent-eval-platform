@@ -269,7 +269,7 @@
     }
   }
 
-  async function openEvalSetGeneratorModal() {
+  async function openEvalSetGeneratorModal({ returnToEvaluation = false } = {}) {
     const [remoteUploads] = await Promise.all([apiGet(`/api/eval-sets/uploaded`).catch(() => [])]);
     const uploadedSets = remoteUploads.length ? remoteUploads : ES_UPLOADED_SAMPLES;
     const docs = Object.entries(DOCS).map(([id, doc]) => ({ id, name: doc.name, meta: `${(doc.kp || []).length} 知识点 · ${(doc.qa || []).length} 题`, folder_path: doc.folderPath || "" }));
@@ -287,7 +287,11 @@
       <div class="modal-foot"><button class="btn ghost modal-cancel" type="button">取消</button><button class="btn primary" id="esGeneratorSubmit" type="button"><i data-lucide="sparkles"></i>生成并存入评测集库</button></div>
     </div>`;
     document.body.appendChild(mask);
-    const close = () => mask.remove();
+    const dismiss = () => mask.remove();
+    const close = () => {
+      dismiss();
+      if (returnToEvaluation) goto("evaluation");
+    };
     mask.querySelector(".modal-x").onclick = close;
     mask.querySelector(".modal-cancel").onclick = close;
     mask.querySelector("#esGeneratorSubmit").onclick = async () => {
@@ -308,7 +312,7 @@
         generation_config: generationConfig,
       };
       // 确认后立即收起配置弹窗，进度反馈转移到页面右上角，避免用户还要手动点叉。
-      close();
+      dismiss();
       esGeneratorProgress(5, "已提交生成任务", "正在准备文档、上传库和公共库题目");
       const failedDocs = [];
       for (const [index, id] of docIds.entries()) {
@@ -341,6 +345,19 @@
         esGeneratorProgress(84, "正在写入评测集库", "固化本次生成的文档、上传题目和公共库配额");
         const response = await fetch(API_BASE + "/api/freeze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
         if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.detail || response.status); }
+        const frozenVersion = await response.json();
+        if (returnToEvaluation) {
+          const composition = await apiPostES("/api/compositions", {
+            name,
+            items: [{ source: "doc_generated", version_id: Number(frozenVersion.version_id) }],
+            created_by: "web",
+          });
+          window.__evSelectedCompositionId = composition.composition_id;
+          goto("evaluation");
+          esGeneratorProgress(100, "已创建并带回评测配置", "新评测集已默认选中", "done");
+          toast("已创建评测集并带回评测配置", "ok");
+          return;
+        }
         window.__esView = "custom";
         esGeneratorProgress(94, "正在刷新评测集库", "读取刚刚生成的评测集");
         await renderEvalSetLibrary();

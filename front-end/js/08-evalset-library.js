@@ -396,7 +396,8 @@ function esShowLibraryDocumentMenu(btn) {
 
 async function renderEvalSetLibrary() {
   if (window.__evalSetReturn === "evaluation") {
-    await esCreateComposition();
+    window.__evalSetReturn = null;
+    await openEvalSetGeneratorModal({ returnToEvaluation: true });
     return;
   }
   const navigationToken = (window.__esNavigationToken || 0) + 1;
@@ -436,42 +437,6 @@ async function esLoadGenerate() {
   // 兼容保留：无冻结版本时的占位（当前生成库走 renderLib("qa")）
 }
 
-async function esCreateComposition() {
-  const [versions, publicSets, uploadedSets] = await Promise.all([
-    apiGet(`/api/versions`).catch(() => []),
-    apiGet(`/api/public-sets`).catch(() => []),
-    apiGet(`/api/eval-sets/uploaded`).catch(() => []),
-  ]);
-  const sources = [
-    ...(versions || []).filter(v => v.status === "frozen").map(v => ({ value: `doc:${v.version_id}`, name: `生成库：${v.name || ("版本 #" + v.version_id)}` })),
-    ...(publicSets || []).map(s => ({ value: `public:${s.set_id}`, name: `公共库：${s.name || ("#" + s.set_id)}` })),
-    ...(uploadedSets || []).map(s => ({ value: `uploaded:${s.set_id}`, name: `上传库：${s.name || ("#" + s.set_id)}` })),
-  ];
-  const mask = document.createElement("div");
-  mask.className = "modal-mask";
-  mask.innerHTML = `<div class="modal modal-wide"><div class="modal-head"><span>创建评测库版本</span><button class="modal-x">×</button></div><div class="modal-body"><label class="es-field">版本名称</label><input class="es-input" id="esCompName" placeholder="例如：客服智能体回归集 v1"/><label class="es-field">选择来源（可多选合并）</label><div class="ev-src-list">${sources.map(s => `<label class="ev-src-item"><input type="checkbox" value="${s.value}"/> ${s.name}</label>`).join("") || "暂无可用来源"}</div></div><div class="modal-foot"><button class="btn ghost modal-cancel">取消</button><button class="btn primary" id="esCompSave">保存为评测库版本</button></div></div>`;
-  document.body.appendChild(mask);
-  const close = () => { window.__evalSetReturn = null; mask.remove(); };
-  mask.querySelector(".modal-x").onclick = close;
-  mask.querySelector(".modal-cancel").onclick = close;
-  mask.querySelector("#esCompSave").onclick = async () => {
-    const name = mask.querySelector("#esCompName").value.trim();
-    const picked = [...mask.querySelectorAll("input:checked")].map(x => x.value);
-    if (!name || !picked.length) return toast("请填写名称并至少选择一个来源");
-    const items = picked.map(value => {
-      const [kind, id] = value.split(":");
-      return kind === "doc" ? { source: "doc_generated", version_id: Number(id) } : { source: kind, set_id: Number(id) };
-    });
-    try {
-      const result = await apiPostES(`/api/compositions`, { name, items, created_by: "web" });
-      close();
-      window.__evSelectedCompositionId = result.composition_id;
-      goto("evaluation");
-    } catch (e) {
-      toast("创建失败：" + e.message);
-    }
-  };
-}
 
 async function esLoadUploaded(navigationToken = window.__esNavigationToken) {
   const box = $("#esUploadedList");

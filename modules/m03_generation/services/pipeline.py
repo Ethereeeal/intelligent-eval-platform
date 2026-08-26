@@ -20,6 +20,13 @@ from modules.shared.services.database import DatabaseService
 logger = get_logger(__name__)
 
 
+def _is_generation_ready(eiu: dict) -> bool:
+    return bool(eiu.get("is_questionable")) and (
+        eiu.get("quality_status") == "verified"
+        or eiu.get("review_status") == "quality_verified"
+    )
+
+
 class PipelineService:
     def __init__(self) -> None:
         self.database = DatabaseService()
@@ -70,13 +77,16 @@ class PipelineService:
         angles: 出题角度列表；每个角度对同一 EIU 生成一道题（不重复计覆盖率）。
         dry_run: 仅返回待生成清单，不调用 LLM / 不落库。
         """
-        eius = self.database.list_eius(questionable=True)
+        candidates = self.database.list_eius(questionable=True)
+        eius = [eiu for eiu in candidates if _is_generation_ready(eiu)]
         covered = self.database.list_covered_eiu_ids()
         pending = [eiu for eiu in eius if eiu["eiu_id"] not in covered]
 
         if dry_run:
             return {
                 "total_questionable_eiu": len(eius),
+                "total_candidate_eiu": len(candidates),
+                "quality_blocked": len(candidates) - len(eius),
                 "already_covered": len(covered),
                 "generated": 0,
                 "failed": 0,
@@ -112,6 +122,8 @@ class PipelineService:
 
         return {
             "total_questionable_eiu": len(eius),
+            "total_candidate_eiu": len(candidates),
+            "quality_blocked": len(candidates) - len(eius),
             "already_covered": len(covered),
             "generated": sum(1 for r in results if r["error"] is None),
             "failed": sum(1 for r in results if r["error"] is not None),
@@ -139,9 +151,10 @@ class PipelineService:
         - 不触碰其他文档的问答对与 EIU；
          - 跨文档不复用问答对，每个文档独立生成完整问答集。
         """
-        eius = self.database.list_eius(
+        candidates = self.database.list_eius(
             questionable=True, document_id=document_id
         )
+        eius = [eiu for eiu in candidates if _is_generation_ready(eiu)]
 
         if dry_run:
             covered = self.database.list_covered_eiu_ids(
@@ -151,6 +164,8 @@ class PipelineService:
             return {
                 "document_id": document_id,
                 "total_questionable_eiu": len(eius),
+                "total_candidate_eiu": len(candidates),
+                "quality_blocked": len(candidates) - len(eius),
                 "already_covered": len(covered),
                 "generated": 0,
                 "failed": 0,
@@ -214,6 +229,8 @@ class PipelineService:
         return {
             "document_id": document_id,
             "total_questionable_eiu": len(eius),
+            "total_candidate_eiu": len(candidates),
+            "quality_blocked": len(candidates) - len(eius),
             "already_covered": 0,  # 重建语义：触发前已删除该文档旧问答对，故 0
             "generated": sum(1 for r in results if r.get("error") is None and not r.get("reused")),
             "failed": sum(1 for r in results if r.get("error") is not None),
@@ -234,6 +251,8 @@ class PipelineService:
         eiu = self.database.get_eiu(eiu_id)
         if eiu is None:
             raise ValueError("EIU not found")
+        if not _is_generation_ready(eiu):
+            raise ValueError("EIU 尚未通过质量验证，不能生成问答对")
         result = self._generate_for_eiu_with_angles(
             eiu,
             angles=[angle],

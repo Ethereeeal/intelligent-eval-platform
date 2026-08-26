@@ -46,7 +46,8 @@
         <div class="sec-h mt">版本历史</div>
         <div class="ver-list">${d.versions.map(v => `<div class="ver"><span class="ver-tag">${v.tag}</span><span>${v.note}</span><span class="mut">${v.time}</span></div>`).join("")}</div>
         <div class="sec-h mt kp-sec-h">知识点 · ${d.kp.length} 条<button class="btn ghost sm kp-export-btn" id="dlEIUKp"><i data-lucide="download"></i>导出</button><button class="btn ghost icon-only sm kp-zoom-btn" id="kpFullscreenBtn" title="放大查看"><i data-lucide="maximize"></i></button></div>
-        ${d.kp && d.kp.length ? kpTableHTML(d.kp) : `<p class="muted mt">${isParsing ? "正在解析中..." : "未识别到可抽取知识点。"}</p>`}
+        ${claimSummaryHTML(d)}
+        ${d.kp && d.kp.length ? kpTableHTML(d.kp) : `<p class="muted mt">${isParsing ? "正在解析中..." : "未识别到知识点。"}</p>`}
       </div>`;
   }
 
@@ -66,26 +67,41 @@
 
   // 文档卡片底部：原空白 preview 区域改为展示「生成知识点数量」（纯文字）
   function kpCountHTML(d) {
-    const kpN = (d.kp || []).length, qaN = (d.qa || []).length;
-    const text = kpN > 0 ? `${kpN} 个知识点` : (qaN > 0 ? `${qaN} 个评测集` : "暂无知识点");
+    const stats = d.claimStats || {}, kpN = (d.kp || []).length, qaN = (d.qa || []).length;
+    const text = kpN > 0 ? `${stats.verified || 0}/${kpN} 个知识点已验证` : (qaN > 0 ? `${qaN} 个评测集` : "暂无知识点");
     return `<p class="kp-count-text">${text}</p>`;
   }
 
-  // 知识点表格：标题行「知识点 / 推荐 / 类型 / 证据 / 来源文档」，无图标
+  function claimSummaryHTML(d) {
+    const s = d.claimStats || { candidate: (d.kp || []).length, verified: 0, needsReview: 0, rejected: 0, crossBlock: 0 };
+    return `<div class="claim-summary" aria-label="知识点质量概览">
+      <div><b>${s.candidate || 0}</b><span>候选知识点</span></div>
+      <div class="ok"><b>${s.verified || 0}</b><span>已验证，可生成</span></div>
+      <div class="warn"><b>${s.needsReview || 0}</b><span>待复核</span></div>
+      <div><b>${s.rejected || 0}</b><span>已排除</span></div>
+      <div><b>${s.crossBlock || 0}</b><span>跨块证据</span></div>
+    </div>`;
+  }
+
+  // 知识点表：状态与四项检查优先，证据链支持跨 Block 追溯。
   function kpTableHTML(all) {
     return `<div class="kp-table kp-table-filterable">
       <div class="kp-th">
         <span>知识点<span class="col-filter" data-filter="stmt"><i data-lucide="filter"></i></span><span class="kp-resize" data-resize="0"></span></span>
-        <span>推荐<span class="col-filter" data-filter="prio"><i data-lucide="filter"></i></span><span class="kp-resize" data-resize="1"></span></span>
-        <span>类型<span class="col-filter" data-filter="type"><i data-lucide="filter"></i></span><span class="kp-resize" data-resize="2"></span></span>
-        <span>证据<span class="col-filter" data-filter="ev"><i data-lucide="filter"></i></span><span class="kp-resize" data-resize="3"></span></span>
+        <span>验证状态<span class="col-filter" data-filter="status"><i data-lucide="filter"></i></span><span class="kp-resize" data-resize="1"></span></span>
+        <span>质量检查<span class="col-filter" data-filter="quality"><i data-lucide="filter"></i></span><span class="kp-resize" data-resize="2"></span></span>
+        <span>优先级<span class="col-filter" data-filter="prio"><i data-lucide="filter"></i></span><span class="kp-resize" data-resize="3"></span></span>
+        <span>类型<span class="col-filter" data-filter="type"><i data-lucide="filter"></i></span><span class="kp-resize" data-resize="4"></span></span>
+        <span>证据链<span class="col-filter" data-filter="ev"><i data-lucide="filter"></i></span><span class="kp-resize" data-resize="5"></span></span>
         <span>来源文档<span class="col-filter" data-filter="src"><i data-lucide="filter"></i></span></span>
       </div>
       ${all.map((k, i) => `<div class="kp-tr">
         <span class="kp-td kp-td-stmt kp-c-stmt"><b>#${i + 1}</b> ${escapeHTML(k.stmt)}</span>
+        <span class="kp-td kp-c-status"><span class="claim-status ${escapeHTML(k.qualityStatus || "candidate")}">${escapeHTML(k.qualityLabel || "候选")}</span></span>
+        <span class="kp-td kp-c-quality" title="${escapeHTML(k.qualityDetail || "")}">${escapeHTML(k.qualityText || "未检查")}</span>
         <span class="kp-td kp-c-prio">${escapeHTML(k.prio)}</span>
         <span class="kp-td kp-c-type"><span class="pill br">${escapeHTML(k.type)}</span></span>
-        <span class="kp-td kp-td-ev kp-c-ev">${escapeHTML(k.ev)}</span>
+        <span class="kp-td kp-td-ev kp-c-ev">${k.crossBlock ? '<span class="cross-block-tag">跨块</span> ' : ''}${escapeHTML(k.evidenceChain || k.ev)}</span>
         <span class="kp-td kp-td-src kp-c-src">${escapeHTML(k.src)}</span>
       </div>`).join("")}
     </div>`;
@@ -96,14 +112,15 @@
     if (!d.kp || d.kp.length === 0) {
       return `<div class="lib-head"><div class="lh-ic"><i data-lucide="file-x"></i></div>
         <div><div class="lh-title">${d.name}</div><div class="lh-sub">知识点</div></div></div>` +
-        emptyState("该文档无知识点", "已执行拒答验证：所选文档无可提取知识点，未生成评测集（不单独成栏）。");
+        emptyState("该文档无知识点", "没有识别到可出题的知识点，因此不会生成正式评测题。");
     }
     return `<div class="lib-head"><div class="lh-ic"><i data-lucide="list-checks"></i></div>
         <div><div class="lh-title">${d.name}</div><div class="lh-sub">知识点 · ${d.kp.length} 条</div></div>
         <div class="lib-actions"><button class="btn ghost sm" id="kpFullscreenBtn"><i data-lucide="maximize"></i>放大查看</button><button class="btn ghost sm" id="dlEIUKp"><i data-lucide="download"></i>导出知识点</button></div></div>
       <div class="card card-pad">
+        ${claimSummaryHTML(d)}
         ${kpTableHTML(d.kp)}
-        <p class="muted mt">证据定位示例：${d.kp[0].ev}；来源文档：${d.kp[0].src}；置信度≥0.9 视为已覆盖。</p>
+        <p class="muted mt">正式口径：仅“已验证”声明进入覆盖率分母和问答生成；待复核声明保留在候选池。四项检查为忠实性、完整性、原子性和可测试性。</p>
       </div>`;
   }
 
@@ -1119,7 +1136,7 @@
   }
 
   // 知识点表格列筛选（与评测集列筛选机制一致）
-  const kpColFilterLabel = { stmt: "知识点", prio: "推荐", type: "类型", ev: "证据", src: "来源文档" };
+  const kpColFilterLabel = { stmt: "知识点", status: "验证状态", quality: "质量检查", prio: "优先级", type: "类型", ev: "证据链", src: "来源文档" };
   function openKpColFilter(field, anchor) {
     $$(".ctx-popup").forEach(p => p.remove());
     const pop = document.createElement("div"); pop.className = "ctx-popup col-filter-pop";
@@ -1149,7 +1166,7 @@
   // 知识点表格列宽拖拽调整（与主评测集表一致）
   function bindKpColResize(table) {
     if (!table) return;
-    const defCols = [320, 96, 110, 220, 220];
+    const defCols = [320, 104, 104, 96, 100, 260, 200];
     const cur = () => {
       const v = getComputedStyle(table).getPropertyValue("--kp-cols");
       if (v && v.trim()) return v.trim().split(/\s+/).map(s => parseFloat(s));

@@ -223,11 +223,18 @@ class EiuRow(Base):
     weight: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     constraints_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     evidence_blocks: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    evidence_details: Mapped[list | None] = mapped_column(JSON, nullable=True)
     is_questionable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     exclusion_reason: Mapped[str | None] = mapped_column(String(128), nullable=True)
     extraction_model: Mapped[str | None] = mapped_column(String(64), nullable=True)
     extraction_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     review_status: Mapped[str] = mapped_column(String(32), nullable=False, default="candidate")
+    quality_status: Mapped[str] = mapped_column(String(32), nullable=False, default="candidate")
+    quality_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    quality_checks: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    complexity_level: Mapped[str | None] = mapped_column(String(8), nullable=True)
+    complexity_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    complexity_factors: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     # EIU 级向量（P0：EIU 为核心实体；用于语义去重/复用/未来跨块检索）
     embedding_vector: Mapped[list | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -449,6 +456,20 @@ class DatabaseService:
                 # eiu.embedding_vector：EIU 级向量（P0 改造，EIU 为核心实体，支持去重/复用/跨块检索）
                 if "embedding_vector" not in eiu_cols:
                     conn.execute(text("ALTER TABLE eiu ADD COLUMN embedding_vector JSON NULL"))
+                if "evidence_details" not in eiu_cols:
+                    conn.execute(text("ALTER TABLE eiu ADD COLUMN evidence_details JSON NULL"))
+                if "quality_status" not in eiu_cols:
+                    conn.execute(text("ALTER TABLE eiu ADD COLUMN quality_status VARCHAR(32) NOT NULL DEFAULT 'candidate'"))
+                if "quality_score" not in eiu_cols:
+                    conn.execute(text("ALTER TABLE eiu ADD COLUMN quality_score FLOAT NULL"))
+                if "quality_checks" not in eiu_cols:
+                    conn.execute(text("ALTER TABLE eiu ADD COLUMN quality_checks JSON NULL"))
+                if "complexity_level" not in eiu_cols:
+                    conn.execute(text("ALTER TABLE eiu ADD COLUMN complexity_level VARCHAR(8) NULL"))
+                if "complexity_score" not in eiu_cols:
+                    conn.execute(text("ALTER TABLE eiu ADD COLUMN complexity_score FLOAT NULL"))
+                if "complexity_factors" not in eiu_cols:
+                    conn.execute(text("ALTER TABLE eiu ADD COLUMN complexity_factors JSON NULL"))
                 # 回填历史 EIU：经 block_id -> document_id 反查（仅更新尚未回填的）
                 # 使用跨数据库兼容的子查询写法（MySQL JOIN UPDATE 在 SQLite 下不支持）
                 conn.execute(
@@ -1083,11 +1104,18 @@ class DatabaseService:
             "weight": eiu.weight,
             "constraints": eiu.constraints_json,
             "evidence_blocks": eiu.evidence_blocks,
+            "evidence_details": eiu.evidence_details,
             "is_questionable": bool(eiu.is_questionable),
             "exclusion_reason": eiu.exclusion_reason,
             "extraction_model": eiu.extraction_model,
             "extraction_confidence": eiu.extraction_confidence,
             "review_status": eiu.review_status,
+            "quality_status": eiu.quality_status,
+            "quality_score": eiu.quality_score,
+            "quality_checks": eiu.quality_checks,
+            "complexity_level": eiu.complexity_level,
+            "complexity_score": eiu.complexity_score,
+            "complexity_factors": eiu.complexity_factors,
             "embedding_vector": eiu.embedding_vector,
             "created_at": eiu.created_at.isoformat() if eiu.created_at else None,
         }
@@ -1132,11 +1160,18 @@ class DatabaseService:
                     weight=PRIORITY_WEIGHT.get(priority, 1),
                     constraints_json=item.get("constraints"),
                     evidence_blocks=item.get("evidence_blocks") or [item["block_id"]],
+                    evidence_details=item.get("evidence_details"),
                     is_questionable=is_questionable,
                     exclusion_reason=exclusion_reason if not is_questionable else None,
                     extraction_model=item.get("extraction_model"),
                     extraction_confidence=item.get("extraction_confidence"),
                     review_status=item.get("review_status", "candidate"),
+                    quality_status=item.get("quality_status", "candidate"),
+                    quality_score=item.get("quality_score"),
+                    quality_checks=item.get("quality_checks"),
+                    complexity_level=item.get("complexity_level"),
+                    complexity_score=item.get("complexity_score"),
+                    complexity_factors=item.get("complexity_factors"),
                     embedding_vector=item.get("embedding_vector"),
                 )
                 session.add(row)

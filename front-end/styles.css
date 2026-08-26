@@ -256,6 +256,8 @@ ul { list-style: none; }
 .overview-card-head p { margin: 4px 0 0; font-size: 12px; line-height: 1.5; color: var(--ink-3); }
 .overview-list { display: grid; }
 .overview-item { display: flex; align-items: center; gap: 11px; padding: 14px 0; min-width: 0; }
+.overview-item-link { cursor: pointer; border-radius: 10px; transition: background .16s ease, transform .16s ease; }
+.overview-item-link:hover, .overview-item-link:focus-visible { background: var(--brand-tint-2); outline: none; transform: translateX(2px); }
 .overview-item + .overview-item { border-top: 1px solid rgba(140,124,240,.08); }
 .overview-item-ic { width: 33px; height: 33px; border-radius: 11px; display: grid; place-items: center; background: var(--brand-tint-2); color: var(--brand); flex: none; }
 .overview-item-ic.warn { color: var(--warn); background: var(--warn-bg); }
@@ -920,7 +922,7 @@ ul { list-style: none; }
 .kp-zoom-btn { margin-left: auto; }
 .sec-h.kp-sec-h { display: flex; align-items: center; gap: 10px; }
 .kp-table { display: block; border: 1px solid rgba(140,124,240,.16); border-radius: 10px; max-height: 70vh; overflow: auto; }
-.kp-th, .kp-tr { display: grid; grid-template-columns: var(--kp-cols, minmax(220px, 2.4fr) 120px 110px minmax(180px, 1.6fr) minmax(180px, 1.6fr)); gap: 0; align-items: stretch; width: max-content; min-width: 100%; }
+.kp-th, .kp-tr { display: grid; grid-template-columns: var(--kp-cols, minmax(260px, 2.4fr) 104px 104px 96px 100px minmax(240px, 1.8fr) minmax(180px, 1.4fr)); gap: 0; align-items: stretch; width: max-content; min-width: 100%; }
 .kp-th { background: rgba(140,124,240,.08); font-size: 12px; font-weight: 700; color: var(--ink-2); border-bottom: 1px solid rgba(140,124,240,.18); }
 .kp-th > span, .kp-td { padding: 10px 12px; font-size: 12.5px; line-height: 1.55; border-bottom: 1px solid rgba(140,124,240,.1); word-break: break-word; position: relative; overflow: hidden; }
 .kp-th > span { display: flex; align-items: center; gap: 5px; }
@@ -931,6 +933,19 @@ ul { list-style: none; }
 .kp-td-stmt b { color: var(--ink-3); font-weight: 700; margin-right: 4px; }
 .kp-td-ev { color: var(--brand-strong); }
 .kp-td-src { color: var(--ink-2); }
+.claim-summary { display: grid; grid-template-columns: repeat(5, minmax(110px, 1fr)); gap: 8px; margin: 8px 0 14px; }
+.claim-summary > div { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; border-radius: 9px; background: var(--surface-2); border: 1px solid rgba(140,124,240,.12); }
+.claim-summary b { font-size: 18px; color: var(--ink); }
+.claim-summary span { font-size: 11.5px; color: var(--ink-3); }
+.claim-summary .ok b { color: var(--ok); }
+.claim-summary .warn b { color: #B9770E; }
+.claim-status, .cross-block-tag { display: inline-flex; align-items: center; width: fit-content; border-radius: 999px; padding: 2px 8px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+.claim-status.verified { color: #1B8A5A; background: rgba(27,138,90,.10); }
+.claim-status.needs_review { color: #B9770E; background: rgba(185,119,14,.12); }
+.claim-status.candidate { color: var(--brand-strong); background: var(--brand-tint-2); }
+.claim-status.rejected { color: #C0392B; background: rgba(192,57,43,.10); }
+.cross-block-tag { color: var(--brand-strong); background: var(--brand-tint-2); padding: 1px 6px; }
+@media (max-width: 900px) { .claim-summary { grid-template-columns: repeat(2, minmax(120px, 1fr)); } }
 /* 知识点全屏查看（复用 qa 全屏样式） */
 .kp-fullscreen { position: fixed; inset: 0; z-index: 200; background: rgba(244,243,252,.96); backdrop-filter: blur(6px); display: flex; flex-direction: column; }
 .kp-fullscreen .qaf-body { flex: 1; min-width: 0; overflow-y: auto; padding: 18px 22px 40px; max-width: 1320px; width: 100%; margin: 0 auto; }

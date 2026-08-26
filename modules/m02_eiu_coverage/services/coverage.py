@@ -20,6 +20,14 @@ PUBLISHABLE_STATUSES = {
 }
 
 
+def _is_verified(eiu: dict) -> bool:
+    """兼容新质量状态与历史 review_status。"""
+    return (
+        eiu.get("quality_status") == "verified"
+        or eiu.get("review_status") == "quality_verified"
+    )
+
+
 def _default_covered_eiu_ids(database: DatabaseService) -> set[int]:
     """默认已覆盖集合：已生成且处于可发布态样本的 EIU id（BRD c_i=1 口径）。"""
     return database.list_covered_eiu_ids(statuses=PUBLISHABLE_STATUSES)
@@ -76,8 +84,14 @@ def compute_coverage(
 
     # ---- 基础计数（blocked 已由 list_eius 过滤）----
     active = [eiu for eiu in eius if eiu["eiu_id"] not in blocked]
-    questionable = [eiu for eiu in active if eiu["is_questionable"]]
+    candidates = [eiu for eiu in active if eiu["is_questionable"]]
+    questionable = [eiu for eiu in candidates if _is_verified(eiu)]
     excluded = [eiu for eiu in active if not eiu["is_questionable"]]
+    needs_review = [eiu for eiu in candidates if eiu.get("quality_status") == "needs_review"]
+    pending = [
+        eiu for eiu in candidates
+        if not _is_verified(eiu) and eiu.get("quality_status") != "needs_review"
+    ]
 
     # ---- 多维统计 ----
     by_priority: dict[str, int] = dict(Counter(eiu["content_priority"] for eiu in active))
@@ -107,7 +121,7 @@ def compute_coverage(
         for section_path, count in sorted(by_section_counter.items(), key=lambda kv: (-kv[1], kv[0]))
     ]
 
-    # ---- 加权覆盖率（分母仅含 is_questionable=true，SPEC §6.1）----
+    # ---- 正式覆盖率：分母仅含已验证且可出题的 EIU ----
     total_weight = 0
     covered_weight = 0
     p0_total = 0
@@ -155,11 +169,20 @@ def compute_coverage(
             f"实质 Block 对账率 {reconciliation_rate:.0%} < 100%，"
             f"有 {len(uncovered_blocks)} 个段落未生成 EIU 或排除记录"
         )
+    if needs_review or pending:
+        alerts.append(
+            f"有 {len(needs_review) + len(pending)} 条候选声明尚未验证，"
+            "不计入正式覆盖率分母，也不会进入问答生成"
+        )
 
     return {
         "total_eiu": len(active),
         "questionable_eiu": len(questionable),
         "excluded_eiu": len(excluded),
+        "candidate_eiu": len(candidates),
+        "verified_eiu": len(questionable),
+        "needs_review_eiu": len(needs_review),
+        "rejected_eiu": len(excluded),
         "by_priority": {priority: by_priority.get(priority, 0) for priority in ("P0", "P1", "P2")},
         "by_type": by_type,
         "by_document": by_document,
@@ -198,7 +221,7 @@ def compute_gaps(*, covered_eiu_ids: Iterable[int] | None = None) -> list[dict]:
             "reason": "暂无对应题目",
         }
         for eiu in eius
-        if eiu["is_questionable"] and eiu["eiu_id"] not in covered
+        if eiu["is_questionable"] and _is_verified(eiu) and eiu["eiu_id"] not in covered
     ]
     return gaps
 

@@ -86,10 +86,15 @@
     folder.onclick = () => { const closed = compositionBox.classList.toggle("collapsed"); folder.querySelector("svg").setAttribute("data-lucide", closed ? "chevron-right" : "chevron-down"); icons(); };
     const nameInput = document.getElementById("evRunName");
     nameInput.previousElementSibling.remove(); nameInput.remove();
-    setAdapter("openai_compatible");
+    setAdapter(state.draftAdapter || "openai_compatible");
+    if (state.draftConfig) applyAdapterConfig(state.adapter, state.draftConfig);
     document.querySelectorAll("#evCallTypes button").forEach(b => b.onclick = () => setAdapter(b.dataset.adapter));
     document.querySelectorAll("input[name=evComposition]").forEach(i => i.onchange = () => { state.compositionId = Number(i.value); document.querySelectorAll(".ev-composition").forEach(x => x.classList.toggle("selected", x.querySelector("input").checked)); });
-    document.getElementById("evCreateSet").onclick = () => { window.__evalSetReturn = "evaluation"; goto("evalset"); };
+    document.getElementById("evCreateSet").onclick = () => {
+      try { state.draftConfig = adapterConfig(); state.draftAdapter = state.adapter; } catch (_) { /* 输入未完成时仍允许先创建评测集 */ }
+      window.__evalSetReturn = "evaluation";
+      goto("evalset");
+    };
     document.getElementById("evProfile").onchange = event => {
       const profile = loadProfiles().find(item => item.id === event.target.value);
       if (!profile) return;

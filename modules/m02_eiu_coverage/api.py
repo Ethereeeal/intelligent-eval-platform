@@ -151,6 +151,11 @@ def persist_coverage() -> CoverageReportOut:
     """计算覆盖率并落库为 coverage_report，返回带 report_id 的报告（供 m05 冻结外键引用）。"""
     save_coverage_report()
     row = database.get_latest_coverage_report()
+    # 历史 coverage_report 表尚未持久化候选质量分层字段；响应中补入当前确定性计数，
+    # 避免 POST 与 GET /coverage 对同一时点返回不同口径。
+    current = compute_coverage()
+    for field in ("candidate_eiu", "verified_eiu", "needs_review_eiu", "rejected_eiu"):
+        row[field] = current[field]
     return CoverageReportOut(**row)
 
 
@@ -179,6 +184,9 @@ def update_eiu(eiu_id: int, payload: EiuUpdate) -> EiuOut:
     updates: dict = {}
     if payload.statement is not None:
         updates["statement"] = payload.statement
+        # 人工改写后旧质检结论失效，必须重新复核。
+        updates["quality_status"] = "needs_review"
+        updates["review_status"] = "candidate"
     if payload.eiu_type is not None:
         if payload.eiu_type not in EIU_TYPES:
             raise HTTPException(status_code=422, detail=f"非法 EIU 类型: {payload.eiu_type}")
@@ -194,12 +202,26 @@ def update_eiu(eiu_id: int, payload: EiuUpdate) -> EiuOut:
             updates["exclusion_reason"] = None
         elif not (payload.exclusion_reason or current.get("exclusion_reason")):
             raise HTTPException(status_code=422, detail="不可出题 EIU 必须提供排除原因")
+        else:
+            updates["quality_status"] = "rejected"
     if payload.exclusion_reason is not None:
         updates["exclusion_reason"] = payload.exclusion_reason
     if payload.constraints is not None:
         updates["constraints_json"] = payload.constraints
     if payload.extraction_confidence is not None:
         updates["extraction_confidence"] = payload.extraction_confidence
+    if payload.quality_status is not None:
+        target_questionable = (
+            payload.is_questionable
+            if payload.is_questionable is not None
+            else current.get("is_questionable")
+        )
+        if payload.quality_status == "verified" and target_questionable is False:
+            raise HTTPException(status_code=422, detail="不可出题声明不能标记为已验证")
+        updates["quality_status"] = payload.quality_status
+        updates["review_status"] = (
+            "quality_verified" if payload.quality_status == "verified" else "candidate"
+        )
 
     item = database.update_eiu(eiu_id, **updates)
     database.save_audit(

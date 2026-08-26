@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from typing import Literal
 
 from pydantic import BaseModel, Field
 from pydantic import field_validator
@@ -27,11 +28,18 @@ class EiuOut(BaseModel):
     weight: int
     constraints: dict | None = None
     evidence_blocks: list[int] | None = None
+    evidence_details: list[dict] | None = None
     is_questionable: bool
     exclusion_reason: str | None = None
     extraction_model: str | None = None
     extraction_confidence: float | None = None
     review_status: str
+    quality_status: str = "candidate"
+    quality_score: float | None = None
+    quality_checks: dict | None = None
+    complexity_level: str | None = None
+    complexity_score: float | None = None
+    complexity_factors: dict | None = None
     created_at: str | None = None
 
 
@@ -58,6 +66,7 @@ class EiuUpdate(BaseModel):
     exclusion_reason: str | None = Field(default=None, max_length=128)
     constraints: dict | None = None
     extraction_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    quality_status: Literal["candidate", "verified", "needs_review", "rejected"] | None = None
 
     @field_validator("constraints")
     @classmethod
@@ -86,6 +95,10 @@ class CoverageReport(BaseModel):
     total_eiu: int
     questionable_eiu: int
     excluded_eiu: int
+    candidate_eiu: int = 0
+    verified_eiu: int = 0
+    needs_review_eiu: int = 0
+    rejected_eiu: int = 0
     by_priority: dict[str, int]
     by_type: dict[str, int]
     by_document: list[dict]

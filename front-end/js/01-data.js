@@ -236,8 +236,10 @@
       ]);
       const eius = (eiuResp && eiuResp.items) || [];
       const eiuByDoc = {};
+      const eiuAllByDoc = {};
       eius.forEach(e => {
-        if (e.is_questionable === false) return; // 排除项不计入知识点
+        (eiuAllByDoc[e.document_id] = eiuAllByDoc[e.document_id] || []).push(e);
+        if (e.is_questionable === false) return; // 排除项只计入质量概览，不进入声明表
         (eiuByDoc[e.document_id] = eiuByDoc[e.document_id] || []).push(e);
       });
       const caseByDoc = {};
@@ -261,18 +263,50 @@
         if (pendingUploadDocIds.has(Number(d.document_id))) return;
         const id = "doc" + d.document_id;
         const purpose = docPurposeOf(d); // basic 或 gen
-        const kp = (eiuByDoc[d.document_id] || []).map((e, i) => ({
+        const rawClaims = eiuAllByDoc[d.document_id] || [];
+        const kp = (eiuByDoc[d.document_id] || []).map((e, i) => {
+          const status = e.quality_status || (e.review_status === "quality_verified" ? "verified" : "candidate");
+          const statusLabel = ({ verified: "已验证", needs_review: "待复核", rejected: "已排除", candidate: "候选" }[status] || "候选");
+          const checkValues = Object.values(e.quality_checks || {});
+          const passed = checkValues.filter(x => x && x.status === "pass").length;
+          const qualityDetail = Object.entries(e.quality_checks || {}).map(([key, value]) => {
+            const label = ({ fidelity: "忠实性", completeness: "完整性", atomicity: "原子性", testability: "可测试性" }[key] || key);
+            const statusText = value && value.status === "pass" ? "通过" : value && value.status === "fail" ? "失败" : "需关注";
+            const reasons = value && Array.isArray(value.reasons) && value.reasons.length ? `：${value.reasons.join("；")}` : "";
+            return `${label}${statusText}${reasons}`;
+          }).join("\n");
+          const evidenceChain = (e.evidence_details || []).map(x => {
+            const role = ({ direct: "直接证据", reference: "引用条款", context: "上下文", parent: "上级结构" }[x.role] || "证据");
+            return `${role} Block #${x.block_id}${x.section_path ? `（${x.section_path}）` : ""}`;
+          }).join(" → ");
+          return {
           id: "KP-" + e.eiu_id,
           stmt: e.statement || "",
           type: ({ rule: "规则", constraint: "约束", definition: "定义", process: "流程" }[e.eiu_type] || "规则"),
-          prio: ({ P1: "必须覆盖", P2: "建议覆盖", P3: "可选覆盖" }[e.content_priority] || "建议覆盖"),
+          prio: ({ P0: "核心必测", P1: "必须覆盖", P2: "建议覆盖" }[e.content_priority] || "建议覆盖"),
+          qualityStatus: status,
+          qualityLabel: statusLabel,
+          qualityScore: e.quality_score,
+          qualityText: checkValues.length ? `${passed}/4 通过${e.complexity_level ? ` · ${e.complexity_level}` : ""}` : "未检查",
+          qualityDetail: qualityDetail || "暂无质量检查详情",
+          qualityChecks: e.quality_checks || {},
+          crossBlock: Array.isArray(e.evidence_details) && e.evidence_details.some(x => ["reference", "context"].includes(x.role)),
+          evidenceChain: evidenceChain || kpSec(e),
           // 后端未提供证据/来源时，兜底填充这两个字段，保证前端非空展示
           // 证据列统一用「章节」(section_path)；来源文档直接用文件名
           chapter: kpSec(e),
           source_doc: d.file_name || "（无）",
           ev: kpSec(e),
           src: d.file_name || "（无）"
-        }));
+          };
+        });
+        const claimStats = {
+          candidate: rawClaims.filter(e => e.is_questionable !== false).length,
+          verified: rawClaims.filter(e => e.is_questionable !== false && (e.quality_status === "verified" || e.review_status === "quality_verified")).length,
+          needsReview: rawClaims.filter(e => e.is_questionable !== false && e.quality_status === "needs_review").length,
+          rejected: rawClaims.filter(e => e.is_questionable === false || e.quality_status === "rejected").length,
+          crossBlock: rawClaims.filter(e => Array.isArray(e.evidence_details) && e.evidence_details.some(x => ["reference", "context"].includes(x.role))).length
+        };
         // qa.type 由文档用途决定：基础问题输入文档产出「基础问题」(plain)，泛化输入文档产出「泛化问题」(gen)
         const qaType = purpose === "gen" ? "gen" : "plain";
         const qa = (caseByDoc[d.document_id] || []).map(c => ({
@@ -303,7 +337,7 @@
           ver: "", updated: (d.created_at || "").slice(0, 10), purpose, folderPath: d.folder_path || "", qaFolderPath,
           preview: [],        // 文档原文改为「在线查看」时按需从后端 blocks 接口拉取
           versions: [],       // demo 后端未提供版本记录 → 留空
-          kp, qa, review: []  // review：demo 未单独建模 → 留空
+          kp, qa, claimStats, review: []  // review：demo 未单独建模 → 留空
         };
         DOC_PURPOSE[id] = purpose;
         // 按后端 folder_path 重建目录树（保留上传时的目录层级），缺省挂到「文档库」根

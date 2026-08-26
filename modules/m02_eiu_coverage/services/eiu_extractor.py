@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from modules.m01_data_foundation.services.eiu_indexer import EiuFaissIndex
+from modules.m02_eiu_coverage.services.eiu_quality import EiuQualityEvaluator
 from modules.m02_eiu_coverage.services.llm_client import LLMClient, LLMError
 from modules.shared.services.database import EIU_TYPES, PRIORITY_WEIGHT, DatabaseService
 
@@ -501,6 +502,10 @@ class EiuExtractorService:
 
         document_map = {document["document_id"]: document for document in documents}
         neighbors = self._build_neighbors(document_blocks)
+        quality_evaluators = {
+            document["document_id"]: EiuQualityEvaluator(blocks)
+            for document, blocks in zip(documents, document_blocks)
+        }
 
         inserted = 0
         excluded = 0
@@ -517,6 +522,8 @@ class EiuExtractorService:
                 block_error = None
             # 语义去重：精确层（归一化 key）+ 语义层（FAISS 检索），同义者标记排除
             items = _dedup_semantic(items, _sem_vecs, _faiss_idx)
+            evaluator = quality_evaluators[block["document_id"]]
+            items = [evaluator.annotate(item, block) for item in items]
             if items:
                 # P0：EIU 为核心实体，抽取时写入 statement 向量，落库供复用/跨块检索
                 for it in items:
@@ -534,8 +541,12 @@ class EiuExtractorService:
                 # 增量加入 FAISS 索引（语义层）
                 _faiss_idx.add_items([it for it in items if it.get("embedding_vector")])
             else:
+                exclusion = evaluator.annotate(
+                    exclusion_item(block, block_error or "段落无实质内容，未抽取到 EIU"),
+                    block,
+                )
                 self.database.save_eius(
-                    items=[exclusion_item(block, block_error or "段落无实质内容，未抽取到 EIU")],
+                    items=[exclusion],
                 )
                 excluded += 1
             progress = progress_start + int(index / total * (progress_end - progress_start))

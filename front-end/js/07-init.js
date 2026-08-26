@@ -253,16 +253,17 @@
     };
     const renderList = (id, rows, empty) => {
       const box = $("#" + id); if (!box) return;
-      box.innerHTML = rows.length ? rows.map(row => `<div class="overview-item"><span class="overview-item-ic ${row.tone || ""}"><i data-lucide="${row.icon}"></i></span><div class="overview-item-tx"><div class="overview-item-t">${html(row.title)}</div><div class="overview-item-m">${html(row.detail)}</div></div><div class="overview-item-v">${html(row.value)}</div></div>`).join("") : `<div class="overview-empty">${html(empty)}</div>`;
+      box.innerHTML = rows.length ? rows.map(row => `<div class="overview-item${row.go ? " overview-item-link" : ""}"${row.go ? ` data-go="${row.go}" role="link" tabindex="0"` : ""}><span class="overview-item-ic ${row.tone || ""}"><i data-lucide="${row.icon}"></i></span><div class="overview-item-tx"><div class="overview-item-t">${html(row.title)}</div><div class="overview-item-m">${html(row.detail)}</div></div><div class="overview-item-v">${html(row.value)}</div></div>`).join("") : `<div class="overview-empty">${html(empty)}</div>`;
     };
     set("kpiDocs", "…"); set("kpiTodo", "…"); set("kpiEvalSets", "…"); set("kpiLatestRun", "…");
 
     const localDocs = Object.keys(DOCS).length;
-    let docs = [], quality = {}, compositions = [], runs = [], errorBook = [], uploadedSets = [];
+    let docs = [], quality = {}, eiuCoverage = {}, compositions = [], runs = [], errorBook = [], uploadedSets = [];
     try {
-      const [docRes, qualityRes, compositionRes, runRes, errorRes, uploadRes] = await Promise.all([
+      const [docRes, qualityRes, eiuCoverageRes, compositionRes, runRes, errorRes, uploadRes] = await Promise.all([
         apiGet(`/api/documents`).catch(() => null),
         apiGet(`/api/quality-check/results`).catch(() => ({})),
+        apiGet(`/api/eiu/coverage`).catch(() => ({})),
         apiGet(`/api/compositions`).catch(() => []),
         apiGet(`/api/evaluation-runs`).catch(() => []),
         apiGet(`/api/error-book?status=open`).catch(() => ({ items: [] })),
@@ -270,6 +271,7 @@
       ]);
       docs = Array.isArray(docRes) ? docRes : [];
       quality = qualityRes || {};
+      eiuCoverage = eiuCoverageRes || {};
       compositions = Array.isArray(compositionRes) ? compositionRes : [];
       runs = Array.isArray(runRes) ? runRes : [];
       errorBook = Array.isArray(errorRes && errorRes.items) ? errorRes.items : [];
@@ -286,9 +288,10 @@
     // 上传评测集当前仅保存质量快照；只有后端明确写入待修订状态才计入，避免前端擅自定义阈值。
     const uploadNeedsRevision = uploadedSets.filter(s => ["pending", "needs_review", "rejected", "failed"].includes(s.review_status) || (s.quality_snapshot || {}).action === "revise").length;
     const qualityNeedsReview = Number(quality.failed || 0);
-    const todoTotal = parseFailed + qualityNeedsReview + uploadNeedsRevision + errorBook.length;
+    const eiuNeedsReview = Number(eiuCoverage.needs_review_eiu || 0);
+    const todoTotal = parseFailed + eiuNeedsReview + qualityNeedsReview + uploadNeedsRevision + errorBook.length;
     set("kpiTodo", todoTotal);
-    setMeta("kpiTodoMeta", todoTotal ? `解析 ${parseFailed} · 质检 ${qualityNeedsReview} · ErrorBook ${errorBook.length}` : "暂无开放待办", todoTotal ? "down" : "up");
+    setMeta("kpiTodoMeta", todoTotal ? `解析 ${parseFailed} · 声明复核 ${eiuNeedsReview} · 样本质检 ${qualityNeedsReview} · ErrorBook ${errorBook.length}` : "暂无开放待办", todoTotal ? "down" : "up");
 
     const evalSetCases = compositions.reduce((sum, item) => sum + Number(item.total_cases || item.case_count || 0), 0);
     set("kpiEvalSets", compositions.length);
@@ -311,11 +314,18 @@
     const ins = $("#hlInsight");
     if (ins) ins.textContent = todoTotal ? `当前有 ${todoTotal} 项待处理事项，优先关注解析失败、质检异常和开放的 ErrorBook。` : `平台运行平稳：${compositions.length} 个可用评测集，最近完成任务可在下方追溯。`;
 
+    const todoAction = $("#overviewTodoAction");
+    if (todoAction) {
+      const hasEvaluationExceptions = errorBook.length > 0;
+      todoAction.dataset.go = hasEvaluationExceptions ? "evaluation" : "evalset";
+      todoAction.textContent = hasEvaluationExceptions ? "查看评测异常" : "查看待办详情";
+    }
     renderList("overviewTodos", [
-      { icon: "file-warning", tone: parseFailed ? "err" : "ok", title: "文档解析异常", detail: parseFailed ? "解析失败的文档需要重新上传或检查格式" : "没有解析失败的文档", value: parseFailed },
-      { icon: "shield-alert", tone: qualityNeedsReview ? "warn" : "ok", title: "生成样本质检待复核", detail: qualityNeedsReview ? "质量门禁发现需要人工确认的样本" : "没有待复核的生成样本", value: qualityNeedsReview },
-      { icon: "upload", tone: uploadNeedsRevision ? "warn" : "ok", title: "上传评测集待修订", detail: uploadNeedsRevision ? "质量诊断标记了需要修订的上传集" : "没有被标记为待修订的上传集", value: uploadNeedsRevision },
-      { icon: "book-open-check", tone: errorBook.length ? "err" : "ok", title: "开放 ErrorBook", detail: errorBook.length ? "评测失败诊断尚未完成处理闭环" : "没有开放的评测失败诊断", value: errorBook.length },
+      { icon: "file-warning", tone: parseFailed ? "err" : "ok", title: "文档解析异常", detail: parseFailed ? "解析失败的文档需要重新上传或检查格式" : "没有解析失败的文档", value: parseFailed, go: "doclib" },
+      { icon: "list-checks", tone: eiuNeedsReview ? "warn" : "ok", title: "知识点待复核", detail: eiuNeedsReview ? `候选 ${eiuCoverage.candidate_eiu || 0} 个，已验证 ${eiuCoverage.verified_eiu || 0} 个；待复核项不进入出题` : `候选 ${eiuCoverage.candidate_eiu || 0} 个，当前没有待复核知识点`, value: eiuNeedsReview, go: "doclib" },
+      { icon: "shield-alert", tone: qualityNeedsReview ? "warn" : "ok", title: "生成样本质检待复核", detail: qualityNeedsReview ? "质量门禁发现需要人工确认的样本" : "没有待复核的生成样本", value: qualityNeedsReview, go: "evalset" },
+      { icon: "upload", tone: uploadNeedsRevision ? "warn" : "ok", title: "上传评测集待修订", detail: uploadNeedsRevision ? "质量诊断标记了需要修订的上传集" : "没有被标记为待修订的上传集", value: uploadNeedsRevision, go: "evalset" },
+      { icon: "book-open-check", tone: errorBook.length ? "err" : "ok", title: "开放 ErrorBook", detail: errorBook.length ? "评测失败诊断尚未完成处理闭环" : "没有开放的评测失败诊断", value: errorBook.length, go: "evaluation" },
     ], "暂无待处理事项。");
 
     renderList("overviewRuns", runs.slice(0, 4).map(run => {
