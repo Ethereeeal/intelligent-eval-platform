@@ -64,3 +64,12 @@ class EiuQualityTests(unittest.TestCase):
 
         self.assertEqual(result["quality_status"], "needs_review")
         self.assertEqual(result["quality_checks"]["testability"]["status"], "warning")
+
+    def test_financial_acceptance_and_rejection_are_valid_predicates(self) -> None:
+        block = _block(1, "不接受他行开立的单位定期存单质押。", "质押授信")
+        result = EiuQualityEvaluator([block]).annotate(
+            {"statement": "不接受他行开立的单位定期存单质押", "is_questionable": True}, block
+        )
+
+        self.assertEqual(result["quality_checks"]["testability"]["status"], "pass")
+        self.assertEqual(result["quality_status"], "verified")

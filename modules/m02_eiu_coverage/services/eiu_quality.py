@@ -15,9 +15,14 @@ _NUMBER_RE = re.compile(r"\d+(?:\.\d+)?%?")
 _SPACE_RE = re.compile(r"[\s，。；：、“”‘’（）()《》]+")
 _DEICTIC_RE = re.compile(r"上述|前述|下述|该等|其修订|前款|后款|本款|以下情形|相关要求")
 _PREDICATE_RE = re.compile(
-    r"应当|必须|不得|禁止|可以|可由|负责|是指|包括|适用|不适用|达到|超过|低于|高于|不少于|不超过|按照|执行|办理"
+    r"应当|必须|不得|禁止|不准|不允许|仅接受|不接受|可接受|不可|不得为|仅限|限于|应为|"
+    r"可以|可由|负责|是指|包括|适用|不适用|达到|超过|低于|高于|不少于|不超过|按照|执行|办理|"
+    r"施行|生效|实施"
 )
-_MODAL_RE = re.compile(r"应当|必须|不得|禁止|可以|负责|是指|适用|不适用")
+_MODAL_RE = re.compile(
+    r"应当|必须|不得|禁止|不准|不允许|仅接受|不接受|不可|不得为|仅限|限于|应为|"
+    r"可以|负责|是指|适用|不适用|施行|生效|实施"
+)
 _TITLE_LIKE_RE = re.compile(
     r"^(?:附件|附录|目录|第[一二三四五六七八九十百千零〇两0-9]+[章节])(?:\s|$)"
     r"|^(?:.{0,60})(?:办法|规程|细则|指引|通知)(?:[（(].{0,20}[）)])?$"
@@ -49,6 +54,9 @@ class EiuQualityEvaluator:
     def annotate(self, item: dict, source_block: dict) -> dict:
         """返回带证据链、四项检查和质量状态的新字典。"""
         result = dict(item)
+        # 黄色候选在 LLM 不可用或调用失败时不能被规则检查直接放行；
+        # 保留到人工/后续 LLM 队列，而不是伪装成“已验证”。
+        force_needs_review = bool(result.pop("force_needs_review", False))
         direct_id = int(source_block["block_id"])
         evidence: list[tuple[int, str]] = [(direct_id, "direct")]
         source_text = str(source_block.get("block_text") or "")
@@ -101,6 +109,8 @@ class EiuQualityEvaluator:
         result["complexity_factors"] = complexity["factors"]
         if not result.get("is_questionable", True):
             result["quality_status"] = "rejected"
+        elif force_needs_review:
+            result["quality_status"] = "needs_review"
         elif all(check["status"] == "pass" for check in checks.values()):
             result["quality_status"] = "verified"
         else:

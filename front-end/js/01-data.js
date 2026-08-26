@@ -267,6 +267,7 @@
         const kp = (eiuByDoc[d.document_id] || []).map((e, i) => {
           const status = e.quality_status || (e.review_status === "quality_verified" ? "verified" : "candidate");
           const statusLabel = ({ verified: "已验证", needs_review: "待复核", rejected: "已排除", candidate: "候选" }[status] || "候选");
+          const routeLabel = ({ green: "绿色·确定性验证", yellow: "黄色·LLM 审查", red: "红色·人工复核" }[e.route_color] || "");
           const checkValues = Object.values(e.quality_checks || {});
           const passed = checkValues.filter(x => x && x.status === "pass").length;
           const qualityDetail = Object.entries(e.quality_checks || {}).map(([key, value]) => {
@@ -287,8 +288,8 @@
           qualityStatus: status,
           qualityLabel: statusLabel,
           qualityScore: e.quality_score,
-          qualityText: checkValues.length ? `${passed}/4 通过${e.complexity_level ? ` · ${e.complexity_level}` : ""}` : "未检查",
-          qualityDetail: qualityDetail || "暂无质量检查详情",
+          qualityText: checkValues.length ? `${passed}/4 通过${e.complexity_level ? ` · ${e.complexity_level}` : ""}${routeLabel ? ` · ${routeLabel}` : ""}` : (routeLabel || "未检查"),
+          qualityDetail: `${qualityDetail || "暂无质量检查详情"}${routeLabel ? `\n路由：${routeLabel}` : ""}${Array.isArray(e.route_reasons) && e.route_reasons.length ? `\n原因：${e.route_reasons.join("；")}` : ""}`,
           qualityChecks: e.quality_checks || {},
           crossBlock: Array.isArray(e.evidence_details) && e.evidence_details.some(x => ["reference", "context"].includes(x.role)),
           evidenceChain: evidenceChain || kpSec(e),

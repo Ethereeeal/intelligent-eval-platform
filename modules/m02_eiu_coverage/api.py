@@ -24,7 +24,9 @@ from modules.m02_eiu_coverage.schemas import (
     EiuDetail,
     EiuExtractResponse,
     EiuListResponse,
+    EiuMergeRequest,
     EiuOut,
+    EiuSplitRequest,
     EiuUpdate,
     GapListResponse,
 )
@@ -33,6 +35,7 @@ from modules.m02_eiu_coverage.services.coverage import (
     compute_gaps,
     save_coverage_report,
 )
+from modules.m02_eiu_coverage.services.claim_audit import analyse_claim_relationships
 from modules.m02_eiu_coverage.services.eiu_extractor import EiuExtractorService
 from modules.shared.services.database import EIU_TYPES, PRIORITY_WEIGHT, DatabaseService
 
@@ -154,7 +157,10 @@ def persist_coverage() -> CoverageReportOut:
     # 历史 coverage_report 表尚未持久化候选质量分层字段；响应中补入当前确定性计数，
     # 避免 POST 与 GET /coverage 对同一时点返回不同口径。
     current = compute_coverage()
-    for field in ("candidate_eiu", "verified_eiu", "needs_review_eiu", "rejected_eiu"):
+    for field in (
+        "candidate_eiu", "verified_eiu", "needs_review_eiu", "rejected_eiu",
+        "claim_relation_summary", "document_audit",
+    ):
         row[field] = current[field]
     return CoverageReportOut(**row)
 
@@ -168,6 +174,53 @@ def get_gaps() -> GapListResponse:
 # ----------------------------------------------------------------------
 # EIU 详情 / 编辑 / 删除（全局路由）
 # ----------------------------------------------------------------------
+@eiu_router.post("/merge", response_model=EiuOut, status_code=201)
+def merge_eius(payload: EiuMergeRequest) -> EiuOut:
+    try:
+        item = database.merge_eius(
+            source_eiu_ids=payload.source_eiu_ids,
+            statement=payload.statement,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if item is None:
+        raise HTTPException(status_code=404, detail="one or more EIU not found")
+    database.save_audit(
+        operation="merge",
+        target_type="eiu",
+        target_id=str(item["eiu_id"]),
+        actor="api",
+        detail={"source_eiu_ids": payload.source_eiu_ids},
+    )
+    return EiuOut(**item)
+
+
+@eiu_router.post("/{eiu_id}/split", response_model=EiuListResponse, status_code=201)
+def split_eiu(eiu_id: int, payload: EiuSplitRequest) -> EiuListResponse:
+    try:
+        items = database.split_eiu(source_eiu_id=eiu_id, statements=payload.statements)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if items is None:
+        raise HTTPException(status_code=404, detail="eiu not found")
+    database.save_audit(
+        operation="split",
+        target_type="eiu",
+        target_id=str(eiu_id),
+        actor="api",
+        detail={"result_eiu_ids": [item["eiu_id"] for item in items]},
+    )
+    return EiuListResponse(total=len(items), items=items)
+
+
+@eiu_router.get("/document/{document_id}/relationships")
+def get_document_claim_relationships(document_id: int) -> dict:
+    """返回文档内的只读关系建议；不触发自动合并或状态修改。"""
+    if database.find_document_by_id(document_id) is None:
+        raise HTTPException(status_code=404, detail="document not found")
+    return analyse_claim_relationships(database.list_eius(document_id=document_id))
+
+
 @eiu_router.get("/{eiu_id}", response_model=EiuDetail)
 def get_eiu(eiu_id: int) -> EiuDetail:
     item = database.get_eiu(eiu_id)
@@ -208,6 +261,16 @@ def update_eiu(eiu_id: int, payload: EiuUpdate) -> EiuOut:
         updates["exclusion_reason"] = payload.exclusion_reason
     if payload.constraints is not None:
         updates["constraints_json"] = payload.constraints
+    if payload.subject is not None:
+        updates["subject"] = payload.subject
+    if payload.predicate is not None:
+        updates["predicate"] = payload.predicate
+    if payload.object is not None:
+        updates["object_text"] = payload.object
+    if payload.modality is not None:
+        updates["modality"] = payload.modality
+    if payload.qualifiers is not None:
+        updates["qualifiers_json"] = payload.qualifiers
     if payload.extraction_confidence is not None:
         updates["extraction_confidence"] = payload.extraction_confidence
     if payload.quality_status is not None:

@@ -27,6 +27,11 @@ class EiuOut(BaseModel):
     content_priority: str
     weight: int
     constraints: dict | None = None
+    subject: str | None = None
+    predicate: str | None = None
+    object: str | None = None
+    modality: str | None = None
+    qualifiers: dict | None = None
     evidence_blocks: list[int] | None = None
     evidence_details: list[dict] | None = None
     is_questionable: bool
@@ -40,6 +45,14 @@ class EiuOut(BaseModel):
     complexity_level: str | None = None
     complexity_score: float | None = None
     complexity_factors: dict | None = None
+    route_color: str | None = None
+    route_reasons: list[str] | None = None
+    review_action: str | None = None
+    review_attempts: int = 0
+    review_model: str | None = None
+    review_prompt_version: str | None = None
+    source_candidate_ids: list[int] | None = None
+    source_eiu_ids: list[int] | None = None
     created_at: str | None = None
 
 
@@ -65,6 +78,11 @@ class EiuUpdate(BaseModel):
     is_questionable: bool | None = None
     exclusion_reason: str | None = Field(default=None, max_length=128)
     constraints: dict | None = None
+    subject: str | None = Field(default=None, max_length=256)
+    predicate: str | None = Field(default=None, max_length=128)
+    object: str | None = Field(default=None, max_length=2000)
+    modality: str | None = Field(default=None, max_length=64)
+    qualifiers: dict | None = None
     extraction_confidence: float | None = Field(default=None, ge=0.0, le=1.0)
     quality_status: Literal["candidate", "verified", "needs_review", "rejected"] | None = None
 
@@ -76,6 +94,34 @@ class EiuUpdate(BaseModel):
         if len(json.dumps(value, ensure_ascii=False).encode("utf-8")) > 16 * 1024:
             raise ValueError("constraints 不能超过 16KB")
         return value
+
+    @field_validator("qualifiers")
+    @classmethod
+    def validate_qualifiers_size(cls, value: dict | None) -> dict | None:
+        if value is None:
+            return None
+        if len(json.dumps(value, ensure_ascii=False).encode("utf-8")) > 16 * 1024:
+            raise ValueError("qualifiers 不能超过 16KB")
+        return value
+
+
+class EiuMergeRequest(BaseModel):
+    source_eiu_ids: list[int] = Field(min_length=2, max_length=20)
+    statement: str = Field(min_length=4, max_length=200)
+
+
+class EiuSplitRequest(BaseModel):
+    statements: list[str] = Field(min_length=2, max_length=10)
+
+    @field_validator("statements")
+    @classmethod
+    def validate_statements(cls, value: list[str]) -> list[str]:
+        cleaned = [statement.strip() for statement in value if statement and statement.strip()]
+        if len(set(cleaned)) < 2:
+            raise ValueError("至少需要两条不同的非空知识点")
+        if any(len(statement) > 200 for statement in cleaned):
+            raise ValueError("单条知识点不能超过 200 字")
+        return cleaned
 
 
 class DeleteResponse(BaseModel):
@@ -106,6 +152,8 @@ class CoverageReport(BaseModel):
     weighted_coverage: float
     p0_coverage_pct: float
     block_reconciliation: BlockReconciliation
+    claim_relation_summary: dict = Field(default_factory=dict)
+    document_audit: list[dict] = Field(default_factory=list)
     alerts: list[str] = Field(default_factory=list)
 
 

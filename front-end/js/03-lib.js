@@ -94,6 +94,7 @@
         <span>类型<span class="col-filter" data-filter="type"><i data-lucide="filter"></i></span><span class="kp-resize" data-resize="4"></span></span>
         <span>证据链<span class="col-filter" data-filter="ev"><i data-lucide="filter"></i></span><span class="kp-resize" data-resize="5"></span></span>
         <span>来源文档<span class="col-filter" data-filter="src"><i data-lucide="filter"></i></span></span>
+        <span>操作</span>
       </div>
       ${all.map((k, i) => `<div class="kp-tr">
         <span class="kp-td kp-td-stmt kp-c-stmt"><b>#${i + 1}</b> ${escapeHTML(k.stmt)}</span>
@@ -103,6 +104,7 @@
         <span class="kp-td kp-c-type"><span class="pill br">${escapeHTML(k.type)}</span></span>
         <span class="kp-td kp-td-ev kp-c-ev">${k.crossBlock ? '<span class="cross-block-tag">跨块</span> ' : ''}${escapeHTML(k.evidenceChain || k.ev)}</span>
         <span class="kp-td kp-td-src kp-c-src">${escapeHTML(k.src)}</span>
+        <span class="kp-td kp-review-actions">${k.qualityStatus === "needs_review" ? `<button class="btn ghost sm kp-review-action" data-eiu-id="${escapeHTML(String(k.id || "").replace(/^KP-/, ""))}" data-review-action="approve">通过</button><button class="btn ghost sm kp-review-action" data-eiu-id="${escapeHTML(String(k.id || "").replace(/^KP-/, ""))}" data-review-action="edit">编辑</button><button class="btn ghost sm kp-review-action danger" data-eiu-id="${escapeHTML(String(k.id || "").replace(/^KP-/, ""))}" data-review-action="reject">排除</button>` : ["verified", "rejected"].includes(k.qualityStatus) ? `<button class="btn ghost sm kp-review-action" data-eiu-id="${escapeHTML(String(k.id || "").replace(/^KP-/, ""))}" data-review-action="reopen">重新复核</button>` : '<span class="muted">—</span>'}</span>
       </div>`).join("")}
     </div>`;
   }
@@ -120,7 +122,7 @@
       <div class="card card-pad">
         ${claimSummaryHTML(d)}
         ${kpTableHTML(d.kp)}
-        <p class="muted mt">正式口径：仅“已验证”声明进入覆盖率分母和问答生成；待复核声明保留在候选池。四项检查为忠实性、完整性、原子性和可测试性。</p>
+        <p class="muted mt">正式口径：仅“已验证”声明进入覆盖率分母和问答生成；待复核声明保留在候选池。绿色为确定性验证，黄色为 LLM 审查，红色为人工复核；可在待复核项直接通过、编辑后通过或排除。</p>
       </div>`;
   }
 
@@ -152,6 +154,7 @@
       };
       const kpf = $("#docContent #kpFullscreenBtn"); if (kpf) kpf.onclick = () => openKpFullscreen(DOCS[docId].kp, DOCS[docId].name);
       bindKpColFilters($("#docContent"));
+      bindKpReviewActions($("#docContent"));
       bindKpColResize($("#docContent .kp-table"));
       setupPager($("#docContent"), "#docContent .kp-tr", 15, "kpPager", "kpPage");
       enableHScrollDrag($("#docContent .kp-table"));
@@ -981,6 +984,7 @@
       };
       icons();
       bindKpColFilters(overlay);
+      bindKpReviewActions(overlay);
       bindKpColResize(overlay.querySelector(".kp-table"));
       setupPager(overlay, ".kp-tr", 15, "kpFsPager", "kpPage");
       enableHScrollDrag(overlay.querySelector(".kp-table"));
@@ -1161,6 +1165,161 @@
   function bindKpColFilters(scope) {
     (scope || document).querySelectorAll(".kp-table .col-filter").forEach(icon => {
       icon.onclick = (e) => { e.stopPropagation(); openKpColFilter(icon.dataset.filter, icon); };
+    });
+  }
+  async function updateKpReview(eiuId, payload, message) {
+    const response = await fetch(API_BASE + `/api/eiu/${encodeURIComponent(eiuId)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      let detail = `请求失败（${response.status}）`;
+      try { detail = (await response.json()).detail || detail; } catch (e) {}
+      throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+    }
+    await loadData();
+    renderNav();
+    renderLibContent("doc", state.sel.doc);
+    toast(message);
+  }
+  async function postKpReview(path, payload, message) {
+    const response = await fetch(API_BASE + path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify(payload)
+    });
+    if (!response.ok) {
+      let detail = `请求失败（${response.status}）`;
+      try { detail = (await response.json()).detail || detail; } catch (e) {}
+      throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
+    }
+    await loadData();
+    renderNav();
+    renderLibContent("doc", state.sel.doc);
+    toast(message);
+  }
+  function setupKpSplitMerge(scope) {
+    const root = scope || document;
+    const table = root.querySelector(".kp-table");
+    if (!table || root.querySelector(".kp-merge-toolbar")) return;
+    const eligible = [...table.querySelectorAll('.kp-review-action[data-review-action="approve"]')];
+    if (!eligible.length) return;
+    eligible.forEach(approve => {
+      const row = approve.closest(".kp-tr");
+      const statement = row?.querySelector(".kp-td-stmt");
+      const actions = approve.closest(".kp-review-actions");
+      if (!row || !statement || !actions) return;
+      const eiuId = approve.dataset.eiuId;
+      if (!statement.querySelector(".kp-merge-select")) {
+        const check = document.createElement("input");
+        check.type = "checkbox"; check.className = "kp-merge-select"; check.dataset.eiuId = eiuId;
+        check.setAttribute("aria-label", "选择知识点用于合并");
+        statement.prepend(check);
+      }
+      if (!actions.querySelector('[data-review-action="split"]')) {
+        const split = document.createElement("button");
+        split.className = "btn ghost sm kp-review-action";
+        split.dataset.eiuId = eiuId; split.dataset.reviewAction = "split"; split.textContent = "拆分";
+        actions.insertBefore(split, actions.querySelector('[data-review-action="reject"]'));
+      }
+    });
+    const toolbar = document.createElement("div");
+    toolbar.className = "kp-merge-toolbar";
+    toolbar.innerHTML = '<span>勾选待复核知识点后可合并；合并结果仍需复核。</span><button class="btn ghost sm" type="button" disabled>合并所选（0）</button>';
+    table.before(toolbar);
+    const mergeButton = toolbar.querySelector("button");
+    const selected = () => [...table.querySelectorAll(".kp-merge-select:checked")].map(input => Number(input.dataset.eiuId)).filter(Boolean);
+    const sync = () => { const ids = selected(); mergeButton.disabled = ids.length < 2; mergeButton.textContent = `合并所选（${ids.length}）`; };
+    table.querySelectorAll(".kp-merge-select").forEach(input => input.addEventListener("change", sync));
+    mergeButton.addEventListener("click", async () => {
+      const ids = selected();
+      if (ids.length < 2) return;
+      const statement = window.prompt("请输入合并后的完整知识点；合并后会进入待复核：");
+      if (!statement || !statement.trim()) return;
+      try { await postKpReview("/api/eiu/merge", { source_eiu_ids: ids, statement: statement.trim() }, "知识点已合并，等待复核"); }
+      catch (error) { toast(`合并失败：${error.message || error}`); }
+    });
+  }
+  async function loadKpRelationshipHints(scope) {
+    const docId = Number(state.sel.doc);
+    if (!docId || !scope) return;
+    try {
+      const response = await fetch(API_BASE + `/api/eiu/document/${encodeURIComponent(docId)}/relationships`, {
+        headers: { "Accept": "application/json" }
+      });
+      if (!response.ok) return;
+      const report = await response.json();
+      const labels = { exact_duplicate: "重复", contains: "包含", overlaps: "重叠", conflict: "冲突" };
+      const hints = new Map();
+      (report.samples || []).forEach(item => {
+        const label = labels[item.relation_type] || item.relation_type;
+        [item.left_eiu_id, item.right_eiu_id].forEach(id => {
+          if (!id) return;
+          const current = hints.get(String(id)) || [];
+          if (!current.includes(label)) current.push(label);
+          hints.set(String(id), current);
+        });
+      });
+      hints.forEach((labelsForEiu, eiuId) => {
+        const action = scope.querySelector(`.kp-review-action[data-eiu-id="${eiuId}"]`);
+        const cell = action && action.closest(".kp-review-actions");
+        if (!cell || cell.querySelector(".claim-relation-hint")) return;
+        const hint = document.createElement("span");
+        hint.className = `claim-relation-hint${labelsForEiu.includes("冲突") ? " conflict" : ""}`;
+        hint.textContent = labelsForEiu.join("/");
+        hint.title = "关系诊断仅作复核提示；请确认原文证据后再合并或修改。";
+        cell.append(hint);
+      });
+    } catch (error) { /* 关系提示不可用不影响既有审核操作。 */ }
+  }
+
+  function bindKpReviewActions(scope) {
+    setupKpSplitMerge(scope);
+    void loadKpRelationshipHints(scope);
+    (scope || document).querySelectorAll(".kp-review-action").forEach(button => {
+      if (button.dataset.bound) return;
+      button.dataset.bound = "1";
+      button.addEventListener("click", async event => {
+        event.stopPropagation();
+        const eiuId = button.dataset.eiuId;
+        if (!eiuId) return;
+        try {
+          if (button.dataset.reviewAction === "approve") {
+            await updateKpReview(eiuId, { quality_status: "verified" }, "知识点已通过验证");
+          } else if (button.dataset.reviewAction === "edit") {
+            const row = button.closest(".kp-tr");
+            const current = row?.querySelector(".kp-td-stmt")?.textContent.replace(/^#\d+\s*/, "").trim() || "";
+            const statement = window.prompt("编辑知识点；确认其已被当前证据完整支持后可直接通过：", current);
+            if (statement != null && statement.trim()) {
+              await updateKpReview(eiuId, { statement: statement.trim(), quality_status: "verified" }, "知识点已编辑并通过验证");
+            }
+          } else if (button.dataset.reviewAction === "split") {
+            const text = window.prompt("请输入拆分后的知识点，每行一条；拆分结果需分别复核：");
+            const statements = text == null ? [] : text.split(/\n+/).map(value => value.trim()).filter(Boolean);
+            if (statements.length >= 2) {
+              await postKpReview(`/api/eiu/${encodeURIComponent(eiuId)}/split`, { statements }, "知识点已拆分，等待分别复核");
+            } else if (text != null) {
+              toast("请至少填写两条不同的知识点");
+            }
+          } else if (button.dataset.reviewAction === "reopen") {
+            await updateKpReview(
+              eiuId,
+              { is_questionable: true, exclusion_reason: null, quality_status: "needs_review" },
+              "知识点已回退到待复核"
+            );
+          } else if (button.dataset.reviewAction === "reject") {
+            const reason = window.prompt("请填写排除原因（例如：重复强调、外部引用缺失、非实质内容）：");
+            if (reason != null && reason.trim()) {
+              await updateKpReview(eiuId, { is_questionable: false, exclusion_reason: reason.trim(), quality_status: "rejected" }, "知识点已排除");
+            } else if (reason != null) {
+              toast("排除操作需要填写原因");
+            }
+          }
+        } catch (error) {
+          toast(`操作失败：${error.message || error}`);
+        }
+      });
     });
   }
   // 知识点表格列宽拖拽调整（与主评测集表一致）

@@ -9,6 +9,10 @@ from collections import Counter
 from typing import Iterable
 
 from modules.shared.services.database import PRIORITY_WEIGHT, DatabaseService
+from modules.m02_eiu_coverage.services.claim_audit import (
+    analyse_claim_relationships,
+    audit_document_claim_coverage,
+)
 
 # 覆盖统计口径：仅统计达到可发布态的 generated_case（与 m05 PUBLISHABLE_STATUSES 一致），
 # candidate / blocked / needs_revision 不计入"已覆盖"，避免抬高覆盖率通过门禁。
@@ -175,6 +179,9 @@ def compute_coverage(
             "不计入正式覆盖率分母，也不会进入问答生成"
         )
 
+    claim_relation_summary = analyse_claim_relationships(active)
+    document_audit = audit_document_claim_coverage(blocks, active)
+
     return {
         "total_eiu": len(active),
         "questionable_eiu": len(questionable),
@@ -198,6 +205,8 @@ def compute_coverage(
                 for block in uncovered_blocks
             ],
         },
+        "claim_relation_summary": claim_relation_summary,
+        "document_audit": document_audit,
         "alerts": alerts,
     }
 

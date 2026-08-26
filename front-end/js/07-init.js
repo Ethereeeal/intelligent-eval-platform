@@ -289,7 +289,10 @@
     const uploadNeedsRevision = uploadedSets.filter(s => ["pending", "needs_review", "rejected", "failed"].includes(s.review_status) || (s.quality_snapshot || {}).action === "revise").length;
     const qualityNeedsReview = Number(quality.failed || 0);
     const eiuNeedsReview = Number(eiuCoverage.needs_review_eiu || 0);
-    const todoTotal = parseFailed + eiuNeedsReview + qualityNeedsReview + uploadNeedsRevision + errorBook.length;
+    const claimRelations = eiuCoverage.claim_relation_summary || {};
+    const claimRelationTotal = Number(claimRelations.total || 0);
+    const claimConflictCount = Number(claimRelations.conflicts || 0);
+    const todoTotal = parseFailed + eiuNeedsReview + qualityNeedsReview + uploadNeedsRevision + errorBook.length + claimConflictCount;
     set("kpiTodo", todoTotal);
     setMeta("kpiTodoMeta", todoTotal ? `解析 ${parseFailed} · 声明复核 ${eiuNeedsReview} · 样本质检 ${qualityNeedsReview} · ErrorBook ${errorBook.length}` : "暂无开放待办", todoTotal ? "down" : "up");
 
@@ -327,6 +330,14 @@
       { icon: "upload", tone: uploadNeedsRevision ? "warn" : "ok", title: "上传评测集待修订", detail: uploadNeedsRevision ? "质量诊断标记了需要修订的上传集" : "没有被标记为待修订的上传集", value: uploadNeedsRevision, go: "evalset" },
       { icon: "book-open-check", tone: errorBook.length ? "err" : "ok", title: "开放 ErrorBook", detail: errorBook.length ? "评测失败诊断尚未完成处理闭环" : "没有开放的评测失败诊断", value: errorBook.length, go: "evaluation" },
     ], "暂无待处理事项。");
+
+    if (claimRelationTotal) {
+      const todoBox = $("#overviewTodos");
+      if (todoBox) {
+        const tone = claimConflictCount ? "err" : "warn";
+        todoBox.insertAdjacentHTML("beforeend", `<div class="overview-item overview-item-link" data-go="doclib" role="link" tabindex="0"><span class="overview-item-ic ${tone}"><i data-lucide="git-compare-arrows"></i></span><div class="overview-item-tx"><div class="overview-item-t">知识点关系风险</div><div class="overview-item-m">精确重复 ${Number(claimRelations.exact_duplicate || 0)}；包含/重叠 ${Number(claimRelations.contains || 0) + Number(claimRelations.overlaps || 0)}；冲突需优先复核</div></div><div class="overview-item-v">${claimConflictCount || claimRelationTotal}</div></div>`);
+      }
+    }
 
     renderList("overviewRuns", runs.slice(0, 4).map(run => {
       const running = run.status === "running";

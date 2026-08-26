@@ -196,6 +196,8 @@ class DocumentParser:
 
     def _read_docx(self, file_path: Path) -> list[dict]:
         import docx
+        from docx.table import Table
+        from docx.text.paragraph import Paragraph
 
         document = docx.Document(str(file_path))
         table_cells = sum(len(table.rows) * len(table.columns) for table in document.tables)
@@ -204,28 +206,82 @@ class DocumentParser:
                 f"DOCX 元素数（段落+表格单元格）超过上限 {settings.max_docx_blocks}，已拒绝解析"
             )
         raw: list[dict] = []
-        for para in document.paragraphs:
-            text = para.text.strip()
-            if not text:
-                continue
-            style_name = para.style.name if para.style else ""
-            match = re.match(r"^Heading\s+(\d+)", style_name)
-            if match:
-                raw.append({"text": text, "level": int(match.group(1)), "block_type": "title"})
-                continue
-            # 中文制度/规程类文档常未套用 Heading 样式，按常见章节/条款模式推断层级
-            heading_level = self._docx_heading_level(text)
-            if heading_level is not None:
-                raw.append({"text": text, "level": heading_level, "block_type": "title"})
-            else:
-                raw.append({"text": text, "level": None, "block_type": "paragraph"})
-        for table in document.tables:
-            for row in table.rows:
-                cells = [cell.text.strip() for cell in row.cells]
-                joined = " | ".join(cells)
-                if joined.strip():
-                    raw.append({"text": joined, "level": None, "block_type": "table_row"})
+        table_no = 0
+        # document.paragraphs / document.tables 分开遍历会改变正文和表格的原始顺序。
+        for child in document.element.body.iterchildren():
+            if child.tag.endswith("}p"):
+                self._append_docx_paragraph(raw, Paragraph(child, document))
+            elif child.tag.endswith("}tbl"):
+                table_no += 1
+                self._append_docx_table(raw, Table(child, document), table_no)
         return raw
+
+    def _append_docx_paragraph(self, raw: list[dict], para: object) -> None:
+        """将 DOCX 段落转换为标题、条款项或普通段落，保留编号供上下文继承。"""
+        text = str(getattr(para, "text", "") or "").strip()
+        if not text:
+            return
+        style = getattr(para, "style", None)
+        style_name = style.name if style else ""
+        match = re.match(r"^Heading\s+(\d+)", style_name)
+        if match:
+            raw.append({"text": text, "level": int(match.group(1)), "block_type": "title"})
+            return
+        heading_level = self._docx_heading_level(text)
+        if heading_level is not None:
+            raw.append({"text": text, "level": heading_level, "block_type": "title", "metadata": self._structural_metadata(text)})
+            return
+        metadata = self._structural_metadata(text)
+        if self._docx_has_numbering(para) and "item_no" not in metadata:
+            metadata["item_no"] = "word-numbered"
+        raw.append({"text": text, "level": None, "block_type": "list_item" if metadata.get("item_no") else "paragraph", "metadata": metadata})
+
+    @staticmethod
+    def _append_docx_table(raw: list[dict], table: object, table_no: int) -> None:
+        """保留表格原始位置，并为行保留表头和合并单元格提示。"""
+        rows: list[list[str]] = []
+        for row in getattr(table, "rows", []):
+            values: list[str] = []
+            seen_cells: set[int] = set()
+            for cell in row.cells:
+                cell_id = id(cell._tc)
+                if cell_id not in seen_cells:
+                    seen_cells.add(cell_id)
+                    values.append(cell.text.strip())
+            if any(values):
+                rows.append(values)
+        if not rows:
+            return
+        headers = rows[0]
+        for row_no, values in enumerate(rows, start=1):
+            raw.append({
+                "text": " | ".join(values),
+                "level": None,
+                "block_type": "table_header" if row_no == 1 else "table_row",
+                "metadata": {"table_id": f"docx-table-{table_no}", "table_row": row_no, "headers": headers, "merged_cell_context": len(values) != len(headers)},
+            })
+
+    @staticmethod
+    def _docx_has_numbering(para: object) -> bool:
+        paragraph_xml = getattr(para, "_p", None)
+        return bool(paragraph_xml is not None and paragraph_xml.pPr is not None and paragraph_xml.pPr.numPr is not None)
+
+    @staticmethod
+    def _structural_metadata(text: str) -> dict:
+        metadata: dict = {}
+        article = re.match(r"^第\s*([一二三四五六七八九十百千万零〇两0-9]+)\s*条", text)
+        if article:
+            metadata["article_no"] = f"第{article.group(1)}条"
+        item = re.match(r"^\s*(（[一二三四五六七八九十百千万零〇两0-9]+）|[一二三四五六七八九十百千万零〇两0-9]+[、.]|\d+[.)])", text)
+        if item:
+            metadata["item_no"] = item.group(1)
+        return metadata
+
+    @staticmethod
+    def _is_list_lead(text: str) -> bool:
+        return bool(re.search(r"(?:包括|如下|下列|应当具备|满足以下|符合以下|有下列|按下列).{0,30}(?:条件|情形|要求|事项|资料|材料|方式)?[：:]?$", text))
+
+            # 中文制度/规程类文档常未套用 Heading 样式，按常见章节/条款模式推断层级
 
     @staticmethod
     def _docx_heading_level(text: str) -> int | None:
@@ -247,8 +303,11 @@ class DocumentParser:
         blocks: list[ParsedBlock] = []
         # 栈保存 (在 blocks 中的位置, level)，栈顶为当前最近的标题
         stack: list[tuple[int, int]] = []
+        current_article_no: str | None = None
+        active_lead_index: int | None = None
         for item in raw:
             level = item.get("level")
+            metadata = dict(item.get("metadata") or {})
             # 标题先出栈同级/更高级祖先，再计算其所属层级
             if level is not None:
                 while stack and stack[-1][1] >= level:
@@ -256,6 +315,18 @@ class DocumentParser:
             ancestor_texts = [blocks[i].block_text for i, _ in stack]
             section_path = " / ".join(ancestor_texts) if ancestor_texts else "未分类"
             parent_index = stack[-1][0] if stack else None
+            article_no = metadata.get("article_no")
+            if article_no:
+                current_article_no = str(article_no)
+            elif current_article_no:
+                metadata["article_no"] = current_article_no
+            if metadata.get("item_no") and active_lead_index is not None:
+                parent_index = active_lead_index
+                metadata["lead_index"] = active_lead_index
+            if metadata.get("article_no") or metadata.get("item_no"):
+                metadata["list_path"] = "/".join(
+                    str(part) for part in (metadata.get("article_no"), metadata.get("item_no")) if part
+                )
             block = ParsedBlock(
                 section_path=section_path,
                 block_type=item.get("block_type", "paragraph"),
@@ -264,11 +335,16 @@ class DocumentParser:
                 page_no=item.get("page_no"),
                 start_offset=item.get("start"),
                 end_offset=item.get("end"),
-                metadata_json=item.get("metadata", {}),
+                metadata_json=metadata,
             )
             blocks.append(block)
             if level is not None:
                 stack.append((len(blocks) - 1, level))
+                active_lead_index = None
+            elif self._is_list_lead(block.block_text):
+                active_lead_index = len(blocks) - 1
+            elif block.block_type not in {"list_item", "table_header", "table_row"}:
+                active_lead_index = None
         return blocks
 
     # ------------------------------------------------------------------
@@ -315,6 +391,9 @@ class DocumentParser:
         merged: list[dict] = []
         for item in raw:
             if item.get("level") is not None:
+                merged.append(item)
+                continue
+            if item.get("block_type") in {"list_item", "table_header", "table_row"}:
                 merged.append(item)
                 continue
             last = merged[-1] if merged else None

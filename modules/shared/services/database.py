@@ -222,6 +222,11 @@ class EiuRow(Base):
     content_priority: Mapped[str] = mapped_column(String(4), nullable=False)
     weight: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     constraints_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    subject: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    predicate: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    object_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    modality: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    qualifiers_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     evidence_blocks: Mapped[list | None] = mapped_column(JSON, nullable=True)
     evidence_details: Mapped[list | None] = mapped_column(JSON, nullable=True)
     is_questionable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
@@ -235,6 +240,14 @@ class EiuRow(Base):
     complexity_level: Mapped[str | None] = mapped_column(String(8), nullable=True)
     complexity_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     complexity_factors: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    route_color: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    route_reasons: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    review_action: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    review_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    review_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    review_prompt_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_candidate_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    source_eiu_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
     # EIU 级向量（P0：EIU 为核心实体；用于语义去重/复用/未来跨块检索）
     embedding_vector: Mapped[list | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -453,6 +466,16 @@ class DatabaseService:
             with engine.begin() as conn:
                 if "document_id" not in eiu_cols:
                     conn.execute(text("ALTER TABLE eiu ADD COLUMN document_id INTEGER NULL"))
+                if "subject" not in eiu_cols:
+                    conn.execute(text("ALTER TABLE eiu ADD COLUMN subject VARCHAR(256) NULL"))
+                if "predicate" not in eiu_cols:
+                    conn.execute(text("ALTER TABLE eiu ADD COLUMN predicate VARCHAR(128) NULL"))
+                if "object_text" not in eiu_cols:
+                    conn.execute(text("ALTER TABLE eiu ADD COLUMN object_text TEXT NULL"))
+                if "modality" not in eiu_cols:
+                    conn.execute(text("ALTER TABLE eiu ADD COLUMN modality VARCHAR(64) NULL"))
+                if "qualifiers_json" not in eiu_cols:
+                    conn.execute(text("ALTER TABLE eiu ADD COLUMN qualifiers_json JSON NULL"))
                 # eiu.embedding_vector：EIU 级向量（P0 改造，EIU 为核心实体，支持去重/复用/跨块检索）
                 if "embedding_vector" not in eiu_cols:
                     conn.execute(text("ALTER TABLE eiu ADD COLUMN embedding_vector JSON NULL"))
@@ -470,6 +493,22 @@ class DatabaseService:
                     conn.execute(text("ALTER TABLE eiu ADD COLUMN complexity_score FLOAT NULL"))
                 if "complexity_factors" not in eiu_cols:
                     conn.execute(text("ALTER TABLE eiu ADD COLUMN complexity_factors JSON NULL"))
+                if "route_color" not in eiu_cols:
+                    conn.execute(text("ALTER TABLE eiu ADD COLUMN route_color VARCHAR(16) NULL"))
+                if "route_reasons" not in eiu_cols:
+                    conn.execute(text("ALTER TABLE eiu ADD COLUMN route_reasons JSON NULL"))
+                if "review_action" not in eiu_cols:
+                    conn.execute(text("ALTER TABLE eiu ADD COLUMN review_action VARCHAR(32) NULL"))
+                if "review_attempts" not in eiu_cols:
+                    conn.execute(text("ALTER TABLE eiu ADD COLUMN review_attempts INTEGER NOT NULL DEFAULT 0"))
+                if "review_model" not in eiu_cols:
+                    conn.execute(text("ALTER TABLE eiu ADD COLUMN review_model VARCHAR(128) NULL"))
+                if "review_prompt_version" not in eiu_cols:
+                    conn.execute(text("ALTER TABLE eiu ADD COLUMN review_prompt_version VARCHAR(64) NULL"))
+                if "source_candidate_ids" not in eiu_cols:
+                    conn.execute(text("ALTER TABLE eiu ADD COLUMN source_candidate_ids JSON NULL"))
+                if "source_eiu_ids" not in eiu_cols:
+                    conn.execute(text("ALTER TABLE eiu ADD COLUMN source_eiu_ids JSON NULL"))
                 # 回填历史 EIU：经 block_id -> document_id 反查（仅更新尚未回填的）
                 # 使用跨数据库兼容的子查询写法（MySQL JOIN UPDATE 在 SQLite 下不支持）
                 conn.execute(
@@ -1103,6 +1142,11 @@ class DatabaseService:
             "content_priority": eiu.content_priority,
             "weight": eiu.weight,
             "constraints": eiu.constraints_json,
+            "subject": eiu.subject,
+            "predicate": eiu.predicate,
+            "object": eiu.object_text,
+            "modality": eiu.modality,
+            "qualifiers": eiu.qualifiers_json,
             "evidence_blocks": eiu.evidence_blocks,
             "evidence_details": eiu.evidence_details,
             "is_questionable": bool(eiu.is_questionable),
@@ -1116,6 +1160,14 @@ class DatabaseService:
             "complexity_level": eiu.complexity_level,
             "complexity_score": eiu.complexity_score,
             "complexity_factors": eiu.complexity_factors,
+            "route_color": eiu.route_color,
+            "route_reasons": eiu.route_reasons,
+            "review_action": eiu.review_action,
+            "review_attempts": eiu.review_attempts,
+            "review_model": eiu.review_model,
+            "review_prompt_version": eiu.review_prompt_version,
+            "source_candidate_ids": eiu.source_candidate_ids,
+            "source_eiu_ids": eiu.source_eiu_ids,
             "embedding_vector": eiu.embedding_vector,
             "created_at": eiu.created_at.isoformat() if eiu.created_at else None,
         }
@@ -1159,6 +1211,11 @@ class DatabaseService:
                     content_priority=priority,
                     weight=PRIORITY_WEIGHT.get(priority, 1),
                     constraints_json=item.get("constraints"),
+                    subject=item.get("subject"),
+                    predicate=item.get("predicate"),
+                    object_text=item.get("object"),
+                    modality=item.get("modality"),
+                    qualifiers_json=item.get("qualifiers"),
                     evidence_blocks=item.get("evidence_blocks") or [item["block_id"]],
                     evidence_details=item.get("evidence_details"),
                     is_questionable=is_questionable,
@@ -1172,6 +1229,14 @@ class DatabaseService:
                     complexity_level=item.get("complexity_level"),
                     complexity_score=item.get("complexity_score"),
                     complexity_factors=item.get("complexity_factors"),
+                    route_color=item.get("route_color"),
+                    route_reasons=item.get("route_reasons"),
+                    review_action=item.get("review_action"),
+                    review_attempts=item.get("review_attempts", 0),
+                    review_model=item.get("review_model"),
+                    review_prompt_version=item.get("review_prompt_version"),
+                    source_candidate_ids=item.get("source_candidate_ids"),
+                    source_eiu_ids=item.get("source_eiu_ids"),
                     embedding_vector=item.get("embedding_vector"),
                 )
                 session.add(row)
@@ -1286,6 +1351,119 @@ class DatabaseService:
                 return self._eiu_to_dict(row)
             eiu, block, document = joined
             return self._eiu_to_dict(eiu, block, document)
+
+    def merge_eius(self, *, source_eiu_ids: list[int], statement: str) -> dict | None:
+        """将同一文档的多个待复核 EIU 合并为一个新待复核项，并保留来源关系。"""
+        ids = list(dict.fromkeys(int(value) for value in source_eiu_ids))
+        if len(ids) < 2:
+            raise ValueError("merge requires at least two source EIU ids")
+        with SessionLocal() as session:
+            sources = session.query(EiuRow).filter(EiuRow.eiu_id.in_(ids)).all()
+            if len(sources) != len(ids):
+                return None
+            document_ids = {row.document_id for row in sources}
+            if len(document_ids) != 1:
+                raise ValueError("only EIU from the same document can be merged")
+            primary = min(sources, key=lambda row: row.eiu_id)
+            evidence_blocks = list(dict.fromkeys(
+                block_id for row in sources for block_id in (row.evidence_blocks or [row.block_id])
+            ))
+            evidence_details: list[dict] = []
+            seen_evidence: set[str] = set()
+            for row in sources:
+                for detail in row.evidence_details or []:
+                    key = json.dumps(detail, ensure_ascii=False, sort_keys=True)
+                    if key not in seen_evidence:
+                        seen_evidence.add(key)
+                        evidence_details.append(detail)
+            merged = EiuRow(
+                block_id=primary.block_id,
+                document_id=primary.document_id,
+                statement=statement.strip(),
+                eiu_type=primary.eiu_type,
+                content_priority=primary.content_priority,
+                weight=primary.weight,
+                constraints_json=primary.constraints_json,
+                subject=primary.subject,
+                predicate=primary.predicate,
+                object_text=primary.object_text,
+                modality=primary.modality,
+                qualifiers_json=primary.qualifiers_json,
+                evidence_blocks=evidence_blocks,
+                evidence_details=evidence_details or None,
+                is_questionable=True,
+                extraction_model="manual-review",
+                extraction_confidence=None,
+                review_status="candidate",
+                quality_status="needs_review",
+                route_color="red",
+                route_reasons=["人工合并后需重新核验"],
+                review_action="merge",
+                source_eiu_ids=ids,
+            )
+            session.add(merged)
+            for row in sources:
+                row.is_questionable = False
+                row.quality_status = "rejected"
+                row.exclusion_reason = f"已合并至知识点（待复核）"
+                row.review_action = "merge"
+            session.flush()
+            joined = self._get_eiu_joined(session, merged.eiu_id)
+            session.commit()
+            if joined is None:
+                return self._eiu_to_dict(merged)
+            return self._eiu_to_dict(*joined)
+
+    def split_eiu(self, *, source_eiu_id: int, statements: list[str]) -> list[dict] | None:
+        """将一个待复核 EIU 拆为多个新待复核项，并保留同一组原始证据。"""
+        cleaned = list(dict.fromkeys(statement.strip() for statement in statements if statement.strip()))
+        if len(cleaned) < 2:
+            raise ValueError("split requires at least two non-empty statements")
+        with SessionLocal() as session:
+            source = session.get(EiuRow, source_eiu_id)
+            if source is None:
+                return None
+            rows: list[EiuRow] = []
+            for statement in cleaned:
+                row = EiuRow(
+                    block_id=source.block_id,
+                    document_id=source.document_id,
+                    statement=statement,
+                    eiu_type=source.eiu_type,
+                    content_priority=source.content_priority,
+                    weight=source.weight,
+                    constraints_json=source.constraints_json,
+                    subject=source.subject,
+                    predicate=source.predicate,
+                    object_text=source.object_text,
+                    modality=source.modality,
+                    qualifiers_json=source.qualifiers_json,
+                    evidence_blocks=source.evidence_blocks,
+                    evidence_details=source.evidence_details,
+                    is_questionable=True,
+                    extraction_model="manual-review",
+                    extraction_confidence=None,
+                    review_status="candidate",
+                    quality_status="needs_review",
+                    route_color="red",
+                    route_reasons=["人工拆分后需分别核验"],
+                    review_action="split",
+                    source_eiu_ids=[source_eiu_id],
+                )
+                session.add(row)
+                rows.append(row)
+            source.is_questionable = False
+            source.quality_status = "rejected"
+            source.exclusion_reason = "已拆分为多个知识点（待复核）"
+            source.review_action = "split"
+            session.flush()
+            ids = [row.eiu_id for row in rows]
+            session.commit()
+            output: list[dict] = []
+            for eiu_id in ids:
+                joined = self._get_eiu_joined(session, eiu_id)
+                output.append(self._eiu_to_dict(*joined) if joined else self._eiu_to_dict(session.get(EiuRow, eiu_id)))
+            return output
 
     def mark_eiu_blocked(self, eiu_id: int) -> dict | None:
         """DELETE 软删除：review_status=blocked，不再计入覆盖率分母。"""
