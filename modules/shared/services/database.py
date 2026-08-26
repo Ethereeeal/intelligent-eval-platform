@@ -423,6 +423,23 @@ class DatabaseService:
             if "folder_path" not in ucols:
                 with engine.begin() as conn:
                     conn.execute(text("ALTER TABLE uploaded_eval_set ADD COLUMN folder_path VARCHAR(512) NULL"))
+        # M08 评测处置闭环：历史库按向后兼容方式补充复测关联和人工处置字段。
+        if "evaluation_case_result" in inspector.get_table_names():
+            result_cols = {c["name"] for c in inspector.get_columns("evaluation_case_result")}
+            with engine.begin() as conn:
+                if "parent_result_id" not in result_cols:
+                    conn.execute(text("ALTER TABLE evaluation_case_result ADD COLUMN parent_result_id INTEGER NULL"))
+                if "attempt_no" not in result_cols:
+                    conn.execute(text("ALTER TABLE evaluation_case_result ADD COLUMN attempt_no INTEGER NOT NULL DEFAULT 1"))
+        if "error_book_item" in inspector.get_table_names():
+            error_cols = {c["name"] for c in inspector.get_columns("error_book_item")}
+            with engine.begin() as conn:
+                if "result_id" not in error_cols:
+                    conn.execute(text("ALTER TABLE error_book_item ADD COLUMN result_id INTEGER NULL"))
+                if "resolution_category" not in error_cols:
+                    conn.execute(text("ALTER TABLE error_book_item ADD COLUMN resolution_category VARCHAR(64) NULL"))
+                if "resolution_note" not in error_cols:
+                    conn.execute(text("ALTER TABLE error_book_item ADD COLUMN resolution_note TEXT NULL"))
         # eiu.document_id：冗余存储归属文件，使 EIU 可按文件目录组织（去掉 corpus 维度）
         if "eiu" in inspector.get_table_names():
             eiu_cols = {c["name"] for c in inspector.get_columns("eiu")}
@@ -2402,12 +2419,44 @@ class DatabaseService:
             session.refresh(row)
             return row.result_id
 
-    def list_evaluation_results(self, run_id: int) -> list[dict]:
+    def get_evaluation_result(self, result_id: int) -> dict | None:
+        with SessionLocal() as session:
+            row = session.get(EvaluationCaseResultRow, result_id)
+            return self._evaluation_result_to_dict(row) if row else None
+
+    def update_evaluation_case_result(self, result_id: int, **updates: object) -> dict | None:
+        with SessionLocal() as session:
+            row = session.get(EvaluationCaseResultRow, result_id)
+            if not row:
+                return None
+            for key, value in updates.items():
+                if hasattr(row, key):
+                    setattr(row, key, value)
+            session.commit()
+            session.refresh(row)
+            return self._evaluation_result_to_dict(row)
+
+    def list_evaluation_results(self, run_id: int, *, include_retries: bool = False) -> list[dict]:
+        with SessionLocal() as session:
+            query = session.query(EvaluationCaseResultRow).filter(
+                EvaluationCaseResultRow.run_id == run_id
+            )
+            if not include_retries:
+                query = query.filter(EvaluationCaseResultRow.parent_result_id.is_(None))
+            rows = query.order_by(EvaluationCaseResultRow.result_id).all()
+            return [self._evaluation_result_to_dict(r) for r in rows]
+
+    def list_evaluation_result_attempts(self, result_id: int) -> list[dict]:
         with SessionLocal() as session:
             rows = (
                 session.query(EvaluationCaseResultRow)
-                .filter(EvaluationCaseResultRow.run_id == run_id)
-                .order_by(EvaluationCaseResultRow.result_id)
+                .filter(
+                    or_(
+                        EvaluationCaseResultRow.result_id == result_id,
+                        EvaluationCaseResultRow.parent_result_id == result_id,
+                    )
+                )
+                .order_by(EvaluationCaseResultRow.attempt_no, EvaluationCaseResultRow.result_id)
                 .all()
             )
             return [self._evaluation_result_to_dict(r) for r in rows]
@@ -2418,6 +2467,7 @@ class DatabaseService:
         run_id: int | None,
         case_uid: str | None,
         diagnosis: str,
+        result_id: int | None = None,
         root_cause: str | None = None,
         optimization: str | None = None,
         regression: list | None = None,
@@ -2426,6 +2476,7 @@ class DatabaseService:
             row = ErrorBookItemRow(
                 run_id=run_id,
                 case_uid=case_uid,
+                result_id=result_id,
                 diagnosis=diagnosis,
                 root_cause=root_cause,
                 optimization=optimization,
@@ -2464,6 +2515,28 @@ class DatabaseService:
             session.commit()
             session.refresh(row)
             return self._error_book_to_dict(row)
+
+    def get_error_book_item_for_result(
+        self,
+        result_id: int,
+        *,
+        run_id: int | None = None,
+        case_uid: str | None = None,
+    ) -> dict | None:
+        with SessionLocal() as session:
+            query = session.query(ErrorBookItemRow).filter(ErrorBookItemRow.result_id == result_id)
+            row = query.order_by(ErrorBookItemRow.item_id.desc()).first()
+            if row is None and run_id is not None and case_uid:
+                row = (
+                    session.query(ErrorBookItemRow)
+                    .filter(
+                        ErrorBookItemRow.run_id == run_id,
+                        ErrorBookItemRow.case_uid == case_uid,
+                    )
+                    .order_by(ErrorBookItemRow.item_id.desc())
+                    .first()
+                )
+            return self._error_book_to_dict(row) if row else None
 
     @staticmethod
     def _evaluation_run_to_dict(row: "EvaluationRunRow") -> dict:
@@ -2504,6 +2577,8 @@ class DatabaseService:
             "diagnosis": row.diagnosis,
             "status": row.status,
             "error_message": row.error_message,
+            "parent_result_id": row.parent_result_id,
+            "attempt_no": row.attempt_no,
             "created_at": row.created_at.isoformat() if row.created_at else None,
         }
 
@@ -2513,11 +2588,14 @@ class DatabaseService:
             "item_id": row.item_id,
             "run_id": row.run_id,
             "case_uid": row.case_uid,
+            "result_id": row.result_id,
             "diagnosis": row.diagnosis,
             "root_cause": row.root_cause,
             "optimization": row.optimization,
             "regression": row.regression,
             "status": row.status,
+            "resolution_category": row.resolution_category,
+            "resolution_note": row.resolution_note,
             "created_at": row.created_at.isoformat() if row.created_at else None,
             "updated_at": row.updated_at.isoformat() if row.updated_at else None,
         }
@@ -2716,6 +2794,8 @@ class EvaluationCaseResultRow(Base):
     diagnosis: Mapped[str | None] = mapped_column(String(16), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    parent_result_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    attempt_no: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -2727,11 +2807,14 @@ class ErrorBookItemRow(Base):
     item_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     run_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     case_uid: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    result_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     diagnosis: Mapped[str] = mapped_column(String(16), nullable=False)
     root_cause: Mapped[str | None] = mapped_column(Text, nullable=True)
     optimization: Mapped[str | None] = mapped_column(Text, nullable=True)
     regression: Mapped[list | None] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="open")
+    resolution_category: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    resolution_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow

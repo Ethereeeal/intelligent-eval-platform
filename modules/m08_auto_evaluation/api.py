@@ -6,7 +6,9 @@
   GET  /api/evaluation-runs/{id}             运行进度 + 汇总
   GET  /api/evaluation-runs/{id}/results     单题结果 + 分层指标汇总
   GET  /api/evaluation-runs/{id}/failures    E2E/D9 失败记录（ErrorBook）
-  POST /api/evaluation-runs/{id}/retry       重跑（新 run，供回归比较）
+  POST /api/evaluation-runs/{id}/cancel      取消运行（当前单题结束后生效）
+  POST /api/evaluation-results/{id}/retry    单题复测（保留尝试链）
+  PATCH /api/error-book/{id}                 人工处置异常项
   GET  /api/error-book                       智能体失败诊断与优化分析数据源
   GET  /api/adapters                         内置适配器清单
 """
@@ -22,7 +24,13 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
 from modules.m05_dataset_lifecycle.services.composition import resolve_composition
-from modules.m08_auto_evaluation.schemas import EvaluationExportRequest, EvaluationRunRequest
+from modules.m08_auto_evaluation.schemas import (
+    AdapterTestRequest,
+    ErrorBookUpdateRequest,
+    EvaluationCaseRetryRequest,
+    EvaluationExportRequest,
+    EvaluationRunRequest,
+)
 from modules.m08_auto_evaluation.services.adapter import (
     ADAPTER_REGISTRY,
     AdapterError,
@@ -30,7 +38,7 @@ from modules.m08_auto_evaluation.services.adapter import (
 )
 from modules.m08_auto_evaluation.services.metrics import aggregate
 from modules.m08_auto_evaluation.services.optimization import cluster_error_book
-from modules.m08_auto_evaluation.services.runner import start_run_async
+from modules.m08_auto_evaluation.services.runner import start_case_retry_async, start_run_async
 from modules.shared.services.database import DatabaseService
 
 evaluation_router = APIRouter(prefix="/api", tags=["m08-auto-evaluation"])
@@ -94,9 +102,13 @@ def list_evaluation_runs():
 
 
 @evaluation_router.delete("/evaluation-runs/{run_id}")
-def delete_evaluation_run(run_id: int):
-    """删除评测运行及其关联结果（供前端目录三点菜单「删除」调用）。"""
-    _get_run_or_404(run_id)
+def delete_evaluation_run(run_id: int, confirm: bool = Query(default=False)):
+    """永久删除终态运行；必须显式二次确认，运行中任务应先取消。"""
+    run = _get_run_or_404(run_id)
+    if run.get("status") in {"pending", "running", "cancelling"}:
+        raise HTTPException(status_code=409, detail="运行中任务不能删除，请先取消")
+    if not confirm:
+        raise HTTPException(status_code=400, detail="永久删除需要二次确认")
     deleted = _db.delete_evaluation_run(run_id)
     if not deleted:
         raise HTTPException(status_code=404, detail="evaluation run not found")
@@ -110,6 +122,16 @@ def delete_evaluation_run(run_id: int):
     except Exception:  # noqa: BLE001 — 审计失败不阻断
         pass
     return {"ok": True, "run_id": run_id}
+
+
+@evaluation_router.post("/evaluation-runs/{run_id}/cancel", status_code=202)
+def cancel_evaluation_run(run_id: int):
+    run = _get_run_or_404(run_id)
+    if run.get("status") not in {"pending", "running", "cancelling"}:
+        raise HTTPException(status_code=409, detail="当前运行已结束，不能取消")
+    status = "cancelled" if run.get("status") == "pending" else "cancelling"
+    updated = _db.update_evaluation_run(run_id, status=status)
+    return {"run_id": run_id, "status": updated["status"]}
 
 
 def _get_run_or_404(run_id: int) -> dict:
@@ -130,7 +152,45 @@ def get_evaluation_run(run_id: int):
 def evaluation_run_results(run_id: int):
     _get_run_or_404(run_id)
     results = _db.list_evaluation_results(run_id)
+    issues = _db.list_error_book(run_id=run_id)
+    by_result = {item.get("result_id"): item for item in issues if item.get("result_id")}
+    by_case = {}
+    for issue in issues:  # list_error_book 按新到旧排序，保留每道题最新处置记录
+        if issue.get("case_uid"):
+            by_case.setdefault(issue["case_uid"], issue)
+    for item in results:
+        item["error_book"] = by_result.get(item["result_id"]) or by_case.get(item.get("case_uid"))
     return {"results": results, "summary": aggregate(results)}
+
+
+@evaluation_router.get("/evaluation-results/{result_id}/attempts")
+def evaluation_result_attempts(result_id: int):
+    if _db.get_evaluation_result(result_id) is None:
+        raise HTTPException(status_code=404, detail="evaluation result not found")
+    return {"attempts": _db.list_evaluation_result_attempts(result_id)}
+
+
+@evaluation_router.post("/evaluation-results/{result_id}/retry", status_code=202)
+def retry_evaluation_result(result_id: int, payload: EvaluationCaseRetryRequest):
+    result = _db.get_evaluation_result(result_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="evaluation result not found")
+    if result.get("parent_result_id") is not None:
+        raise HTTPException(status_code=400, detail="请从原始结果发起复测")
+    run = _get_run_or_404(result["run_id"])
+    config = dict(run.get("adapter_config") or {})
+    config.update(payload.adapter_config or {})
+    try:
+        adapter = get_adapter(run["adapter"], config)
+    except (ValueError, AdapterError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    attempt_id = start_case_retry_async(
+        run_id=run["run_id"],
+        source_result=result,
+        adapter=adapter,
+        analysis_threshold=payload.analysis_threshold,
+    )
+    return {"result_id": result_id, "attempt_result_id": attempt_id, "status": "pending"}
 
 
 def _build_evaluation_workbook(run: dict, results: list[dict]) -> bytes:
@@ -253,10 +313,43 @@ def retry_evaluation_run(run_id: int):
 @evaluation_router.get("/error-book")
 def error_book(
     diagnosis: str | None = Query(default=None, description="按 E2E/D9 过滤"),
-    status: str | None = Query(default=None, description="open/fixed/closed"),
+    status: str | None = Query(default=None, description="open/processed/verified/ignored"),
 ):
     items = _db.list_error_book(diagnosis=diagnosis, status=status)
     return {"items": items, "clusters": cluster_error_book(items)}
+
+
+@evaluation_router.patch("/error-book/{item_id}")
+def update_error_book(item_id: int, payload: ErrorBookUpdateRequest):
+    if payload.status == "ignored" and not (payload.resolution_note or "").strip():
+        raise HTTPException(status_code=400, detail="忽略异常时必须填写原因")
+    if payload.status == "processed" and not (payload.resolution_category or "").strip():
+        raise HTTPException(status_code=400, detail="标记已处理时必须选择人工分类")
+    item = _db.update_error_book_item(
+        item_id,
+        status=payload.status,
+        resolution_category=payload.resolution_category,
+        resolution_note=payload.resolution_note,
+    )
+    if item is None:
+        raise HTTPException(status_code=404, detail="error book item not found")
+    return item
+
+
+@evaluation_router.post("/adapters/test")
+def test_adapter(payload: AdapterTestRequest):
+    try:
+        adapter = get_adapter(payload.adapter, payload.adapter_config)
+        result = adapter.run_single(payload.question)
+    except (ValueError, AdapterError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if result.get("error"):
+        raise HTTPException(status_code=502, detail=str(result["error"])[:300])
+    return {
+        "ok": True,
+        "answer": result.get("answer"),
+        "usage": result.get("usage") or {},
+    }
 
 
 @evaluation_router.get("/adapters")

@@ -142,3 +142,5 @@ document ──1:N──> task_job
 > `eval_set_composition` / `evaluation_run` / `evaluation_case_result` / `error_book_item`，
 > 字段定义以 `modules/shared/services/database.py` 为准；上文"预留"表项对应的 UploadedEvalSet /
 > PublicEvalSet / EvalSetComposition 等对象已由此实现。
+
+> 更新（2026-08-26）：`evaluation_case_result` 增加 `parent_result_id` / `attempt_no`，单题复测以追加尝试方式保留原始结果；`error_book_item` 增加 `result_id` / `resolution_category` / `resolution_note`，状态使用 `open`（待处理）、`processed`（已处理待复测）、`verified`（复测通过）和 `ignored`（填写原因后忽略）。

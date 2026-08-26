@@ -1,10 +1,15 @@
 import unittest
 from io import BytesIO
+from unittest.mock import patch
 
+from fastapi import HTTPException
 from openpyxl import load_workbook
 
+from modules.m08_auto_evaluation import api
 from modules.m08_auto_evaluation.api import _build_evaluation_workbook
-from modules.m08_auto_evaluation.services.adapter import OpenAiCompatibleAdapter
+from modules.m08_auto_evaluation.schemas import AdapterTestRequest, ErrorBookUpdateRequest
+from modules.m08_auto_evaluation.services import runner
+from modules.m08_auto_evaluation.services.adapter import MockAdapter, OpenAiCompatibleAdapter
 from modules.m08_auto_evaluation.services.diagnosis import diagnose
 from modules.m08_auto_evaluation.services.metrics import aggregate
 from modules.m08_auto_evaluation.services.optimization import build_optimization
@@ -88,6 +93,98 @@ class M08DemoTests(unittest.TestCase):
     def test_runtime_error_remains_d9(self):
         diagnosis = diagnose({}, {"error": "timeout"}, {"score": None})
         self.assertEqual(diagnosis, "D9")
+
+    def test_running_run_must_be_cancelled_before_permanent_delete(self):
+        with patch.object(api._db, "get_evaluation_run", return_value={"run_id": 7, "status": "running"}):
+            with self.assertRaises(HTTPException) as raised:
+                api.delete_evaluation_run(7, confirm=True)
+        self.assertEqual(raised.exception.status_code, 409)
+
+    def test_permanent_delete_requires_explicit_confirmation(self):
+        with patch.object(api._db, "get_evaluation_run", return_value={"run_id": 7, "status": "done"}):
+            with self.assertRaises(HTTPException) as raised:
+                api.delete_evaluation_run(7, confirm=False)
+        self.assertEqual(raised.exception.status_code, 400)
+
+    def test_ignored_issue_requires_a_reason(self):
+        payload = ErrorBookUpdateRequest(status="ignored", resolution_note=None)
+        with self.assertRaises(HTTPException) as raised:
+            api.update_error_book(1, payload)
+        self.assertEqual(raised.exception.status_code, 400)
+
+    def test_adapter_test_returns_a_single_observable_answer(self):
+        result = api.test_adapter(
+            AdapterTestRequest(adapter="mock", adapter_config={"reply": "通路正常"}, question="测试")
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["answer"], "通路正常")
+
+    def test_sensitive_adapter_values_are_not_persisted(self):
+        sanitized = api._sanitize_adapter_config({
+            "api_key": "secret",
+            "headers": {"Authorization": "Bearer secret"},
+            "url": "https://example.invalid/agent",
+        })
+        self.assertNotIn("api_key", sanitized)
+        self.assertEqual(sanitized["headers"], {"Authorization": "***"})
+
+    def test_case_retry_requires_manual_processing_before_verified(self):
+        source = {
+            "result_id": 50, "run_id": 8, "case_uid": "case-50", "question": "q",
+            "gold_answer": "正确答案", "status": "failed", "attempt_no": 1,
+        }
+
+        class _RetryDb:
+            issue_status = "open"
+            updates = []
+
+            def list_evaluation_result_attempts(self, result_id):
+                return [source]
+
+            def save_evaluation_case_result(self, **kwargs):
+                return 51
+
+            def update_evaluation_case_result(self, result_id, **kwargs):
+                return {"result_id": result_id, **kwargs}
+
+            def get_error_book_item_for_result(self, *args, **kwargs):
+                return {"item_id": 7, "status": self.issue_status, "regression": []}
+
+            def update_error_book_item(self, item_id, **kwargs):
+                self.updates.append(kwargs)
+                return kwargs
+
+        class _ImmediateThread:
+            def __init__(self, *, target, daemon):
+                self.target = target
+
+            def start(self):
+                self.target()
+
+        database = _RetryDb()
+        with patch.object(runner, "DatabaseService", return_value=database), patch.object(
+            runner.threading, "Thread", _ImmediateThread
+        ):
+            runner.start_case_retry_async(
+                run_id=8,
+                source_result=source,
+                adapter=MockAdapter({"reply": "正确答案"}),
+                analysis_threshold=0.8,
+            )
+        self.assertNotIn("status", database.updates[-1])
+
+        database = _RetryDb()
+        database.issue_status = "processed"
+        with patch.object(runner, "DatabaseService", return_value=database), patch.object(
+            runner.threading, "Thread", _ImmediateThread
+        ):
+            runner.start_case_retry_async(
+                run_id=8,
+                source_result=source,
+                adapter=MockAdapter({"reply": "正确答案"}),
+                analysis_threshold=0.8,
+            )
+        self.assertEqual(database.updates[-1]["status"], "verified")
 
 
 if __name__ == "__main__":

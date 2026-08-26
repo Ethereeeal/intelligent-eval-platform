@@ -44,7 +44,7 @@ modules/m08_auto_evaluation/
 
 - 待测智能体仅返回最终答案；平台无法将其检索内容映射到内部 Block/EIU，因此不计算检索指标，也不判定 D1–D8。
 - 多轮：`run_multi` 按 turns 顺序注入对话，非关键轮注入已给历史答案，关键轮（key_turn）由模型回答，用于 memory/coherence 验证。
-- **安全**：`adapter_config` 中的 `api_key` 不入库（持久化前剔除，接口回显掩码 `***`）；重跑（retry）不保留密钥，需重新创建运行并传入配置。
+- **安全**：`adapter_config` 中的 `api_key` 不入库（持久化前剔除，接口回显掩码 `***`）；单题复测需重新提交敏感配置，前端复用模板也不保存 API Key 或 Header 值。
 - **多轮记录边界**：Demo 仅保存待测系统生成的轮次输出到 `evaluation_case_result.turn_outputs`；完整输入 turns、`session_id` 与逐轮上下文持久化属于生产版本能力。
 
 ## 4. 运行与指标
@@ -61,7 +61,8 @@ POST /api/evaluation-runs {composition_id, adapter, adapter_config}
 
 - **Demo 指标**：短答案规范化精确匹配；长答案尝试 BGE 余弦相似度（不可用时回退精确匹配）；按难度/维度/归因汇总通过率，并累计耗时、Token、成本和错误率。
 - **Demo 失败记录**：答错统一标记 `E2E`（端到端失败、原因不可定位）；调用异常标记 `D9`。待测智能体不返回可与内部 Block/EIU 比对的检索轨迹，因此 D1–D8 不属于本平台的自动归因范围。
-- **跨版本复测**：`POST /api/evaluation-runs/{id}/retry` 仅以原组合和原配置重跑；比较新智能体版本时，使用 `POST /api/evaluation-runs` 创建带新适配器/配置和运行名称的独立记录。比较时应固定同一冻结评测集，并展示总体和分组分数。平台不执行智能体调优，m08 运行结果不驱动评测集修订。
+- **复测与对比**：单题复测通过 `POST /api/evaluation-results/{id}/retry` 创建关联尝试，不覆盖原结果；只有达到发起复测时的分析阈值才自动把异常项置为 `verified`。运行对比固定同一评测集版本，展示新增失败、已修复和持续失败。平台不执行智能体调优，m08 运行结果不驱动评测集修订。
+- **可观察说明**：后端保留 `E2E` / `D9` 诊断代码用于审计，前端默认显示“答案未通过”或“调用异常”，避免把内部编码直接暴露给测试人员。
 
 ## 5. API 接口
 
@@ -71,11 +72,17 @@ POST /api/evaluation-runs {composition_id, adapter, adapter_config}
 | GET | `/api/evaluation-runs` | 运行列表 |
 | GET | `/api/evaluation-runs/{run_id}` | 运行进度 + 指标汇总 |
 | GET | `/api/evaluation-runs/{run_id}/results` | 单题结果 + 分层指标汇总 |
+| POST | `/api/evaluation-runs/{run_id}/cancel` | 取消运行；当前单题请求结束后收敛为 `cancelled` |
+| DELETE | `/api/evaluation-runs/{run_id}?confirm=true` | 永久删除终态运行及关联结果；运行中禁止删除 |
 | POST | `/api/evaluation-runs/{run_id}/export` | 导出 Excel 原始报告；`result_ids` 为空时导出全部，传入列表时导出筛选结果 |
 | GET | `/api/evaluation-runs/{run_id}/failures` | 该运行的失败记录（`E2E` 端到端失败或 `D9` 运行异常） |
 | POST | `/api/evaluation-runs/{run_id}/retry` | 重跑（新 run，回归比较） |
+| GET | `/api/evaluation-results/{result_id}/attempts` | 原始结果及其单题复测尝试链 |
+| POST | `/api/evaluation-results/{result_id}/retry` | 发起单题复测（202，不覆盖原结果） |
 | GET | `/api/error-book` | ErrorBook 查询（智能体失败诊断与优化分析，支持 diagnosis/status 过滤 + 聚类） |
+| PATCH | `/api/error-book/{item_id}` | 标记待处理、已处理待复测或忽略；`verified` 仅由复测通过写入 |
 | GET | `/api/adapters` | 内置适配器清单 |
+| POST | `/api/adapters/test` | 使用单条问题测试目标智能体通路，不持久化敏感配置 |
 | POST | `/api/dimensions` | 新增评测维度（m05，可配置体系） |
 
 ## 6. Demo 实现清单
@@ -85,10 +92,11 @@ POST /api/evaluation-runs {composition_id, adapter, adapter_config}
 - [x] Demo 指标：规范化精确匹配、尽力语义相似度、难度/维度分组通过率、累计耗时/Token/成本/错误率
 - [x] Demo 失败记录：`E2E` 端到端失败与 `D9` 运行异常；不对不可观测的 D1–D8 归因
 - [x] 基础 ErrorBook：失败归因、建议映射和按归因聚类
-- [x] evaluation_run / evaluation_case_result / error_book_item 表 + 创建及查询 API（ErrorBook 状态处置 API 属于生产版本能力）
+- [x] evaluation_run / evaluation_case_result / error_book_item 表 + 创建及查询 API
+- [x] 运行取消与终态强确认删除、ErrorBook 人工处置、单题复测尝试链和同版本前端对比
 - [ ] （生产版本）标准黑盒适配器的智能体版本标识、会话控制和完整多轮会话持久化
 - [ ] （生产版本）完整答案与运行指标：数据集质量汇总、F1/数值容差/要点召回/忠实性/引用/拒答、P50/P95 与更多分组
-- [ ] （生产版本）完整 ErrorBook 处置/回归字段与跨智能体版本分数比较视图；诊断建议由智能体维护方执行，不在平台内自动调优
+- [ ] （生产版本）ErrorBook 负责人/权限/批量处置、持久化凭据服务与评分策略版本化；诊断建议由智能体维护方执行，不在平台内自动调优
 
 ## 7. 与 m05 的衔接
 
