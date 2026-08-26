@@ -143,7 +143,10 @@
           const qr = await fetch(API_BASE + `/api/quality-check?document_id=${docId}`, { method: "POST" }).catch(() => null);
           if (qr && qr.ok) {
             const qrBody = await qr.json().catch(() => null);
-            if (qrBody) toast(`「${d.name}」生成 ${gqr.generated || 0} 道 · 质检通过 ${qrBody.passed || 0} / 待确认 ${qrBody.failed || 0}`);
+            if (qrBody?.errors?.length) {
+              const firstError = qrBody.errors[0];
+              toast(`「${d.name}」质量检查失败 ${qrBody.errors.length} 条：${firstError.error || firstError.message || "未知错误"}`);
+            } else if (qrBody) toast(`「${d.name}」生成 ${gqr.generated || 0} 道 · 质检通过 ${qrBody.passed || 0} / 待确认 ${qrBody.failed || 0}`);
             else toast(`「${d.name}」生成完成，已执行质量校验`);
           } else {
             toast(`「${d.name}」评测集已生成，质量校验未执行（m04 接口异常）`);

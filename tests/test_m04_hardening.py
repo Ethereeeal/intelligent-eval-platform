@@ -54,6 +54,19 @@ class _DefaultBatchPipeline(PipelineService):
         )
 
 
+class _ErrorBatchPipeline(PipelineService):
+    def __init__(self):
+        self.database = self
+
+    def list_generated_cases(self, *, document_id, status):
+        if status != "candidate":
+            return []
+        return [{"case_id": 9, "document_id": document_id, "review_status": status}]
+
+    def _check_and_handle(self, case, *, preserve_status=False):
+        raise RuntimeError("LLM 返回不是有效 JSON")
+
+
 class M04HardeningTests(unittest.TestCase):
     def test_non_boolean_passed_value_fails_closed(self):
         checks = QualityChecker._normalize_checks(
@@ -83,6 +96,18 @@ class M04HardeningTests(unittest.TestCase):
         )
         self.assertEqual(summary["total_cases"], 2)
         self.assertEqual(summary["passed"], 2)
+
+    def test_quality_check_exposes_and_logs_case_errors(self):
+        pipeline = _ErrorBatchPipeline()
+        with self.assertLogs("modules.m04_quality_governance.services.pipeline", level="ERROR") as logs:
+            summary = pipeline.run_quality_check(document_id=7)
+        self.assertEqual(summary["passed"], 0)
+        self.assertEqual(summary["failed"], 0)
+        self.assertEqual(
+            summary["errors"],
+            [{"case_id": 9, "error_type": "RuntimeError", "error": "LLM 返回不是有效 JSON"}],
+        )
+        self.assertIn("质量检查异常 case_id=9 document_id=7", "\n".join(logs.output))
 
 
 if __name__ == "__main__":

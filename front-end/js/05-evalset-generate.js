@@ -41,6 +41,43 @@
     }
   }
 
+  // m03 的生成接口是同步请求，但后端会在进程内维护按文档的 EIU 进度；
+  // 在等待生成响应时轮询该进度，避免组合生成弹窗只停留在固定的 10%。
+  function startDocumentGenerationProgressPoll(documentId, doc, startPercent, endPercent) {
+    let stopped = false;
+    let inFlight = false;
+    const tick = async () => {
+      if (stopped || inFlight) return;
+      inFlight = true;
+      try {
+        const response = await fetch(API_BASE + `/api/cases/generate-progress?document_id=${documentId}`, {
+          headers: { "Accept": "application/json" },
+        });
+        if (!response.ok) return;
+        const progress = await response.json();
+        const total = Math.max(0, Number(progress.total) || 0);
+        const done = Math.max(0, Math.min(total || Number.MAX_SAFE_INTEGER, Number(progress.done) || 0));
+        const rawPercent = Number(progress.percent);
+        const backendPercent = Number.isFinite(rawPercent)
+          ? Math.max(0, Math.min(100, rawPercent))
+          : (total ? done / total * 100 : 0);
+        const percent = startPercent + Math.round((backendPercent / 100) * (endPercent - startPercent));
+        const detail = total ? `已处理 ${done}/${total} 个知识点` : "正在准备生成任务";
+        esGeneratorProgress(percent, `正在生成「${doc.name}」`, detail);
+      } catch (error) {
+        // 单次轮询失败不应中断生成请求，下一轮继续尝试。
+      } finally {
+        inFlight = false;
+      }
+    };
+    void tick();
+    const timer = setInterval(() => { void tick(); }, 800);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+    };
+  }
+
   /* 运行监测：演示环境无后端执行，仅展示已选文件并提供真实「导出已有评测集」下载 */
   function renderMonitor() {
     const el = $("#monitorList"); if (!el) return;
@@ -315,18 +352,41 @@
       dismiss();
       esGeneratorProgress(5, "已提交生成任务", "正在准备文档、上传库和公共库题目");
       const failedDocs = [];
+      const failureDetails = [];
       for (const [index, id] of docIds.entries()) {
         const doc = DOCS[id];
         const documentId = Number(String(id).replace(/^doc/, ""));
         if (!doc || !Number.isFinite(documentId) || !(doc.kp || []).length) continue;
-        esGeneratorProgress(10 + Math.round(index / Math.max(docIds.length, 1) * 58), `正在生成「${doc.name}」`, `文档 ${index + 1}/${docIds.length}`);
+        const docStart = 10 + Math.round(index / Math.max(docIds.length, 1) * 58);
+        const docEnd = 10 + Math.round((index + 1) / Math.max(docIds.length, 1) * 58);
+        esGeneratorProgress(docStart, `正在生成「${doc.name}」`, `文档 ${index + 1}/${docIds.length}`);
+        const stopProgressPoll = startDocumentGenerationProgressPoll(documentId, doc, docStart, docEnd);
         try {
-          const response = await fetch(API_BASE + `/api/cases/generate?document_id=${documentId}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ angles: ["primary"], include_variations: false, dry_run: false }) });
-          if (!response.ok) throw new Error(String(response.status));
+          try {
+            const response = await fetch(API_BASE + `/api/cases/generate?document_id=${documentId}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ angles: ["primary"], include_variations: false, dry_run: false }) });
+            const generationBody = await response.json().catch(() => ({}));
+            if (!response.ok) throw new Error(generationBody.detail || String(response.status));
+            if (generationBody.failed) {
+              const firstFailure = (generationBody.results || []).find(item => item.error);
+              throw new Error(`生成失败 ${generationBody.failed} 个 EIU${firstFailure?.error ? `：${firstFailure.error}` : ""}`);
+            }
+          } finally {
+            stopProgressPoll();
+          }
+          esGeneratorProgress(docEnd, `正在检查「${doc.name}」`, `文档 ${index + 1}/${docIds.length} · 评测题质量检查`);
           const qualityResponse = await fetch(API_BASE + `/api/quality-check?document_id=${documentId}`, { method: "POST" });
-          if (!qualityResponse.ok) throw new Error(`质量检查 ${qualityResponse.status}`);
-        } catch (error) { failedDocs.push(doc.name); }
-        esGeneratorProgress(10 + Math.round((index + 1) / Math.max(docIds.length, 1) * 58), `已处理「${doc.name}」`, `文档 ${index + 1}/${docIds.length}`);
+          const qualityBody = await qualityResponse.json().catch(() => ({}));
+          if (!qualityResponse.ok) throw new Error(qualityBody.detail || `质量检查 ${qualityResponse.status}`);
+          if (Array.isArray(qualityBody.errors) && qualityBody.errors.length) {
+            const firstError = qualityBody.errors[0];
+            throw new Error(`质量检查失败 ${qualityBody.errors.length} 条：${firstError.error || firstError.message || "未知错误"}`);
+          }
+        } catch (error) {
+          failedDocs.push(doc.name);
+          failureDetails.push(`「${doc.name}」${error.message || error}`);
+          esGeneratorProgress(docEnd, `「${doc.name}」处理失败`, error.message || String(error), "error");
+        }
+        esGeneratorProgress(docEnd, `已处理「${doc.name}」`, `文档 ${index + 1}/${docIds.length}`);
       }
       // m03 已将按文档生成的题持久化为 generated_case，m04 完成质检后立刻回读。
       // 生成库以该中间产物为唯一数据源，不能等到最终评测集库冻结后才刷新前端状态。
@@ -364,8 +424,9 @@
         esGeneratorProgress(100, "已存入评测集库", failedDocs.length ? `${failedDocs.length} 个文档生成未完成` : "生成结果已可查看", "done");
         toast(failedDocs.length ? `已永久存入评测集库；${failedDocs.length} 个文档生成未完成` : "已永久存入评测集库");
       } catch (error) {
-        esGeneratorProgress(84, "评测集写入失败", error.message || "请稍后重试", "error");
-        toast("持久化失败：" + error.message, "warn");
+        const detail = [error.message || "请稍后重试", ...failureDetails].join("；");
+        esGeneratorProgress(84, "评测集写入失败", detail, "error");
+        toast("评测集写入失败：" + detail, "warn");
       }
     };
     icons();

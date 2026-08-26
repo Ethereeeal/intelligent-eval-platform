@@ -184,7 +184,7 @@
 
 同文档更新后（content_hash 变化，FR-CORPUS-004，覆盖式）：
   1. 删除旧版本该文档的全部 block / 向量 / EIU / 题目（整体作废）
-  2. 全量重新分段 + BGE 向量化 + 抽 EIU（doc_update_job.phase = parsing → eiu_extract，progress 按总 Block 数推进）
+  2. 全量重新分段 + BGE 向量化 + 抽 EIU（doc_update_job.phase = parsing → eiu_extract，progress 每完成 10 个 Block 推进一次）
   3. 全量生成题面（不复用旧题，因语料已整体覆盖）
   4. 更新完成（phase = rebuild）→ job.status = done，message = "已更新完成"
   5. 前端据 job 进度渲染进度条，完成后提示"已更新完成"
