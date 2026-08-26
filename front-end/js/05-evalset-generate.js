@@ -407,15 +407,11 @@
         if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.detail || response.status); }
         const frozenVersion = await response.json();
         if (returnToEvaluation) {
-          const composition = await apiPostES("/api/compositions", {
-            name,
-            items: [{ source: "doc_generated", version_id: Number(frozenVersion.version_id) }],
-            created_by: "web",
-          });
-          window.__evSelectedCompositionId = composition.composition_id;
+          // 冻结版本就是评测库中的可选评测集；组合仅在实际发起运行时由工作台按需创建。
+          window.__evSelectedDatasetVersionId = Number(frozenVersion.version_id);
           goto("evaluation");
-          esGeneratorProgress(100, "已创建并带回评测配置", "新评测集已默认选中", "done");
-          toast("已创建评测集并带回评测配置", "ok");
+          esGeneratorProgress(100, "已存入评测集库并带回评测配置", "新冻结版本已默认选中", "done");
+          toast("已存入评测集库并带回评测配置", "ok");
           return;
         }
         window.__esView = "custom";

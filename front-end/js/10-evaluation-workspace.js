@@ -81,6 +81,11 @@
       state.selectedSource = { kind: "composition", compositionId: state.compositionId };
       window.__evSelectedCompositionId = null;
     }
+    if (window.__evSelectedDatasetVersionId) {
+      state.compositionId = null;
+      state.selectedSource = { kind: "version", versionId: Number(window.__evSelectedDatasetVersionId) };
+      window.__evSelectedDatasetVersionId = null;
+    }
     const representedVersionIds = new Set(
       compositions.flatMap(composition => (composition.items || [])
         .filter(item => item?.source === "doc_generated")
@@ -161,13 +166,17 @@
     const fields = document.getElementById("evAdapterFields");
     if (kind === "openai_compatible") fields.innerHTML = `<div class="ev-field-grid"><label class="es-field">API Base<input class="es-input" id="evApiBase" placeholder="https://.../v1"/></label><label class="es-field">模型<input class="es-input" id="evModel" placeholder="gpt-4o-mini"/></label><label class="es-field">API Key<input class="es-input" id="evApiKey" type="password" placeholder="sk-..."/></label><label class="es-field">System Prompt<textarea class="es-input" id="evSystem" rows="2" placeholder="可选"></textarea></label></div>`;
     else fields.innerHTML = `<div class="ev-field-grid"><label class="es-field">请求方法<select class="es-input" id="evHttpMethod"><option>POST</option><option>GET</option><option>PUT</option><option>PATCH</option><option>DELETE</option></select></label><label class="es-field">请求地址<input class="es-input" id="evHttpUrl" placeholder="https://agent.example.com/api/chat"/></label><label class="es-field ev-span">请求头（JSON）<textarea class="es-input ev-code" id="evHttpHeaders" rows="2" placeholder='{"Authorization":"Bearer ..."}'></textarea></label><label class="es-field ev-span">请求体（JSON，使用 {{question}} 注入题目）<textarea class="es-input ev-code" id="evHttpBody" rows="4">{"question":"{{question}}"}</textarea></label><label class="es-field">回答字段路径<input class="es-input" id="evHttpPath" value="answer" placeholder="data.answer"/></label><label class="es-field">超时（秒）<input class="es-input" id="evHttpTimeout" type="number" value="60" min="1" max="120"/></label></div><p class="es-gen-hint">请求由后端发起；Header 的值不会保存或在报告中回显。</p>`;
+    if (kind === "http") {
+      fields.querySelector(".ev-field-grid").insertAdjacentHTML("beforeend", `<label class="es-field ev-span">关键返回字段（JSON，可选）<textarea class="es-input ev-code" id="evHttpObservations" rows="2" placeholder='{"是否调用文档":"used_document_tool","来源":"sources"}'></textarea></label>`);
+    }
   }
 
   function adapterConfig() {
     if (state.adapter === "openai_compatible") return { api_base: document.getElementById("evApiBase").value.trim(), api_key: document.getElementById("evApiKey").value.trim(), model: document.getElementById("evModel").value.trim(), system_prompt: document.getElementById("evSystem").value.trim() || null };
     let headers; try { headers = JSON.parse(document.getElementById("evHttpHeaders").value || "{}"); } catch { throw new Error("请求头必须是合法 JSON"); }
+    let observationPaths; try { observationPaths = JSON.parse(document.getElementById("evHttpObservations").value || "{}"); } catch { throw new Error("关键返回字段必须是合法 JSON"); }
     try { JSON.parse(document.getElementById("evHttpBody").value || "{}"); } catch { throw new Error("请求体必须是合法 JSON"); }
-    return { method: document.getElementById("evHttpMethod").value, url: document.getElementById("evHttpUrl").value.trim(), headers, body_template: document.getElementById("evHttpBody").value, answer_path: document.getElementById("evHttpPath").value.trim(), timeout_seconds: Number(document.getElementById("evHttpTimeout").value) };
+    return { method: document.getElementById("evHttpMethod").value, url: document.getElementById("evHttpUrl").value.trim(), headers, body_template: document.getElementById("evHttpBody").value, answer_path: document.getElementById("evHttpPath").value.trim(), observation_paths: observationPaths, timeout_seconds: Number(document.getElementById("evHttpTimeout").value) };
   }
 
   function applyAdapterConfig(kind, config) {
@@ -181,6 +190,7 @@
       document.getElementById("evHttpHeaders").value = JSON.stringify(config.headers || {}, null, 2);
       document.getElementById("evHttpBody").value = config.body_template || '{"question":"{{question}}"}';
       document.getElementById("evHttpPath").value = config.answer_path || "answer";
+      document.getElementById("evHttpObservations").value = JSON.stringify(config.observation_paths || {}, null, 2);
       document.getElementById("evHttpTimeout").value = config.timeout_seconds || 60;
     }
   }
@@ -204,14 +214,15 @@
     button.disabled = true; button.innerHTML = '<span class="spinner"></span>测试中';
     try {
       const data = await post("/api/adapters/test", { adapter: state.adapter, adapter_config: adapterConfig(), question: question.trim() });
-      openMessageModal("通路测试成功", data.answer || "目标智能体返回了空回答", `耗时 ${Number(data.usage?.time_ms || 0)} ms`);
+      openMessageModal("通路测试成功", data.answer || "目标智能体返回了空回答", `耗时 ${Number(data.usage?.time_ms || 0)} ms`, data.agent_observations);
     } catch (error) { toast("通路测试失败：" + error.message); }
     finally { button.disabled = false; button.innerHTML = '<i data-lucide="plug-zap"></i>测试通路'; icons(); }
   }
 
-  function openMessageModal(title, message, meta = "") {
+  function openMessageModal(title, message, meta = "", observations = null) {
     const modal = document.createElement("div"); modal.className = "modal-mask";
-    modal.innerHTML = `<div class="modal ev-message-modal"><div class="modal-head"><span>${esc(title)}</span><button class="modal-x">×</button></div><div class="modal-body"><p class="ev-message-body">${esc(message)}</p>${meta ? `<small>${esc(meta)}</small>` : ""}</div><div class="modal-foot"><button class="btn primary modal-x2">知道了</button></div></div>`;
+    const observationPanel = observations && Object.keys(observations).length ? `<pre class="ev-observations">${esc(JSON.stringify(observations, null, 2))}</pre>` : "";
+    modal.innerHTML = `<div class="modal ev-message-modal"><div class="modal-head"><span>${esc(title)}</span><button class="modal-x">×</button></div><div class="modal-body"><p class="ev-message-body">${esc(message)}</p>${meta ? `<small>${esc(meta)}</small>` : ""}${observationPanel}</div><div class="modal-foot"><button class="btn primary modal-x2">知道了</button></div></div>`;
     document.body.appendChild(modal); const close = () => modal.remove(); modal.querySelector(".modal-x").onclick = close; modal.querySelector(".modal-x2").onclick = close;
   }
 
@@ -264,6 +275,7 @@
       headers: maskHeaders(config.headers),
       body: (() => { try { return JSON.parse(config.body_template || "{}"); } catch { return config.body_template; } })(),
       answer_path: config.answer_path,
+      observation_paths: config.observation_paths,
       timeout_seconds: config.timeout_seconds,
     } : {
       api_base: config.api_base,
@@ -460,9 +472,13 @@
       return `<div class="ev-score-row ${failed ? "failed" : ""}"><span>${esc(scoreLabels[key] || key)}</span><b>${esc(shown)}</b>${failed ? '<i data-lucide="circle-x"></i>' : '<i data-lucide="circle-check"></i>'}</div>`;
     }).join("") || '<p class="es-gen-hint">本题没有可用评分项。</p>';
     const observable = result.status === "error" ? "调用异常" : scores.score == null ? "未评分" : Number(scores.score) >= state.threshold ? "达到分析阈值" : "答案未通过";
+    const observationRows = result.agent_observations && Object.keys(result.agent_observations).length
+      ? Object.entries(result.agent_observations).map(([key, value]) => `<div><b>${esc(key)}</b><pre class="ev-observations">${esc(typeof value === "string" ? value : JSON.stringify(value, null, 2))}</pre></div>`).join("")
+      : '<p class="es-gen-hint">目标智能体未返回可分析的附加字段。</p>';
     const drawer = document.createElement("div"); drawer.className = "ev-detail-mask";
     drawer.innerHTML = `<aside class="ev-detail-drawer"><div class="ev-detail-head"><div><small>单题结果 #${result.result_id}</small><h3>${esc(observable)}</h3></div><button class="modal-x" aria-label="关闭">×</button></div><div class="ev-detail-body">
       <section><h4>评测样本</h4><dl class="ev-detail-list"><div><dt>问题</dt><dd>${esc(result.question)}</dd></div><div><dt>标准答案</dt><dd>${esc(result.gold_answer || "—")}</dd></div><div><dt>智能体回答</dt><dd>${esc(result.answer || result.error_message || "—")}</dd></div><div><dt>所属维度</dt><dd>${esc(result.dimension || "未标注")}</dd></div></dl></section>
+      <section><h4>目标智能体额外输出</h4><p class="ev-section-note">保留最终答案以外的响应字段，可用于分析工具调用、来源或中间节点。</p><div class="ev-observation-list">${observationRows}</div></section>
       <section><h4>评分明细</h4><p class="ev-section-note">仅展示后端实际返回的评分项；红色项表示未达到当前分析阈值。</p><div class="ev-score-list">${scoreRows}</div></section>
       <section><div class="ev-section-title"><h4>异常处理</h4><span class="es-tag ${issue?.status === "verified" ? "ok" : issue?.status === "open" ? "bad" : "warn"}">${esc(treatmentLabel(issue?.status))}</span></div>${issue ? `<label class="es-field">人工分类<select class="es-input" id="evIssueCategory"><option value="">请选择</option>${[["agent_answer","智能体回答问题"],["request_config","请求配置问题"],["dataset","评测集内容问题"],["scoring","评分规则问题"],["platform","平台运行问题"],["unknown","待进一步确认"]].map(([value,label]) => `<option value="${value}" ${issue.resolution_category === value ? "selected" : ""}>${label}</option>`).join("")}</select></label><label class="es-field">处理备注<textarea class="es-input" id="evIssueNote" rows="3" placeholder="记录判断依据、修改内容或忽略原因">${esc(issue.resolution_note || "")}</textarea></label><div class="ev-treatment-actions"><button class="btn ghost" id="evIgnoreIssue">忽略</button><button class="btn primary" id="evProcessIssue">标记已处理，等待复测</button></div>` : '<p class="es-gen-hint">本题未进入异常处理队列。</p>'}</section>
       <section><div class="ev-section-title"><h4>复测记录</h4>${["error", "failed"].includes(result.status) || Number(scores.score) < state.threshold ? '<button class="btn ghost" id="evRetryCase"><i data-lucide="rotate-cw"></i>单题复测</button>' : ""}</div><div id="evAttemptList" class="ev-attempt-list"><span class="spinner"></span></div></section>

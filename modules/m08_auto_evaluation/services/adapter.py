@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import time
+from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote
 from urllib.request import Request, urlopen
@@ -223,6 +224,7 @@ class HttpAdapter(BaseAdapter):
         self.headers = cfg.get("headers") or {}
         self.body_template = cfg.get("body_template") or '{"question":"{{question}}"}'
         self.answer_path = str(cfg.get("answer_path") or "answer").strip()
+        self.observation_paths = cfg.get("observation_paths") or {}
         self.timeout = min(max(int(cfg.get("timeout_seconds") or 60), 1), 120)
         if not self.url.startswith(("http://", "https://")):
             raise AdapterError("通用 HTTP 请求地址必须以 http:// 或 https:// 开头")
@@ -230,16 +232,39 @@ class HttpAdapter(BaseAdapter):
             raise AdapterError("不支持的 HTTP 请求方法")
         if not isinstance(self.headers, dict):
             raise AdapterError("请求头必须为键值对象")
+        if not isinstance(self.observation_paths, dict) or not all(
+            isinstance(label, str) and isinstance(path, str)
+            for label, path in self.observation_paths.items()
+        ):
+            raise AdapterError("关键返回字段必须是“显示名: 字段路径”的 JSON 对象")
 
     @staticmethod
-    def _resolve_path(payload: object, path: str) -> str:
+    def _resolve_value(payload: object, path: str) -> Any:
         value = payload
         for key in path.removeprefix("$").strip(".").split("."):
             if key:
-                if not isinstance(value, dict) or key not in value:
-                    raise AdapterError(f"响应中未找到回答字段：{path}")
-                value = value[key]
+                if isinstance(value, dict) and key in value:
+                    value = value[key]
+                elif isinstance(value, list) and key.isdigit() and int(key) < len(value):
+                    value = value[int(key)]
+                else:
+                    raise AdapterError(f"响应中未找到字段：{path}")
+        return value
+
+    @classmethod
+    def _resolve_path(cls, payload: object, path: str) -> str:
+        value = cls._resolve_value(payload, path)
         return json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else str(value or "")
+
+    def _observations(self, payload: object) -> dict | None:
+        """保留答案以外的可观察返回字段；显式路径可补充嵌套的重要节点。"""
+        observations: dict[str, Any] = {}
+        if isinstance(payload, dict):
+            answer_root = self.answer_path.removeprefix("$").strip(".").split(".")[0]
+            observations.update({key: value for key, value in payload.items() if key != answer_root})
+        for label, path in self.observation_paths.items():
+            observations[label] = self._resolve_value(payload, path)
+        return observations or None
 
     def _call(self, question: str) -> dict:
         headers = {str(k): str(v) for k, v in self.headers.items() if str(k).strip()}
@@ -257,8 +282,15 @@ class HttpAdapter(BaseAdapter):
             raise AdapterError(f"目标接口返回 HTTP {exc.code}") from exc
         except (URLError, TimeoutError, json.JSONDecodeError) as exc:
             raise AdapterError(f"目标接口调用失败：{exc}") from exc
-        return {"answer": self._resolve_path(payload, self.answer_path), "turn_outputs": None, "retrieved": None,
-                "context": None, "usage": {"time_ms": int((time.time() - started) * 1000), "tokens": 0, "cost": 0.0}, "error": None}
+        return {
+            "answer": self._resolve_path(payload, self.answer_path),
+            "turn_outputs": None,
+            "retrieved": None,
+            "agent_observations": self._observations(payload),
+            "context": None,
+            "usage": {"time_ms": int((time.time() - started) * 1000), "tokens": 0, "cost": 0.0},
+            "error": None,
+        }
 
     def run_single(self, question: str, *, gold_answer: str | None = None, extra: dict | None = None) -> dict:
         try:
@@ -269,13 +301,16 @@ class HttpAdapter(BaseAdapter):
 
     def run_multi(self, turns: list[dict], *, gold_answer: str | None = None, extra: dict | None = None) -> dict:
         outputs = []
+        last_observations = None
         for turn in turns:
             result = self.run_single(str((turn or {}).get("q") or ""))
             if result.get("error"):
                 return result
             outputs.append(result["answer"])
+            last_observations = result.get("agent_observations")
         return {"answer": outputs[-1] if outputs else "", "turn_outputs": outputs, "retrieved": None,
-                "context": None, "usage": {"time_ms": 0, "tokens": 0, "cost": 0.0}, "error": None}
+                "agent_observations": last_observations, "context": None,
+                "usage": {"time_ms": 0, "tokens": 0, "cost": 0.0}, "error": None}
 
 
 ADAPTER_REGISTRY: dict[str, type[BaseAdapter]] = {

@@ -36,6 +36,7 @@ def _evaluate_case(sample: dict, adapter: BaseAdapter) -> dict:
         "answer": (result or {}).get("answer"),
         "turn_outputs": (result or {}).get("turn_outputs"),
         "retrieved": (result or {}).get("retrieved"),
+        "agent_observations": (result or {}).get("agent_observations"),
         "scores": scores,
         "diagnosis": diagnosis,
         "status": status,
