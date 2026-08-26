@@ -32,7 +32,7 @@
 
   function docContentHTML(docId) {
     const d = DOCS[docId];
-    const isParsing = d.status.includes("解析中");
+    const isParsing = /上传中|解析中|抽取中/.test(d.status || "");
     const progressBar = isParsing ? `<div class="upload-prog-wrap mt"><div class="upload-prog-track"><div class="upload-prog-bar" style="width:${Math.round(d.parseProgress||0)}%"></div></div><span class="upload-prog-txt">知识点解析中 ${Math.round(d.parseProgress||0)}%</span></div>` : "";
     return `<div class="lib-head">
         <div class="lh-ic"><i data-lucide="file-text"></i></div>

@@ -1,4 +1,50 @@
   /* ---------------- 输入文档库：上传 → 自动抽取知识点 + 下载 ---------------- */
+  window.__uploadJobs = window.__uploadJobs || {};
+
+  function renderUploadJobs() {
+    const jobs = Object.values(window.__uploadJobs || {}).filter(job => !job.dismissed);
+    let box = $("#docUploadProgress");
+    if (!jobs.length) {
+      if (box) box.remove();
+      return;
+    }
+    if (!box) {
+      box = document.createElement("section");
+      box.id = "docUploadProgress";
+      box.className = "doc-upload-progress-popover";
+      document.body.appendChild(box);
+    }
+    const completed = jobs.filter(job => job.done).length;
+    box.innerHTML = `<div class="doc-upload-progress-head"><strong>文档上传与解析</strong><b>${completed}/${jobs.length} 完成</b></div><div class="doc-upload-progress-list">${jobs.map(job => {
+      const progress = Math.max(0, Math.min(100, Math.round(job.progress || 0)));
+      return `<div class="doc-upload-progress-row"><div class="doc-upload-progress-name"><span>${escapeHTML(job.fileName)}</span><b>${job.done ? (job.failed ? "失败" : "完成") : `${progress}%`}</b></div><div class="doc-upload-progress-track"><span class="${job.failed ? "failed" : ""}" style="width:${progress}%"></span></div><div class="doc-upload-progress-status">${escapeHTML(job.status || "处理中…")}</div></div>`;
+    }).join("")}</div>`;
+  }
+
+  function updateUploadJob(id, patch) {
+    const job = window.__uploadJobs[id];
+    if (!job) return;
+    Object.assign(job, patch);
+    if (job.doc) {
+      if (patch.status != null) job.doc.status = patch.status;
+      if (patch.progress != null) job.doc.parseProgress = patch.progress;
+    }
+    renderUploadJobs();
+  }
+
+  function dismissUploadJob(id, delay = 5000) {
+    const job = window.__uploadJobs[id];
+    if (!job) return;
+    clearTimeout(job.dismissTimer);
+    job.dismissTimer = setTimeout(() => {
+      if (window.__uploadJobs[id] === job) {
+        job.dismissed = true;
+        delete window.__uploadJobs[id];
+        renderUploadJobs();
+      }
+    }, delay);
+  }
+
   /* 查找目录节点（在 TREE.children 中按名称递归查找） */
   function findOrCreateFolder(name) {
     const parts = String(name).split("/").map(s => s.trim()).filter(Boolean);
@@ -53,7 +99,9 @@
     state._uploadFolderPath = null;
 
     DOCS[id] = { name: file.name, type, size, status: "上传中…", ver: "v1", updated: "刚刚",
-      preview: [], versions: [{ tag: "v1", note: `首次入库（上传至「${targetFull || TREE.name}」）`, time: "刚刚" }], kp: [], qa: [], review: [], parseProgress: 0 };
+      preview: [], versions: [{ tag: "v1", note: `首次入库（上传至「${targetFull || TREE.name}」）`, time: "刚刚" }], kp: [], qa: [], review: [], parseProgress: 0, folderPath: relPath, qaFolderPath: relPath };
+    window.__uploadJobs[id] = { localId: id, docId: null, fileName: file.name, relPath, doc: DOCS[id], progress: 0, status: "上传中…", done: false, failed: false };
+    renderUploadJobs();
     insertDocIntoFolderTree(relPath, id, file.name);
 
     renderLib("doc");
@@ -71,21 +119,23 @@
       fd.append("upload_user", "web");
       fd.append("document_version", "v1");
       DOCS[id].status = "上传中…";
+      updateUploadJob(id, { status: "上传中…", progress: 10 });
       renderLibContent("doc", id);
       const up = await fetch(API_BASE + "/api/documents/upload", { method: "POST", body: fd });
       if (!up.ok) throw new Error("上传失败：" + up.status);
       const upRes = await up.json();
       // 完全禁止重复上传：内容已存在则拦截，不上传、不抽取、提示已存在
       if (upRes.duplicate) {
+        delete window.__uploadJobs[id];
         delete DOCS[id];
         renderLib("doc");
+        renderUploadJobs();
         toast(`「${file.name}」已存在，未重复上传`);
         icons();
         return;
       }
       const docId = upRes.document_id;
-      DOCS[id].status = "已入库，解析中…";
-      DOCS[id].parseProgress = 30;
+      updateUploadJob(id, { docId, status: "已入库，解析中…", progress: 30 });
       renderLibContent("doc", id);
 
       // 2) 触发 EIU 知识点抽取（仅当前文档，单文档隔离，不重抽其他文档）
@@ -97,51 +147,56 @@
       if (jobId != null) {
         const poll = setInterval(async () => {
           try {
+            if (!window.__uploadJobs[id]) { clearInterval(poll); return; }
             const jr = await fetch(API_BASE + `/api/jobs/${jobId}`);
             if (!jr.ok) return;
             const job = await jr.json();
             const pg = job.progress || 0;
-            DOCS[id].parseProgress = Math.max(30, Math.min(99, pg));
-            DOCS[id].status = `知识点抽取中 ${Math.round(pg)}%`;
+            updateUploadJob(id, { progress: Math.max(30, Math.min(99, pg)), status: `知识点抽取中 ${Math.round(pg)}%` });
             if ((state.view === "doclib" || (state.view === "evalset" && window.__esView === "doclib")) && state.sel.doc === id) renderDocProgress(id);
             if (job.finished || job.status === "completed" || job.status === "failed") {
               clearInterval(poll);
+              const wasSelected = state.sel.doc === id;
+              const failed = job.status === "failed";
+              updateUploadJob(id, { progress: failed ? pg : 100, status: failed ? "解析失败" : "解析完成", done: true, failed });
               await loadData();                    // 重新拉取后端最新文档/知识点（覆盖临时文档）
               const realId = "doc" + docId;
-              state.sel.doc = realId;
+              if (wasSelected) state.sel.doc = realId;
               renderLib("doc");
-              renderLibContent("doc", realId);
-              const tr2 = $(`#docTree .tree-row[data-doc="${realId}"]`);
-              if (tr2) { $$("#docTree .tree-row.active").forEach(x => x.classList.remove("active")); tr2.classList.add("active"); }
-              if (job.status === "failed") {
+              if (wasSelected) {
+                const tr2 = $(`#docTree .tree-row[data-doc="${realId}"]`);
+                if (tr2) { $$("#docTree .tree-row.active").forEach(x => x.classList.remove("active")); tr2.classList.add("active"); }
+              }
+              if (failed) {
                 toast(`「${file.name}」入库成功，但知识点抽取失败`);
+                dismissUploadJob(id, 7000);
                 icons();
                 return;
               }
               // 4) 入库 + 知识点抽取完成：不自动生成评测集。
               //    EIU 已持久化在文档库，之后用户可在评测集库中选择该文档生成评测集。
-              await loadData();
-              state.sel.doc = realId;
-              renderLib("doc");
-              renderLibContent("doc", realId);
+              dismissUploadJob(id, 2500);
               toast(`「${file.name}」上传成功，可前往评测集库进行生成`);
               icons();
             }
           } catch (e) { /* 忽略单次轮询错误 */ }
         }, 1500);
       } else {
+        const wasSelected = state.sel.doc === id;
+        updateUploadJob(id, { progress: 100, status: "解析完成", done: true });
         await loadData();
         const realId = "doc" + docId;
-        state.sel.doc = realId;
+        if (wasSelected) state.sel.doc = realId;
         renderLib("doc");
-        renderLibContent("doc", realId);
+        dismissUploadJob(id, 2500);
         toast(`「${file.name}」上传成功，可前往评测集库进行生成`);
         icons();
       }
     } catch (e) {
-      DOCS[id].status = "上传失败：" + (e.message || e);
-      DOCS[id].parseProgress = 0;
-      renderLibContent("doc", id);
+      const message = "上传失败：" + (e.message || e);
+      updateUploadJob(id, { status: message, progress: 0, done: true, failed: true, retain: true });
+      if (DOCS[id]) renderLibContent("doc", id);
+      dismissUploadJob(id, 7000);
       toast("上传失败：" + (e.message || e));
       icons();
     }
@@ -150,8 +205,8 @@
   function renderDocProgress(docId) {
     const d = DOCS[docId]; if (!d) return;
     const pg = Math.round(d.parseProgress || 0);
-    const bar = document.querySelector(".upload-prog-bar");
-    const txt = document.querySelector(".upload-prog-txt");
+    const bar = document.querySelector("#docContent .upload-prog-bar");
+    const txt = document.querySelector("#docContent .upload-prog-txt");
     if (bar) bar.style.width = pg + "%";
     if (txt) txt.textContent = pg >= 100 ? "解析完成 ✓" : `知识点解析中 ${pg}%`;
   }
@@ -301,25 +356,23 @@
     }
     const res = await up.json();
     toast("已开始覆盖更新：重解析 → EIU 重抽 → 版本重建");
-    pollReuploadJob(res.job_id);
+    pollReuploadJob(res.job_id, file.name);
   }
 
-  function pollReuploadJob(jobId) {
-    const statusEl = document.createElement("div");
-    statusEl.className = "up-reupload-status";
-    statusEl.textContent = "覆盖更新中…";
-    document.body.appendChild(statusEl);
+  function pollReuploadJob(jobId, fileName) {
+    const progressId = `reupload-${jobId}`;
+    window.__uploadJobs[progressId] = { localId: progressId, docId: null, fileName: fileName || "覆盖更新文档", progress: 0, status: "覆盖更新中…", done: false, failed: false };
+    renderUploadJobs();
     const finish = (msg, failed) => {
-      statusEl.textContent = msg;
-      statusEl.classList.toggle("err", !!failed);
-      setTimeout(() => statusEl.remove(), 4000);
+      updateUploadJob(progressId, { progress: failed ? 0 : 100, status: msg, done: true, failed: !!failed });
+      dismissUploadJob(progressId, failed ? 7000 : 2500);
     };
     const poll = setInterval(async () => {
       try {
         const jr = await fetch(API_BASE + `/api/jobs/${jobId}`);
         if (!jr.ok) return;
         const job = await jr.json();
-        if (job.progress != null) statusEl.textContent = `覆盖更新中 ${job.progress}%（${job.phase || ""}）`;
+        if (job.progress != null) updateUploadJob(progressId, { progress: job.progress, status: `覆盖更新中 ${job.progress}%（${job.phase || ""}）` });
         if (job.finished || job.status === "completed" || job.status === "done" || job.status === "failed") {
           clearInterval(poll);
           await loadData();

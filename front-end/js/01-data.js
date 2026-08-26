@@ -252,8 +252,13 @@
       // 各自独立构造节点对象，避免两棵树共享节点导致折叠态互相串扰。
       QA_FOLDERS = folders || [];
       DOC_PURPOSE = {};
+      // 多文档并发上传期间，后端已入库但 EIU 尚未完成的文档暂不覆盖前端临时状态；
+      // 否则任一文档完成触发 loadData() 时，其他文档会被重置为 0 条知识点。
+      const pendingUploadJobs = Object.values(window.__uploadJobs || {}).filter(job => !job.done || job.retain);
+      const pendingUploadDocIds = new Set(pendingUploadJobs.map(job => Number(job.docId)).filter(Number.isFinite));
 
       (docs || []).forEach(d => {
+        if (pendingUploadDocIds.has(Number(d.document_id))) return;
         const id = "doc" + d.document_id;
         const purpose = docPurposeOf(d); // basic 或 gen
         const kp = (eiuByDoc[d.document_id] || []).map((e, i) => ({
@@ -303,6 +308,13 @@
         DOC_PURPOSE[id] = purpose;
         // 按后端 folder_path 重建目录树（保留上传时的目录层级），缺省挂到「文档库」根
         insertDocIntoFolderTree(d.folder_path || "", id, d.file_name);
+      });
+      // 将仍在上传/解析/失败保留态的临时文档合并回来，保证切换目录或其他文档完成时进度不丢。
+      pendingUploadJobs.forEach(job => {
+        if (!job.localId || !job.doc) return;
+        DOCS[job.localId] = job.doc;
+        DOC_PURPOSE[job.localId] = "basic";
+        insertDocIntoFolderTree(job.relPath || "", job.localId, job.fileName || job.doc.name);
       });
       // 演示数据补齐：已解析（跑通）但后端未返回评测集的文档，生成一份确定性示例评测集，
       // 以便「输出评测集库」能展示评测集表与难度占比（真实后端返回时以真实数据为准，不覆盖）。

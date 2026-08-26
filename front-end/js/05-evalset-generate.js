@@ -251,6 +251,24 @@
     return render(root) || "暂无文件";
   }
 
+  function esGeneratorProgress(percent, phase, detail = "", status = "running") {
+    let box = $("#esGeneratorProgress");
+    if (!box) {
+      box = document.createElement("section");
+      box.id = "esGeneratorProgress";
+      box.className = "es-generator-progress-popover";
+      document.body.appendChild(box);
+    }
+    clearTimeout(esGeneratorProgress._timer);
+    box.classList.toggle("is-error", status === "error");
+    box.classList.toggle("is-done", status === "done");
+    const safePercent = Math.max(0, Math.min(100, Math.round(percent)));
+    box.innerHTML = `<div class="es-generator-progress-head"><strong>${status === "error" ? "评测集生成失败" : status === "done" ? "评测集生成完成" : "评测集生成中"}</strong><b>${safePercent}%</b></div><div class="es-generator-progress-bar"><span style="width:${safePercent}%"></span></div><div class="es-generator-progress-phase">${escapeHTML(phase)}</div>${detail ? `<div class="es-generator-progress-detail">${escapeHTML(detail)}</div>` : ""}`;
+    if (status === "done" || status === "error") {
+      esGeneratorProgress._timer = setTimeout(() => box.remove(), status === "done" ? 1800 : 6000);
+    }
+  }
+
   async function openEvalSetGeneratorModal() {
     const [remoteUploads] = await Promise.all([apiGet(`/api/eval-sets/uploaded`).catch(() => [])]);
     const uploadedSets = remoteUploads.length ? remoteUploads : ES_UPLOADED_SAMPLES;
@@ -262,7 +280,7 @@
       <div class="modal-body es-generator-body">
         <label class="es-field">评测集名称</label><input class="es-input" id="esGeneratorName" value="组合评测集 ${new Date().toLocaleDateString("zh-CN")}" />
         <section class="es-generator-section"><div class="es-generator-title">文档库</div><p class="es-generator-hint">从文档库中的任意文档多选，保留原有文件夹层级；所选文档会按已有生成能力补齐评测集。</p><div class="es-generator-list">${esGeneratorFolderTree(docs, "data-es-generator-doc")}</div></section>
-        <section class="es-generator-section"><div class="es-generator-title">生成策略</div><div class="es-generator-policy-grid"><div class="es-generator-policy"><span class="es-generator-policy-label">采样策略</span><div class="es-generator-policy-controls"><label class="opt"><input type="checkbox" id="esGeneratorCrossBlock" checked/><span>跨块问题组合</span></label><label class="opt"><input type="checkbox" id="esGeneratorCrossDoc" checked/><span>跨文档生成</span></label></div></div><div class="es-generator-policy"><span class="es-generator-policy-label">难度</span><div class="es-generator-policy-controls">${["简单", "中等", "难"].map(level => `<label class="diff-chk"><input type="checkbox" value="${level}" data-es-generator-difficulty checked/><span>${level}</span></label>`).join("")}</div></div></div></section>
+        <section class="es-generator-section"><div class="es-generator-title">生成策略</div><div class="es-generator-policy-grid"><div class="es-generator-policy"><div class="es-generator-policy-controls"><label class="opt"><input type="checkbox" id="esGeneratorCrossBlock"/><span>跨块问题组合</span></label><label class="opt"><input type="checkbox" id="esGeneratorCrossDoc"/><span>跨文档生成</span></label></div></div></div></section>
         <section class="es-generator-section"><div class="es-generator-title">上传库</div><p class="es-generator-hint">上传评测集按其文件夹层级展示。</p><div class="es-generator-list">${esGeneratorFolderTree(uploadedSets.map((set, index) => ({ id: index, name: set.name || `上传评测集 #${set.set_id}`, meta: `${set.total_cases || set.cases?.length || 0} 题`, folder_path: set.folder_path || "" })), "data-es-generator-upload")}</div></section>
         <section class="es-generator-section"><div class="es-generator-title">公共库</div><p class="es-generator-hint">可按六个维度分别填写纳入题量，填写 0 表示不纳入。</p><div class="es-public-quota">${ES_PUBLIC_DIMS.map(dim => `<label><span>${escapeHTML(dim.name)}</span><input class="gen-input" type="number" min="0" max="${dim.total}" value="0" data-es-generator-public="${escapeHTML(dim.key)}"/><em>/ ${dim.total} 题</em></label>`).join("")}</div></section>
       </div>
@@ -276,42 +294,11 @@
       const docIds = [...mask.querySelectorAll("[data-es-generator-doc]:checked")].map(input => input.dataset.esGeneratorDoc);
       const uploadIndexes = [...mask.querySelectorAll("[data-es-generator-upload]:checked")].map(input => Number(input.dataset.esGeneratorUpload));
       const publicQuota = Object.fromEntries([...mask.querySelectorAll("[data-es-generator-public]")].map(input => [input.dataset.esGeneratorPublic, Math.max(0, Math.min(Number(input.max), Number(input.value) || 0))]));
-      const difficulties = [...mask.querySelectorAll("[data-es-generator-difficulty]:checked")].map(input => input.value);
       if (!docIds.length && !uploadIndexes.length && !Object.values(publicQuota).some(Boolean)) return toast("请至少选择文档、上传评测集或公共库题量", "warn");
-      if (!difficulties.length) return toast("请至少选择一种难度", "warn");
-      const submit = mask.querySelector("#esGeneratorSubmit");
-      submit.disabled = true;
-      submit.textContent = "生成中…";
-      const failedDocs = [];
-      for (const id of docIds) {
-        const doc = DOCS[id];
-        const documentId = Number(String(id).replace(/^doc/, ""));
-        if (!doc || !Number.isFinite(documentId) || !(doc.kp || []).length) continue;
-        try {
-          const response = await fetch(API_BASE + `/api/cases/generate?document_id=${documentId}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ angles: ["primary"], include_variations: false, dry_run: false }) });
-          if (!response.ok) throw new Error(String(response.status));
-          const qualityResponse = await fetch(API_BASE + `/api/quality-check?document_id=${documentId}`, { method: "POST" });
-          if (!qualityResponse.ok) throw new Error(`质量检查 ${qualityResponse.status}`);
-        } catch (error) { failedDocs.push(doc.name); }
-      }
-      // m03 已将按文档生成的题持久化为 generated_case，m04 完成质检后立刻回读。
-      // 生成库以该中间产物为唯一数据源，不能等到最终评测集库冻结后才刷新前端状态。
-      if (docIds.length) {
-        try {
-          await loadData();
-          renderLib("qa");
-        } catch (error) {
-          submit.disabled = false;
-          submit.innerHTML = `<i data-lucide="sparkles"></i>生成并存入评测集库`;
-          icons();
-          toast("生成库落库后刷新失败，请重试：" + (error.message || error), "warn");
-          return;
-        }
-      }
       const name = mask.querySelector("#esGeneratorName").value.trim() || "未命名评测集";
       const uploadedSetIds = uploadIndexes.map(index => uploadedSets[index]?.set_id).filter(id => Number.isInteger(Number(id)));
-      if (uploadIndexes.length !== uploadedSetIds.length) { submit.disabled = false; submit.textContent = "生成并存入评测集库"; return toast("上传库样例不能永久保存，请选择已实际上传的评测集", "warn"); }
-      const generationConfig = { cross_block: mask.querySelector("#esGeneratorCrossBlock").checked, cross_document: mask.querySelector("#esGeneratorCrossDoc").checked, difficulties, output: "flat" };
+      if (uploadIndexes.length !== uploadedSetIds.length) return toast("上传库样例不能永久保存，请选择已实际上传的评测集", "warn");
+      const generationConfig = { cross_block: mask.querySelector("#esGeneratorCrossBlock").checked, cross_document: mask.querySelector("#esGeneratorCrossDoc").checked, output: "flat" };
       const payload = {
         name,
         created_by: "web",
@@ -320,17 +307,47 @@
         public_selections: ES_PUBLIC_DIMS.filter(dim => publicQuota[dim.key]).map(dim => ({ dimension: dim.key, count: publicQuota[dim.key] })),
         generation_config: generationConfig,
       };
+      // 确认后立即收起配置弹窗，进度反馈转移到页面右上角，避免用户还要手动点叉。
+      close();
+      esGeneratorProgress(5, "已提交生成任务", "正在准备文档、上传库和公共库题目");
+      const failedDocs = [];
+      for (const [index, id] of docIds.entries()) {
+        const doc = DOCS[id];
+        const documentId = Number(String(id).replace(/^doc/, ""));
+        if (!doc || !Number.isFinite(documentId) || !(doc.kp || []).length) continue;
+        esGeneratorProgress(10 + Math.round(index / Math.max(docIds.length, 1) * 58), `正在生成「${doc.name}」`, `文档 ${index + 1}/${docIds.length}`);
+        try {
+          const response = await fetch(API_BASE + `/api/cases/generate?document_id=${documentId}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ angles: ["primary"], include_variations: false, dry_run: false }) });
+          if (!response.ok) throw new Error(String(response.status));
+          const qualityResponse = await fetch(API_BASE + `/api/quality-check?document_id=${documentId}`, { method: "POST" });
+          if (!qualityResponse.ok) throw new Error(`质量检查 ${qualityResponse.status}`);
+        } catch (error) { failedDocs.push(doc.name); }
+        esGeneratorProgress(10 + Math.round((index + 1) / Math.max(docIds.length, 1) * 58), `已处理「${doc.name}」`, `文档 ${index + 1}/${docIds.length}`);
+      }
+      // m03 已将按文档生成的题持久化为 generated_case，m04 完成质检后立刻回读。
+      // 生成库以该中间产物为唯一数据源，不能等到最终评测集库冻结后才刷新前端状态。
+      if (docIds.length) {
+        try {
+          esGeneratorProgress(72, "正在刷新生成库", "同步文档生成的中间产物");
+          await loadData();
+          renderLib("qa");
+        } catch (error) {
+          esGeneratorProgress(72, "生成库刷新失败", error.message || "请稍后重试", "error");
+          toast("生成库落库后刷新失败，请重试：" + (error.message || error), "warn");
+          return;
+        }
+      }
       try {
+        esGeneratorProgress(84, "正在写入评测集库", "固化本次生成的文档、上传题目和公共库配额");
         const response = await fetch(API_BASE + "/api/freeze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
         if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.detail || response.status); }
-        close();
         window.__esView = "custom";
+        esGeneratorProgress(94, "正在刷新评测集库", "读取刚刚生成的评测集");
         await renderEvalSetLibrary();
+        esGeneratorProgress(100, "已存入评测集库", failedDocs.length ? `${failedDocs.length} 个文档生成未完成` : "生成结果已可查看", "done");
         toast(failedDocs.length ? `已永久存入评测集库；${failedDocs.length} 个文档生成未完成` : "已永久存入评测集库");
       } catch (error) {
-        submit.disabled = false;
-        submit.innerHTML = `<i data-lucide="sparkles"></i>生成并存入评测集库`;
-        icons();
+        esGeneratorProgress(84, "评测集写入失败", error.message || "请稍后重试", "error");
         toast("持久化失败：" + error.message, "warn");
       }
     };
