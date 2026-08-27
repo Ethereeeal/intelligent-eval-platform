@@ -40,6 +40,7 @@
     }
     if (view === "doclib") renderLib("doc");
     if (view === "evaluation") window.renderEvaluation();
+    if (view === "overview") fillOverviewStats();
   }
 
   function syncBell() {
