@@ -451,6 +451,8 @@ class DatabaseService:
                     conn.execute(text("ALTER TABLE evaluation_case_result ADD COLUMN parent_result_id INTEGER NULL"))
                 if "attempt_no" not in result_cols:
                     conn.execute(text("ALTER TABLE evaluation_case_result ADD COLUMN attempt_no INTEGER NOT NULL DEFAULT 1"))
+                if "agent_observations" not in result_cols:
+                    conn.execute(text("ALTER TABLE evaluation_case_result ADD COLUMN agent_observations JSON NULL"))
         if "error_book_item" in inspector.get_table_names():
             error_cols = {c["name"] for c in inspector.get_columns("error_book_item")}
             with engine.begin() as conn:
@@ -2816,6 +2818,7 @@ class DatabaseService:
             "answer": row.answer,
             "turn_outputs": row.turn_outputs,
             "retrieved": row.retrieved,
+            "agent_observations": row.agent_observations,
             "scores": row.scores,
             "diagnosis": row.diagnosis,
             "status": row.status,
@@ -3033,6 +3036,8 @@ class EvaluationCaseResultRow(Base):
     # 多轮运行必须保存完整对话过程，用于归因（BRD FR-DS-SRC-002 / m08）
     turn_outputs: Mapped[list | None] = mapped_column(JSON, nullable=True)
     retrieved: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # 目标智能体返回的可观察字段（例如来源、工具调用、检索摘要或中间节点）。
+    agent_observations: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     scores: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     diagnosis: Mapped[str | None] = mapped_column(String(16), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")

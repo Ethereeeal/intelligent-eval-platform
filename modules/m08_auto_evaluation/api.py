@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+import json
 from io import BytesIO
 from urllib.parse import quote
 
@@ -200,7 +201,7 @@ def _build_evaluation_workbook(run: dict, results: list[dict]) -> bytes:
     sheet.title = "原始评测报告"
     headers = [
         "序号", "问题", "标准答案", "智能体回答", "得分", "状态", "耗时(ms)",
-        "维度", "难度", "来源", "归因", "错误信息", "用例ID",
+        "维度", "难度", "来源", "归因", "错误信息", "用例ID", "智能体额外输出",
     ]
     sheet.append(headers)
     header_fill = PatternFill("solid", fgColor="6750A4")
@@ -225,11 +226,12 @@ def _build_evaluation_workbook(run: dict, results: list[dict]) -> bytes:
             item.get("diagnosis") or "",
             item.get("error_message") or "",
             item.get("case_uid") or "",
+            json.dumps(item.get("agent_observations"), ensure_ascii=False) if item.get("agent_observations") else "",
         ])
     for row in sheet.iter_rows(min_row=2):
         for cell in row:
             cell.alignment = Alignment(vertical="top", wrap_text=True)
-    widths = [8, 42, 42, 42, 10, 12, 12, 16, 12, 16, 16, 32, 24]
+    widths = [8, 42, 42, 42, 10, 12, 12, 16, 12, 16, 16, 32, 24, 40]
     for index, width in enumerate(widths, start=1):
         sheet.column_dimensions[get_column_letter(index)].width = width
     sheet.freeze_panes = "A2"
@@ -348,6 +350,7 @@ def test_adapter(payload: AdapterTestRequest):
     return {
         "ok": True,
         "answer": result.get("answer"),
+        "agent_observations": result.get("agent_observations"),
         "usage": result.get("usage") or {},
     }
 

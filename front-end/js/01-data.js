@@ -264,10 +264,16 @@
         const id = "doc" + d.document_id;
         const purpose = docPurposeOf(d); // basic 或 gen
         const rawClaims = eiuAllByDoc[d.document_id] || [];
+        // 历史数据可能没有持久化三色路由字段：已验证视为绿色，待复核视为红色，
+        // 候选视为黄色。新抽取结果优先使用后端明确返回的 route_color。
+        const routeColorOf = e => e.route_color || ({
+          verified: "green", needs_review: "red", candidate: "yellow"
+        }[e.quality_status] || "");
         const kp = (eiuByDoc[d.document_id] || []).map((e, i) => {
           const status = e.quality_status || (e.review_status === "quality_verified" ? "verified" : "candidate");
           const statusLabel = ({ verified: "已验证", needs_review: "待复核", rejected: "已排除", candidate: "候选" }[status] || "候选");
-          const routeLabel = ({ green: "绿色·确定性验证", yellow: "黄色·LLM 审查", red: "红色·人工复核" }[e.route_color] || "");
+          const routeColor = routeColorOf(e);
+          const routeLabel = ({ green: "绿色·确定性验证", yellow: "黄色·LLM 审查", red: "红色·人工复核" }[routeColor] || "");
           const checkValues = Object.values(e.quality_checks || {});
           const passed = checkValues.filter(x => x && x.status === "pass").length;
           const qualityDetail = Object.entries(e.quality_checks || {}).map(([key, value]) => {
@@ -277,7 +283,12 @@
             return `${label}${statusText}${reasons}`;
           }).join("\n");
           const evidenceChain = (e.evidence_details || []).map(x => {
-            const role = ({ direct: "直接证据", reference: "引用条款", context: "上下文", parent: "上级结构" }[x.role] || "证据");
+            const role = ({
+              direct: "直接证据", reference: "引用条款", context: "上下文", parent: "上级结构",
+              inherited: "继承结构", lead: "列表引导", neighbor: "邻接上下文", same_article: "同条款",
+              table_header: "表头", definition: "定义", requested_reference: "补充引用",
+              requested_definition: "补充定义", requested_condition: "补充条件", requested_subject: "补充主体"
+            }[x.role] || "证据");
             return `${role} Block #${x.block_id}${x.section_path ? `（${x.section_path}）` : ""}`;
           }).join(" → ");
           return {
@@ -291,7 +302,17 @@
           qualityText: checkValues.length ? `${passed}/4 通过${e.complexity_level ? ` · ${e.complexity_level}` : ""}${routeLabel ? ` · ${routeLabel}` : ""}` : (routeLabel || "未检查"),
           qualityDetail: `${qualityDetail || "暂无质量检查详情"}${routeLabel ? `\n路由：${routeLabel}` : ""}${Array.isArray(e.route_reasons) && e.route_reasons.length ? `\n原因：${e.route_reasons.join("；")}` : ""}`,
           qualityChecks: e.quality_checks || {},
-          crossBlock: Array.isArray(e.evidence_details) && e.evidence_details.some(x => ["reference", "context"].includes(x.role)),
+          routeColor,
+          routeLabel,
+          routeReasons: Array.isArray(e.route_reasons) ? e.route_reasons : [],
+          reviewAction: e.review_action || "",
+          reviewAttempts: Number(e.review_attempts || 0),
+          evidenceRoles: [...new Set((e.evidence_details || []).map(x => x.role).filter(Boolean))],
+          crossBlock: Array.isArray(e.evidence_details) && e.evidence_details.some(x => [
+            "reference", "context", "parent", "inherited", "lead", "neighbor", "same_article",
+            "table_header", "definition", "requested_reference", "requested_definition",
+            "requested_condition", "requested_subject"
+          ].includes(x.role)),
           evidenceChain: evidenceChain || kpSec(e),
           // 后端未提供证据/来源时，兜底填充这两个字段，保证前端非空展示
           // 证据列统一用「章节」(section_path)；来源文档直接用文件名
@@ -306,7 +327,14 @@
           verified: rawClaims.filter(e => e.is_questionable !== false && (e.quality_status === "verified" || e.review_status === "quality_verified")).length,
           needsReview: rawClaims.filter(e => e.is_questionable !== false && e.quality_status === "needs_review").length,
           rejected: rawClaims.filter(e => e.is_questionable === false || e.quality_status === "rejected").length,
-          crossBlock: rawClaims.filter(e => Array.isArray(e.evidence_details) && e.evidence_details.some(x => ["reference", "context"].includes(x.role))).length
+          crossBlock: rawClaims.filter(e => Array.isArray(e.evidence_details) && e.evidence_details.some(x => [
+            "reference", "context", "parent", "inherited", "lead", "neighbor", "same_article",
+            "table_header", "definition", "requested_reference", "requested_definition",
+            "requested_condition", "requested_subject"
+          ].includes(x.role))).length,
+          green: rawClaims.filter(e => e.is_questionable !== false && routeColorOf(e) === "green").length,
+          yellow: rawClaims.filter(e => e.is_questionable !== false && routeColorOf(e) === "yellow").length,
+          red: rawClaims.filter(e => e.is_questionable !== false && routeColorOf(e) === "red").length
         };
         // qa.type 由文档用途决定：基础问题输入文档产出「基础问题」(plain)，泛化输入文档产出「泛化问题」(gen)
         const qaType = purpose === "gen" ? "gen" : "plain";
