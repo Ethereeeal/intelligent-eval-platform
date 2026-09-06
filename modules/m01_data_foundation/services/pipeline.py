@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import hashlib
 import logging
 from pathlib import Path
-
-from sqlalchemy.exc import IntegrityError
+from uuid import uuid4
 
 from modules.m01_data_foundation.services.embedding import EmbeddingService
 from modules.m01_data_foundation.services.parser import DocumentParser
@@ -54,35 +52,24 @@ class PipelineService:
         suffix = Path(file_name).suffix.lower() or Path(file_type or "").suffix.lower()
         self._validate_file(suffix, content)
 
-        file_hash = hashlib.sha256(content).hexdigest()
-        existing = self.database.find_by_hash(file_hash)
-        if existing is not None:
-            return {"document_id": existing, "duplicate": True, "blocks": 0}
-
-        # 查重通过后才落盘（MinIO 的本地替代，Demo 用），避免重复上传残留孤儿文件
+        # 文档不做内容去重。legacy file_hash 列仍为历史数据库兼容字段，使用
+        # 每次上传独立的非内容标记，避免旧库的 NOT NULL/UNIQUE 约束拦截重复文档。
+        upload_marker = uuid4().hex
         stored = self.storage.save_raw_document(file_name, content)
         minio_path = stored.object_path
 
-        try:
-            document_id = self.database.save_document(
-                file_name=file_name,
-                file_type=suffix,
-                file_size=len(content),
-                file_hash=file_hash,
-                minio_path=minio_path,
-                upload_user=upload_user,
-                document_version=document_version,
-                folder_path=folder_path,
-                purpose=purpose,
-                parse_status="pending",
-            )
-        except IntegrityError:
-            # 并发同哈希上传：另一请求已抢先入库，按重复处理并清理本请求已落盘的文件
-            self.storage.delete_raw_document(minio_path)
-            existing = self.database.find_by_hash(file_hash)
-            if existing is None:
-                raise
-            return {"document_id": existing, "duplicate": True, "blocks": 0}
+        document_id = self.database.save_document(
+            file_name=file_name,
+            file_type=suffix,
+            file_size=len(content),
+            file_hash=upload_marker,
+            minio_path=minio_path,
+            upload_user=upload_user,
+            document_version=document_version,
+            folder_path=folder_path,
+            purpose=purpose,
+            parse_status="pending",
+        )
         try:
             parse_path = Path(minio_path)
             if not parse_path.exists():
@@ -125,13 +112,8 @@ class PipelineService:
         suffix = (Path(file_name).suffix if file_name else existing["file_type"]).lower()
         self._validate_file(suffix, content)
 
-        new_hash = hashlib.sha256(content).hexdigest()
         job_id = self.database.save_job(document_id=document_id, job_type="doc_update")
         self.database.update_job(job_id, status="running", phase="parsing", progress=10)
-
-        if new_hash == existing["file_hash"]:
-            self.database.update_job(job_id, status="completed", phase="unchanged", progress=100, message="内容未变化，无需重算", finished=True)
-            return {"job_id": job_id, "document_id": document_id, "changed": False}
 
         try:
             # 覆盖式全量重算第一步：新内容入库（存文件 + 解析 + 写块）。
@@ -153,14 +135,6 @@ class PipelineService:
                 message=f"重传解析失败: {exc}", finished=True,
             )
             raise
-
-        # 新内容与库中其他文档完全一致：不执行覆盖，保留当前文档
-        if result.get("duplicate"):
-            self.database.update_job(
-                job_id, status="completed", phase="unchanged", progress=100,
-                message=f"新内容已存在于文档 {result['document_id']}，未执行覆盖", finished=True,
-            )
-            return {"job_id": job_id, "document_id": document_id, "changed": False}
 
         new_document_id = result["document_id"]
         # parsing 阶段完成：整体进度统一为 40（40–90 由 EIU 抽取、90–100 由版本重建接管）

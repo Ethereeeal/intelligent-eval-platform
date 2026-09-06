@@ -105,12 +105,10 @@ def precheck_upload(
     folder_path: str | None = Form(None),
     file: UploadFile = File(...),
 ):
-    """上传预检（只读、不落盘）：计算哈希并判定 ok / conflict / duplicate / 弱提示。
+    """上传预检（只读、不落盘）：仅校验文件类型和大小。
 
-    - ok：无冲突，可直接上传；
-    - duplicate：内容已存在（全库哈希命中），应跳过；
-    - conflict：目标文件夹存在同名且内容不同，需用户确认后带 confirm_token 走 reupload；
-    - ok + same_name_elsewhere：其他位置有同名文件（弱提示，不拦截）。
+    文档允许重复上传，也允许同目录同名文件；文档唯一性不在本接口判定。
+    显式重传接口仍单独保留确认令牌，用于防止误覆盖指定文档。
     """
     content = _read_upload_with_limit(file)
     file_name = repair_legacy_filename(file.filename or "upload.bin") or "upload.bin"
@@ -126,37 +124,6 @@ def precheck_upload(
             detail=f"文件大小 {len(content)} 超过上限 {settings.max_file_size} 字节",
         )
 
-    file_hash = hashlib.sha256(content).hexdigest()
-    fp = (folder_path or "").strip("/")
-    db = pipeline_service.database
-
-    dup_id = db.find_by_hash(file_hash)
-    if dup_id is not None:
-        return {"status": "duplicate", "existing_document_id": dup_id}
-
-    same = db.find_document_by_name_in_folder(file_name, fp)
-    if same is not None and same["file_hash"] != file_hash:
-        token = _issue_confirm_token(
-            document_id=same["document_id"],
-            folder_path=same.get("folder_path"),
-            file_hash=file_hash,
-        )
-        return {
-            "status": "conflict",
-            "existing_document_id": same["document_id"],
-            "existing_name": same["file_name"],
-            "existing_folder": same.get("folder_path") or "文档库",
-            "existing_upload_time": same.get("upload_time"),
-            "existing_size": same.get("file_size"),
-            "confirm_token": token,
-        }
-
-    elsewhere = [
-        item for item in db.find_documents_by_name(file_name)
-        if (item["folder_path"] or "") != fp
-    ]
-    if elsewhere:
-        return {"status": "ok", "same_name_elsewhere": elsewhere}
     return {"status": "ok"}
 
 
