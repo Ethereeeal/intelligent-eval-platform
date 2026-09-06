@@ -58,3 +58,6 @@ class GeneratedCase:
     review_status: str = "candidate"
     is_unanswerable: bool = False
     statement_norm: str | None = None  # 方案 B 跨库复用匹配键
+    evaluation_profiles: list[str] = field(default_factory=list)
+    canonical_intent_key: str | None = None
+    manual_inclusion: bool = False

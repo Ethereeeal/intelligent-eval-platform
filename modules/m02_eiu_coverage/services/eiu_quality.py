@@ -3,6 +3,10 @@
 切块只承担定位和证据承载，不再被当作 EIU 边界。规则抽取的结果均先作为候选，
 本模块以可解释的确定性检查给出 verified / needs_review / rejected 状态；复杂项
 后续可再接入批量 LLM 复核，而不影响当前快速解析链路。
+
+EIU 是 QA 生成前的可追溯知识单元，不是题目。这里刻意只检查：
+忠实性与可追溯性、上下文完整性、原子性。题目是否可测由 M03/M04 的
+QA 生成与质量治理负责，不能把“缺少量化条件”误当作 EIU 不合格。
 """
 from __future__ import annotations
 
@@ -22,10 +26,6 @@ _PREDICATE_RE = re.compile(
 _MODAL_RE = re.compile(
     r"应当|必须|不得|禁止|不准|不允许|仅接受|不接受|不可|不得为|仅限|限于|应为|"
     r"可以|负责|是指|适用|不适用|施行|生效|实施"
-)
-_TITLE_LIKE_RE = re.compile(
-    r"^(?:附件|附录|目录|第[一二三四五六七八九十百千零〇两0-9]+[章节])(?:\s|$)"
-    r"|^(?:.{0,60})(?:办法|规程|细则|指引|通知)(?:[（(].{0,20}[）)])?$"
 )
 
 
@@ -52,7 +52,7 @@ class EiuQualityEvaluator:
                 self.article_index[article].append(int(block["block_id"]))
 
     def annotate(self, item: dict, source_block: dict) -> dict:
-        """返回带证据链、四项检查和质量状态的新字典。"""
+        """返回带证据链、三项质量检查和质量状态的新字典。"""
         result = dict(item)
         # 黄色候选在 LLM 不可用或调用失败时不能被规则检查直接放行；
         # 保留到人工/后续 LLM 队列，而不是伪装成“已验证”。
@@ -202,18 +202,8 @@ class EiuQualityEvaluator:
             atomicity_reasons.append("存在复合分句结构")
         atomicity = _check("pass" if not atomicity_reasons else "warning", atomicity_reasons)
 
-        testability_reasons: list[str] = []
-        if len(statement) < 8:
-            testability_reasons.append("内容过短，无法形成稳定判定")
-        if _TITLE_LIKE_RE.match(statement):
-            testability_reasons.append("内容疑似标题或附件标识")
-        if not (_PREDICATE_RE.search(statement) or _NUMBER_RE.search(statement)):
-            testability_reasons.append("缺少可判定谓词或量化条件")
-        testability = _check("pass" if not testability_reasons else "warning", testability_reasons)
-
         return {
             "fidelity": fidelity,
             "completeness": completeness,
             "atomicity": atomicity,
-            "testability": testability,
         }

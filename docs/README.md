@@ -8,5 +8,6 @@
 | [architecture.md](architecture.md) | 系统架构、模块划分、数据流 |
 | [api.md](api.md) | 接口约定（早期草案，接口清单以各模块 README 的 API 表为准） |
 | [data-model.md](data-model.md) | 数据模型（早期草案，以 `database.py` 与模块 README 为准） |
+| [eiu-quality-gate-design.md](eiu-quality-gate-design.md) | 已确认的 EIU 自动质量门禁、文档质量反馈与按用途选题方案 |
 
-业务需求书：仓库根 `evaluation_dataset_platform_brd.md`（V1.3）。
+业务需求书：仓库根 `evaluation_dataset_platform_brd.md`（V1.4）。

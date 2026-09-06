@@ -364,6 +364,31 @@ class M02HardeningTests(unittest.TestCase):
                 self.saved.extend(items)
                 return list(range(1, len(items) + 1))
 
+            def list_eius(self, *, document_id):
+                return [
+                    {
+                        **item,
+                        "eiu_id": index,
+                        "document_id": document_id,
+                        "quality_status": item.get("quality_status", "verified"),
+                        "quality_checks": item.get("quality_checks") or {
+                            "fidelity": {"status": "pass", "reasons": []},
+                            "completeness": {"status": "pass", "reasons": []},
+                            "atomicity": {"status": "pass", "reasons": []},
+                        },
+                    }
+                    for index, item in enumerate(self.saved, start=1)
+                ]
+
+            def update_eiu(self, _eiu_id, **_updates):
+                return None
+
+            def replace_document_quality_findings(self, **_kwargs):
+                return None
+
+            def delete_generated_cases_by_document(self, *, document_id):
+                return 0
+
         service = EiuExtractorService()
         service.database = FakeDatabase()
         service._extract_block = Mock(side_effect=[

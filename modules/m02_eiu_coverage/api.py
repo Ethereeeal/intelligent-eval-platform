@@ -9,7 +9,7 @@
   POST   /api/eiu/coverage              计算覆盖率并落库，返回带 report_id 的报告
   GET    /api/eiu/{eiu_id}              EIU 详情（含原文上下文）
   PUT    /api/eiu/{eiu_id}              手动编辑 EIU
-  DELETE /api/eiu/{eiu_id}              软删除（标记 blocked）
+  DELETE /api/eiu/{eiu_id}              归档至已排除（保留证据，只读）
 """
 from __future__ import annotations
 
@@ -24,6 +24,7 @@ from modules.m02_eiu_coverage.schemas import (
     EiuDetail,
     EiuExtractResponse,
     EiuListResponse,
+    EiuManualIncludeRequest,
     EiuMergeRequest,
     EiuOut,
     EiuSplitRequest,
@@ -37,13 +38,60 @@ from modules.m02_eiu_coverage.services.coverage import (
 )
 from modules.m02_eiu_coverage.services.claim_audit import analyse_claim_relationships
 from modules.m02_eiu_coverage.services.eiu_extractor import EiuExtractorService
-from modules.shared.services.database import EIU_TYPES, PRIORITY_WEIGHT, DatabaseService
+from modules.m02_eiu_coverage.services.eiu_gate_policy import QUALITY_POLICY_VERSION, EiuGatePolicy
+from modules.m02_eiu_coverage.services.eiu_quality import EiuQualityEvaluator
+from modules.shared.services.database import EIU_TYPES, DatabaseService
 
 # 全局（按文件维度）：/api/eiu/...
 eiu_router = APIRouter(prefix="/api/eiu", tags=["eiu"])
 
 database = DatabaseService()
 extractor_service = EiuExtractorService()
+
+_GATE_FIELDS = {
+    "content_priority", "is_questionable", "exclusion_reason", "quality_status",
+    "route_color", "route_reasons", "review_action", "importance_signals",
+    "importance_reason", "canonical_intent_key", "auto_disposition",
+    "quality_policy_version", "evaluation_profiles",
+}
+
+
+def _recheck_document_gate(*, document_id: int, edited_eiu_id: int) -> dict:
+    """人工编辑后重跑三项 EIU 门禁与全文相对重要性，绝不直接转绿。"""
+    document = database.get_document(document_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="document not found")
+    blocks = database.get_document_blocks(document_id)
+    by_block_id = {int(block["block_id"]): block for block in blocks}
+    items = database.list_eius(document_id=document_id)
+    evaluator = EiuQualityEvaluator(blocks)
+    rechecked: list[dict] = []
+    for item in items:
+        if int(item["eiu_id"]) == edited_eiu_id:
+            source = by_block_id.get(int(item["block_id"]))
+            if source is None:
+                raise HTTPException(status_code=422, detail="EIU 对应原文 Block 不存在，无法重新核验")
+            item = evaluator.annotate(item, source)
+        rechecked.append(item)
+    gated, findings = EiuGatePolicy(extractor_service.llm).apply_document(
+        document=document,
+        items=rechecked,
+        blocks=blocks,
+    )
+    for item in gated:
+        database.update_eiu(
+            int(item["eiu_id"]),
+            **{field: item[field] for field in _GATE_FIELDS if field in item},
+        )
+    database.replace_document_quality_findings(
+        document_id=document_id,
+        findings=findings,
+        policy_version=QUALITY_POLICY_VERSION,
+    )
+    result = database.get_eiu(edited_eiu_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="eiu not found")
+    return result
 
 
 def _documents_scope(document_id: int | None) -> list[dict]:
@@ -114,6 +162,7 @@ def list_eius_all(
     questionable: bool | None = Query(None, description="是否可出题"),
     section: str | None = Query(None, description="按章节路径模糊过滤"),
     document_id: int | None = Query(None, description="按文档过滤"),
+    disposition: list[str] | None = Query(None, description="自动处置状态 green/yellow/red，可重复"),
 ) -> EiuListResponse:
     items = database.list_eius(
         eiu_type=type,
@@ -121,6 +170,7 @@ def list_eius_all(
         questionable=questionable,
         section=section,
         document_id=document_id,
+        disposition=disposition,
     )
     return EiuListResponse(total=len(items), items=items)
 
@@ -131,6 +181,7 @@ def list_eius_by_document(
     type: list[str] | None = Query(None, description="EIU 类型，可重复"),
     priority: list[str] | None = Query(None, description="优先级 P0/P1/P2，可重复"),
     questionable: bool | None = Query(None, description="是否可出题"),
+    disposition: list[str] | None = Query(None, description="自动处置状态 green/yellow/red，可重复"),
 ) -> EiuListResponse:
     """按文件（document_id）列出其 EIU，用于「我的文件库」目录树组织，无需 corpus。"""
     if database.find_document_by_id(document_id) is None:
@@ -140,6 +191,7 @@ def list_eius_by_document(
         priority=priority,
         questionable=questionable,
         document_id=document_id,
+        disposition=disposition,
     )
     return EiuListResponse(total=len(items), items=items)
 
@@ -176,6 +228,10 @@ def get_gaps() -> GapListResponse:
 # ----------------------------------------------------------------------
 @eiu_router.post("/merge", response_model=EiuOut, status_code=201)
 def merge_eius(payload: EiuMergeRequest) -> EiuOut:
+    for source_eiu_id in payload.source_eiu_ids:
+        source = database.get_eiu(source_eiu_id)
+        if source is not None and source.get("auto_disposition") == "red":
+            raise HTTPException(status_code=409, detail="已排除知识点仅可查看，不能合并")
     try:
         item = database.merge_eius(
             source_eiu_ids=payload.source_eiu_ids,
@@ -197,6 +253,9 @@ def merge_eius(payload: EiuMergeRequest) -> EiuOut:
 
 @eiu_router.post("/{eiu_id}/split", response_model=EiuListResponse, status_code=201)
 def split_eiu(eiu_id: int, payload: EiuSplitRequest) -> EiuListResponse:
+    source = database.get_eiu(eiu_id)
+    if source is not None and source.get("auto_disposition") == "red":
+        raise HTTPException(status_code=409, detail="已排除知识点仅可查看，不能拆分")
     try:
         items = database.split_eiu(source_eiu_id=eiu_id, statements=payload.statements)
     except ValueError as exc:
@@ -221,6 +280,14 @@ def get_document_claim_relationships(document_id: int) -> dict:
     return analyse_claim_relationships(database.list_eius(document_id=document_id))
 
 
+@eiu_router.get("/document/{document_id}/quality-feedback")
+def get_document_quality_feedback(document_id: int) -> dict:
+    """返回文档质量问题及可追溯 Block，不返回总分，也不要求人工确认。"""
+    if database.find_document_by_id(document_id) is None:
+        raise HTTPException(status_code=404, detail="document not found")
+    return database.get_document_quality_feedback(document_id=document_id)
+
+
 @eiu_router.get("/{eiu_id}", response_model=EiuDetail)
 def get_eiu(eiu_id: int) -> EiuDetail:
     item = database.get_eiu(eiu_id)
@@ -234,29 +301,20 @@ def update_eiu(eiu_id: int, payload: EiuUpdate) -> EiuOut:
     current = database.get_eiu(eiu_id)
     if current is None:
         raise HTTPException(status_code=404, detail="eiu not found")
+    if current.get("auto_disposition") == "red":
+        raise HTTPException(status_code=409, detail="已排除知识点仅可查看，不能编辑")
     updates: dict = {}
     if payload.statement is not None:
         updates["statement"] = payload.statement
-        # 人工改写后旧质检结论失效，必须重新复核。
-        updates["quality_status"] = "needs_review"
         updates["review_status"] = "candidate"
     if payload.eiu_type is not None:
         if payload.eiu_type not in EIU_TYPES:
             raise HTTPException(status_code=422, detail=f"非法 EIU 类型: {payload.eiu_type}")
         updates["eiu_type"] = payload.eiu_type
     if payload.content_priority is not None:
-        if payload.content_priority not in PRIORITY_WEIGHT:
-            raise HTTPException(status_code=422, detail=f"非法优先级: {payload.content_priority}")
-        updates["content_priority"] = payload.content_priority
-        updates["weight"] = PRIORITY_WEIGHT[payload.content_priority]
+        raise HTTPException(status_code=422, detail="重要性由系统按全文重新判定，不能人工直接修改")
     if payload.is_questionable is not None:
-        updates["is_questionable"] = payload.is_questionable
-        if payload.is_questionable:
-            updates["exclusion_reason"] = None
-        elif not (payload.exclusion_reason or current.get("exclusion_reason")):
-            raise HTTPException(status_code=422, detail="不可出题 EIU 必须提供排除原因")
-        else:
-            updates["quality_status"] = "rejected"
+        raise HTTPException(status_code=422, detail="请使用删除操作归档；可出题状态由自动质量门禁决定")
     if payload.exclusion_reason is not None:
         updates["exclusion_reason"] = payload.exclusion_reason
     if payload.constraints is not None:
@@ -274,19 +332,10 @@ def update_eiu(eiu_id: int, payload: EiuUpdate) -> EiuOut:
     if payload.extraction_confidence is not None:
         updates["extraction_confidence"] = payload.extraction_confidence
     if payload.quality_status is not None:
-        target_questionable = (
-            payload.is_questionable
-            if payload.is_questionable is not None
-            else current.get("is_questionable")
-        )
-        if payload.quality_status == "verified" and target_questionable is False:
-            raise HTTPException(status_code=422, detail="不可出题声明不能标记为已验证")
-        updates["quality_status"] = payload.quality_status
-        updates["review_status"] = (
-            "quality_verified" if payload.quality_status == "verified" else "candidate"
-        )
+        raise HTTPException(status_code=422, detail="质量状态由三项自动门禁重新计算，不能人工直接修改")
 
-    item = database.update_eiu(eiu_id, **updates)
+    database.update_eiu(eiu_id, **updates)
+    item = _recheck_document_gate(document_id=int(current["document_id"]), edited_eiu_id=eiu_id)
     database.save_audit(
         operation="update",
         target_type="eiu",
@@ -297,9 +346,40 @@ def update_eiu(eiu_id: int, payload: EiuUpdate) -> EiuOut:
     return EiuOut(**item)
 
 
+@eiu_router.post("/{eiu_id}/manual-include", response_model=EiuOut)
+def manual_include_eiu(eiu_id: int, payload: EiuManualIncludeRequest) -> EiuOut:
+    """保留人工指定出题入口，但不覆盖自动质量、重要性或正式覆盖口径。"""
+    current = database.get_eiu(eiu_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail="eiu not found")
+    if current.get("auto_disposition") == "red":
+        raise HTTPException(status_code=409, detail="已排除知识点不可人工指定纳入")
+    rechecked = _recheck_document_gate(document_id=int(current["document_id"]), edited_eiu_id=eiu_id)
+    if rechecked.get("auto_disposition") not in {"green", "yellow"}:
+        raise HTTPException(status_code=422, detail="知识点未通过重新核验，不能指定纳入")
+    item = database.update_eiu(
+        eiu_id,
+        manual_include=True,
+        manual_include_reason=payload.reason,
+    )
+    database.save_audit(
+        operation="manual_include",
+        target_type="eiu",
+        target_id=str(eiu_id),
+        actor="api",
+        detail={"reason": payload.reason},
+    )
+    return EiuOut(**item)
+
+
 @eiu_router.delete("/{eiu_id}", response_model=DeleteResponse)
 def delete_eiu(eiu_id: int) -> DeleteResponse:
-    item = database.mark_eiu_blocked(eiu_id)
+    current = database.get_eiu(eiu_id)
+    if current is None:
+        raise HTTPException(status_code=404, detail="eiu not found")
+    if current.get("auto_disposition") == "red":
+        raise HTTPException(status_code=409, detail="已排除知识点仅可查看")
+    item = database.archive_eiu(eiu_id=eiu_id, reason="人工从待处理/可用知识点中归档排除")
     if item is None:
         raise HTTPException(status_code=404, detail="eiu not found")
     database.save_audit(
@@ -307,6 +387,6 @@ def delete_eiu(eiu_id: int) -> DeleteResponse:
         target_type="eiu",
         target_id=str(eiu_id),
         actor="api",
-        detail={"review_status": "blocked"},
+        detail={"auto_disposition": "red", "reason": "manual_archive"},
     )
-    return DeleteResponse(eiu_id=eiu_id, status="deleted", review_status="blocked")
+    return DeleteResponse(eiu_id=eiu_id, status="archived", review_status=item["review_status"])

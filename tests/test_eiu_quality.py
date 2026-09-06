@@ -56,14 +56,14 @@ class EiuQualityTests(unittest.TestCase):
 
         self.assertEqual(result["quality_status"], "rejected")
 
-    def test_document_title_with_year_requires_review(self) -> None:
+    def test_quality_gate_has_only_traceability_context_and_atomicity(self) -> None:
         block = _block(1, "单位定期存单质押授信业务操作规程（2025年版）", "文档标题")
         result = EiuQualityEvaluator([block]).annotate(
             {"statement": block["block_text"], "is_questionable": True}, block
         )
 
-        self.assertEqual(result["quality_status"], "needs_review")
-        self.assertEqual(result["quality_checks"]["testability"]["status"], "warning")
+        self.assertEqual(set(result["quality_checks"]), {"fidelity", "completeness", "atomicity"})
+        self.assertNotIn("testability", result["quality_checks"])
 
     def test_financial_acceptance_and_rejection_are_valid_predicates(self) -> None:
         block = _block(1, "不接受他行开立的单位定期存单质押。", "质押授信")
@@ -71,5 +71,4 @@ class EiuQualityTests(unittest.TestCase):
             {"statement": "不接受他行开立的单位定期存单质押", "is_questionable": True}, block
         )
 
-        self.assertEqual(result["quality_checks"]["testability"]["status"], "pass")
         self.assertEqual(result["quality_status"], "verified")

@@ -18,6 +18,10 @@ from typing import Any
 
 from modules.m01_data_foundation.services.eiu_indexer import EiuFaissIndex
 from modules.m02_eiu_coverage.services.context_bundle import ContextBundleBuilder
+from modules.m02_eiu_coverage.services.eiu_gate_policy import (
+    QUALITY_POLICY_VERSION,
+    EiuGatePolicy,
+)
 from modules.m02_eiu_coverage.services.eiu_quality import EiuQualityEvaluator
 from modules.m02_eiu_coverage.services.llm_client import LLMClient, LLMError
 from modules.shared.services.database import EIU_TYPES, PRIORITY_WEIGHT, DatabaseService
@@ -192,21 +196,25 @@ def _split_sentences(text: str) -> list[str]:
 
 
 def _classify(sentence: str) -> tuple[str, str] | None:
-    """按优先级判定句子属于哪类 EIU（type, priority）。无实质内容返回 None。"""
+    """判定 EIU 类型并给出临时优先级占位。
+
+    第二个返回值仅为兼容落库前的数据契约，固定为 P1；最终 P0/P1/P2 必须在
+    全文候选齐备后由 :class:`EiuGatePolicy` 依据相对文档目的批量判定。
+    """
     if not sentence or len(sentence) < 4:
         return None
 
-    # prohibition（禁止事项，P0）
+    # prohibition（禁止事项）
     if re.match(r"^(?:禁止|严禁|不准|不允许|不得)", sentence) or (
         "禁止" in sentence or "严禁" in sentence
     ):
-        return "prohibition", "P0"
+        return "prohibition", "P1"
 
-    # exception（例外 / 放宽，P0/P1）
+    # exception（例外 / 放宽）
     if re.search(r"除非|除外|例外|可放宽|可不(?:受|适用|按|计)|但(?:是)?.{0,6}(?:可以|允许|不受)", sentence):
-        return "exception", "P0"
+        return "exception", "P1"
 
-    # threshold（数值 / 百分比 / 上下限，P0）
+    # threshold（数值 / 百分比 / 上下限）
     # 兼容两种语序："不得超过70%"（限定词在前）与 "70%以上"（数值在前）
     if re.search(
         r"(?:不超过|不得超过|不得低于|不得高于|不得少于|不低于|不高于|上限|下限|控制在|最高|最低)"
@@ -215,7 +223,7 @@ def _classify(sentence: str) -> tuple[str, str] | None:
         r"\s*(?:以上|以下|不超过|不得超过|不得低于|不得高于|不得少于|不低于|不高于)",
         sentence,
     ):
-        return "threshold", "P0"
+        return "threshold", "P1"
 
     # date（时效，P1）
     if re.search(r"(?:\d{4}年\d{1,2}月\d{1,2}日|\d{1,2}月\d{1,2}日).{0,10}(?:施行|生效|执行|实施|截止)|(?:自|从).{0,12}(?:起施行|起生效|起实施)", sentence):
@@ -237,19 +245,19 @@ def _classify(sentence: str) -> tuple[str, str] | None:
     if re.search(r"流程|步骤|依次|顺序|先后|先.{0,8}(?:再|然后).{0,8}(?:后|最终)|办理程序|操作流程|审批流程", sentence):
         return "process", "P1"
 
-    # metric（指标值，P2）
+    # metric（指标值）
     if re.search(r"\d[\d,]*(?:\.\d+)?\s*(?:万元|亿元|元|户|笔|人|%)", sentence) and re.search(
         r"(?:达到|为|计|累计|总额|余额|金额|人数|户数|增长率|净利润|营业收入)", sentence
     ):
-        return "metric", "P2"
+        return "metric", "P1"
 
     # change（变更 / 新旧更替，P1）
     if re.search(r"调整(?:为|至|到)?|修订|改版|新版|旧版|由.{0,10}(?:改为|调整为|变更为|提高|降低|提高到|降低至)|较.{0,4}(?:版|年度)", sentence):
         return "change", "P1"
 
-    # 兜底：一般说明（P2），避免有效业务信息被漏抽
+    # 兜底：一般说明，避免有效业务信息被漏抽
     if len(sentence) >= 8:
-        return "rule", "P2"
+        return "rule", "P1"
     return None
 
 
@@ -383,12 +391,6 @@ def _yellow_route_reasons(block: dict, rule_items: list[dict]) -> list[str]:
         reasons.append(f"Block 长度 {len(text)} 超过 {_YELLOW_BLOCK_LENGTH} 字")
     if block_type.startswith(("table", "excel")):
         reasons.append("表格类 Block 需要校验表头和单元格上下文")
-    # rule/P2 是确定性抽取的兜底分类，类型/优先级并不可靠，交由 LLM 校正。
-    if any(item.get("eiu_type") == "rule" and item.get("content_priority") == "P2" for item in rule_items):
-        reasons.append("规则兜底分类 rule/P2，类型或优先级需复核")
-    # P0 对证据完整度要求更高，默认送局部审查而非直接放行。
-    if any(item.get("content_priority") == "P0" for item in rule_items):
-        reasons.append("P0 候选需要全量证据复核")
     return reasons
 
 
@@ -723,6 +725,7 @@ class EiuExtractorService:
         inserted = 0
         excluded = 0
         failed_blocks = 0
+        invalidated_cases = 0
         _sem_vecs: list[tuple[str, list[float]]] = []  # 已插入 EIU 的 (归一化statement, 向量)
         # P1：EIU 向量 FAISS 索引，语义去重用（与 _sem_vecs 精确层互补）
         _faiss_idx = EiuFaissIndex()
@@ -793,11 +796,42 @@ class EiuExtractorService:
                 progress = progress_start + int(index / total * (progress_end - progress_start))
                 self.database.update_job(job_id, progress=progress)
 
+        # 所有 Block 落库后，才可以用“同一文档的完整候选集合”判定相对重要性。
+        # 规则抽取只提供信号，绝不直接把规则类型映射成 P0/P1/P2。
+        gate_policy = EiuGatePolicy(self.llm)
+        gate_fields = {
+            "content_priority", "is_questionable", "exclusion_reason", "quality_status",
+            "route_color", "route_reasons", "review_action", "importance_signals",
+            "importance_reason", "canonical_intent_key", "auto_disposition",
+            "quality_policy_version", "evaluation_profiles",
+        }
+        for document, blocks in zip(documents, document_blocks, strict=True):
+            persisted = self.database.list_eius(document_id=document["document_id"])
+            updated_items, findings = gate_policy.apply_document(
+                document=document,
+                items=persisted,
+                blocks=blocks,
+            )
+            for item in updated_items:
+                updates = {field: item[field] for field in gate_fields if field in item}
+                self.database.update_eiu(int(item["eiu_id"]), **updates)
+            self.database.replace_document_quality_findings(
+                document_id=document["document_id"],
+                findings=findings,
+                policy_version=QUALITY_POLICY_VERSION,
+            )
+            # 旧 QA 绑定的是重抽前 EIU id；保留已冻结版本快照，但当前生成库必须
+            # 失效，避免旧题继续被误认为覆盖了新策略下的绿色知识点。
+            invalidated_cases += self.database.delete_generated_cases_by_document(
+                document_id=document["document_id"]
+            )
+
         if finalize_job:
             self.database.update_job(
                 job_id, status="completed", phase="done", progress=progress_end,
                 message=(
                     f"EIU 抽取完成，共 {inserted} 条（排除 {excluded} 个段落）"
+                    + (f"，已失效 {invalidated_cases} 条旧问答对" if invalidated_cases else "")
                     + (f"，失败 {failed_blocks} 个 Block" if failed_blocks else "")
                 ),
                 finished=True,
@@ -809,6 +843,7 @@ class EiuExtractorService:
             "status": "completed",
             "message": (
                 f"EIU 抽取完成，共 {inserted} 条"
+                + (f"，已失效 {invalidated_cases} 条旧问答对" if invalidated_cases else "")
                 + (f"，失败 {failed_blocks} 个 Block" if failed_blocks else "")
             ),
             "count": inserted,
@@ -885,7 +920,6 @@ class EiuExtractorService:
 
         写死项（不再让 LLM 自由裁量）：
           - #2 EIU 类型判定：由 _classify 规则映射
-          - #3 优先级 P0/P1/P2：由 _classify 类型→优先级映射
           - #5 constraints：由 _constraints_for 正则预抽
           - #4 粗筛：is_skippable 前置拦截，减少送 LLM 的 Block 数
         保留 LLM 项：
@@ -898,7 +932,8 @@ class EiuExtractorService:
             一次 LLM 调用对当前 Block 候选做拆分、合并、补全和证据判断；
           - 红色：LLM 离线/失败或仍有质量疑点时进入 needs_review，不自动出题。
 
-        LLM 产出的每条 EIU 仍用规则重算 type/priority/constraints，保证字段口径稳定。
+        LLM 产出的每条 EIU 仍用规则重算 type/constraints；重要性在同文档批量门禁
+        中统一判定，不能由规则类型直接决定。
 
         表格类文件（excel/csv）不做特殊化：与普通文档走同一套抽取流程，
         一行内可抽 0..n 条 EIU（规则逐句分类先抽，规则无法归类时交 LLM）。
@@ -915,7 +950,7 @@ class EiuExtractorService:
         if is_skippable(text):                       # #4 粗筛写死，前置拦截
             return []
 
-        # 1) 规则先抽（#2/#3/#5 写死在此完成）
+        # 1) 规则先抽（#2/#5 写死在此完成；priority 仅为临时占位）
         rule_items = deterministic_extract(text)
         for candidate_index, item in enumerate(rule_items, start=1):
             item["block_id"] = block["block_id"]
@@ -1029,7 +1064,8 @@ class EiuExtractorService:
             if not statement or statement in seen:
                 continue
             seen.add(statement)
-            # #2/#3/#5 写死：用规则对 LLM 拆分出的语句重新归类，覆盖 LLM 自由裁量
+            # #2/#5 写死：用规则对 LLM 拆分出的语句重新归类，覆盖 LLM 自由裁量。
+            # P0/P1/P2 由抽取完成后的全文门禁统一判定。
             classification = _classify(statement)
             if classification is None:
                 # 连规则都无法归类 → 视为 LLM 过度拆分，跳过该条（不杜撰类型）
