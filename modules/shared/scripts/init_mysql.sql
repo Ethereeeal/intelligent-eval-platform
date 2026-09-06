@@ -27,7 +27,6 @@ CREATE TABLE IF NOT EXISTS document (
   parse_error TEXT,
   status VARCHAR(64) NOT NULL DEFAULT 'uploaded',
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  UNIQUE KEY uk_document_hash (file_hash),
   INDEX idx_document_corpus_id (corpus_id)
 );
 

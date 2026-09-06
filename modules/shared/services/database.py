@@ -14,7 +14,6 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
-    UniqueConstraint,
     create_engine,
     or_,
     text,
@@ -137,8 +136,8 @@ class DocumentRow(Base):
     file_name: Mapped[str] = mapped_column(String(255), nullable=False)
     file_type: Mapped[str] = mapped_column(String(64), nullable=False)
     file_size: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
-    # 文件哈希全局唯一：同一文件全库不允许重复上传
-    file_hash: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    # 历史兼容字段：不再保存内容哈希，也不参与文档去重或版本判定。
+    file_hash: Mapped[str] = mapped_column(String(128), nullable=False)
     minio_path: Mapped[str] = mapped_column(String(512), nullable=False)
     upload_user: Mapped[str | None] = mapped_column(String(128), nullable=True)
     document_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -151,11 +150,6 @@ class DocumentRow(Base):
     parse_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(64), nullable=False, default="uploaded")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-
-    __table_args__ = (
-        UniqueConstraint("file_hash", name="uq_file_hash"),
-    )
-
 
 class FolderRow(Base):
     """文档库目录：用户自建文件夹，层级由 parent_id 自引用表达。
@@ -404,16 +398,31 @@ class DatabaseService:
                             "ALTER TABLE generated_case ADD COLUMN statement_norm VARCHAR(512)"
                         )
                     )
-        # document.file_hash：全库唯一（同一文件不允许重复上传）
+        # 文档不再按内容去重。清理旧库中 file_hash 的唯一索引；历史列暂保留，
+        # 由上传流程写入一次性标记，以兼容旧数据库的非空约束。
         if "document" in inspector.get_table_names():
             cols = {c["name"] for c in inspector.get_columns("document")}
-            index_names = {ix["name"] for ix in inspector.get_indexes("document")}
-            # 先删依赖 corpus_id 的复合唯一索引（否则 DROP COLUMN 会失败）；再删列
-            if "uq_corpus_file_hash" in index_names:
+            unique_names: set[str] = set()
+            for index in inspector.get_indexes("document"):
+                if index.get("unique") and "file_hash" in (index.get("column_names") or []):
+                    unique_names.add(index["name"])
+            for constraint in inspector.get_unique_constraints("document"):
+                if "file_hash" in (constraint.get("column_names") or []) and constraint.get("name"):
+                    unique_names.add(constraint["name"])
+            # 兼容旧初始化脚本和历史迁移中的已知名称。
+            unique_names.update({"uq_file_hash", "uk_document_hash", "uq_corpus_file_hash"})
+            for index_name in sorted(unique_names):
+                if not re.fullmatch(r"[A-Za-z0-9_]+", index_name):
+                    continue
                 try:
                     with engine.begin() as conn:
-                        conn.execute(text("DROP INDEX IF EXISTS uq_corpus_file_hash"))
+                        if engine.dialect.name == "mysql":
+                            conn.execute(text(f"ALTER TABLE document DROP INDEX `{index_name}`"))
+                        else:
+                            conn.execute(text(f'DROP INDEX IF EXISTS "{index_name}"'))
                 except Exception:
+                    # 不同数据库对 inline UNIQUE 的反射方式不同；旧列保留时，
+                    # 上传流程使用独立标记，仍不会按内容拦截文档。
                     pass
             if "corpus_id" in cols:
                 try:
@@ -451,6 +460,19 @@ class DatabaseService:
                     conn.execute(text("ALTER TABLE evaluation_case_result ADD COLUMN parent_result_id INTEGER NULL"))
                 if "attempt_no" not in result_cols:
                     conn.execute(text("ALTER TABLE evaluation_case_result ADD COLUMN attempt_no INTEGER NOT NULL DEFAULT 1"))
+                if "input_turns" not in result_cols:
+                    conn.execute(text("ALTER TABLE evaluation_case_result ADD COLUMN input_turns JSON NULL"))
+                if "turn_trace" not in result_cols:
+                    conn.execute(text("ALTER TABLE evaluation_case_result ADD COLUMN turn_trace JSON NULL"))
+                if "context_analysis" not in result_cols:
+                    conn.execute(text("ALTER TABLE evaluation_case_result ADD COLUMN context_analysis JSON NULL"))
+                if "intermediate_reference" not in result_cols:
+                    conn.execute(text("ALTER TABLE evaluation_case_result ADD COLUMN intermediate_reference JSON NULL"))
+        if "evaluation_run" in inspector.get_table_names():
+            run_cols = {c["name"] for c in inspector.get_columns("evaluation_run")}
+            if "intermediate_eval" not in run_cols:
+                with engine.begin() as conn:
+                    conn.execute(text("ALTER TABLE evaluation_run ADD COLUMN intermediate_eval JSON NULL"))
         if "error_book_item" in inspector.get_table_names():
             error_cols = {c["name"] for c in inspector.get_columns("error_book_item")}
             with engine.begin() as conn:
@@ -573,12 +595,6 @@ class DatabaseService:
             session.commit()
             session.refresh(row)
             return row.document_id
-
-    def find_by_hash(self, file_hash: str) -> int | None:
-        """Return existing document_id for the given hash (全库唯一，同一文件不允许重复上传)."""
-        with SessionLocal() as session:
-            row = session.query(DocumentRow).filter(DocumentRow.file_hash == file_hash).first()
-            return row.document_id if row else None
 
     def find_document_by_name_in_folder(self, file_name: str, folder_path: str | None) -> dict | None:
         """按「文件名 + 目标文件夹」查找文档（上传预检同名覆盖判定用）。
@@ -2569,6 +2585,7 @@ class DatabaseService:
         name: str | None,
         adapter: str,
         adapter_config: dict | None = None,
+        intermediate_eval: dict | None = None,
     ) -> int:
         with SessionLocal() as session:
             row = EvaluationRunRow(
@@ -2576,6 +2593,7 @@ class DatabaseService:
                 name=name,
                 adapter=adapter,
                 adapter_config=adapter_config,
+                intermediate_eval=intermediate_eval,
             )
             session.add(row)
             session.commit()
@@ -2763,6 +2781,7 @@ class DatabaseService:
             "name": row.name,
             "adapter": row.adapter,
             "adapter_config": adapter_config,
+            "intermediate_eval": row.intermediate_eval or {"enabled": False, "nodes": []},
             "status": row.status,
             "progress": row.progress,
             "total": row.total,
@@ -2784,7 +2803,11 @@ class DatabaseService:
             "dimension": row.dimension,
             "source": row.source,
             "answer": row.answer,
+            "input_turns": row.input_turns,
             "turn_outputs": row.turn_outputs,
+            "turn_trace": row.turn_trace,
+            "context_analysis": row.context_analysis,
+            "intermediate_reference": row.intermediate_reference,
             "retrieved": row.retrieved,
             "scores": row.scores,
             "diagnosis": row.diagnosis,
@@ -2977,6 +3000,7 @@ class EvaluationRunRow(Base):
     name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     adapter: Mapped[str] = mapped_column(String(64), nullable=False)
     adapter_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    intermediate_eval: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     progress: Mapped[int] = mapped_column(Integer, default=0)
     total: Mapped[int] = mapped_column(Integer, default=0)
@@ -3000,8 +3024,12 @@ class EvaluationCaseResultRow(Base):
     dimension: Mapped[str | None] = mapped_column(String(64), nullable=True)
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="doc_generated")
     answer: Mapped[str | None] = mapped_column(Text, nullable=True)
-    # 多轮运行必须保存完整对话过程，用于归因（BRD FR-DS-SRC-002 / m08）
+    # 多轮运行保存输入 turns 与实际请求轨迹，供失败上下文分析和单题复测使用
+    input_turns: Mapped[list | None] = mapped_column(JSON, nullable=True)
     turn_outputs: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    turn_trace: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    context_analysis: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    intermediate_reference: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     retrieved: Mapped[list | None] = mapped_column(JSON, nullable=True)
     scores: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     diagnosis: Mapped[str | None] = mapped_column(String(16), nullable=True)

@@ -6,15 +6,24 @@ from datetime import datetime
 
 from modules.m08_auto_evaluation.services.adapter import BaseAdapter
 from modules.m08_auto_evaluation.services.diagnosis import diagnose
+from modules.m08_auto_evaluation.services.intermediate_metrics import (
+    normalize_intermediate_config,
+    score_intermediate,
+)
 from modules.m08_auto_evaluation.services.metrics import score_case
 from modules.m08_auto_evaluation.services.optimization import build_optimization
 from modules.shared.services.database import DatabaseService
 
 
-def _evaluate_case(sample: dict, adapter: BaseAdapter) -> dict:
-    if sample.get("turns"):
+def _evaluate_case(
+    sample: dict,
+    adapter: BaseAdapter,
+    intermediate_config: dict | None = None,
+) -> dict:
+    turns = sample.get("turns") or sample.get("input_turns")
+    if turns:
         result = adapter.run_multi(
-            sample["turns"], gold_answer=sample.get("gold_answer"), extra=sample
+            turns, gold_answer=sample.get("gold_answer"), extra=sample
         )
     else:
         result = adapter.run_single(
@@ -23,6 +32,13 @@ def _evaluate_case(sample: dict, adapter: BaseAdapter) -> dict:
             extra=sample,
         )
     scores = score_case(sample, result)
+    normalized_intermediate = normalize_intermediate_config(intermediate_config)
+    if normalized_intermediate["enabled"]:
+        scores["intermediate"] = score_intermediate(
+            sample,
+            result or {},
+            normalized_intermediate["nodes"],
+        )
     diagnosis = diagnose(sample, result, scores)
     if scores.get("error"):
         status = "error"
@@ -35,7 +51,14 @@ def _evaluate_case(sample: dict, adapter: BaseAdapter) -> dict:
     return {
         "answer": (result or {}).get("answer"),
         "turn_outputs": (result or {}).get("turn_outputs"),
+        "turn_trace": (result or {}).get("turn_trace"),
         "retrieved": (result or {}).get("retrieved"),
+        "intermediate_reference": sample.get("intermediate_reference")
+        or {
+            "intent_label": sample.get("intent_label"),
+            "rewrite_reference": sample.get("rewrite_reference"),
+            "reference_contexts": sample.get("reference_contexts"),
+        },
         "scores": scores,
         "diagnosis": diagnosis,
         "status": status,
@@ -48,6 +71,7 @@ def _base_result_fields(sample: dict) -> dict:
         "case_uid": sample.get("case_uid") or "",
         "question": sample.get("question") or "",
         "gold_answer": sample.get("gold_answer"),
+        "input_turns": sample.get("turns") or sample.get("input_turns"),
         "difficulty": sample.get("difficulty"),
         "dimension": sample.get("dimension"),
         "source": sample.get("source") or "doc_generated",
@@ -65,7 +89,13 @@ def _save_error_book(db: DatabaseService, *, run_id: int, result_id: int, sample
         )
 
 
-def start_run_async(*, run_id: int, samples: list[dict], adapter: BaseAdapter) -> None:
+def start_run_async(
+    *,
+    run_id: int,
+    samples: list[dict],
+    adapter: BaseAdapter,
+    intermediate_config: dict | None = None,
+) -> None:
     """逐题运行；取消在当前请求结束后生效，整轮异常会收敛为 failed。"""
 
     def _run() -> None:
@@ -88,7 +118,7 @@ def start_run_async(*, run_id: int, samples: list[dict], adapter: BaseAdapter) -
                     )
                     return
                 try:
-                    evaluated = _evaluate_case(sample, adapter)
+                    evaluated = _evaluate_case(sample, adapter, intermediate_config)
                 except Exception as exc:  # noqa: BLE001 — 单题异常不中断整轮
                     evaluated = {
                         "status": "error",
@@ -129,7 +159,12 @@ def start_run_async(*, run_id: int, samples: list[dict], adapter: BaseAdapter) -
 
 
 def start_case_retry_async(
-    *, run_id: int, source_result: dict, adapter: BaseAdapter, analysis_threshold: float = 0.5
+    *,
+    run_id: int,
+    source_result: dict,
+    adapter: BaseAdapter,
+    analysis_threshold: float = 0.5,
+    intermediate_config: dict | None = None,
 ) -> int:
     """创建一条不可覆盖原结果的单题复测记录，并在后台执行。"""
     db = DatabaseService()
@@ -146,7 +181,7 @@ def start_case_retry_async(
     def _retry() -> None:
         retry_db = DatabaseService()
         try:
-            evaluated = _evaluate_case(source_result, adapter)
+            evaluated = _evaluate_case(source_result, adapter, intermediate_config)
         except Exception as exc:  # noqa: BLE001
             evaluated = {
                 "status": "error",

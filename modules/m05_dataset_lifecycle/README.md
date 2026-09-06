@@ -76,7 +76,7 @@
 | 需求编号 | 需求 | 当前状态 |
 |---|---|---|
 | FR-DS-SRC-001 | 直接上传评测集（单轮模板 `q/a/evidence/dimension`，`evidence` 不填标记"无证据样本"）→ 格式校验 → 质量评估 → 入库 | 已实现（`services/uploaded_set.py` + POST /api/eval-sets/upload） |
-| FR-DS-SRC-002 | 多轮评测集模板（`session_id` + `turns[]`，`key_turn` 类型 `memory`/`coherence`，`depends_on_turns`，最终轮 `a` 必填） | 已实现字段校验；完整评分（memory/coherence）阶段 2 |
+| FR-DS-SRC-002 | 多轮评测集模板（`session_id` + `turns[]`，`key_turn` 类型 `memory`/`coherence`，`depends_on_turns`，最终轮 `a` 必填） | 已实现字段校验；m08 第一版按固定历史 + 最终轮标准答案做精确/语义初筛，完整评分（memory/coherence）阶段 2 |
 | FR-DS-SRC-003 | 评分口径（运行侧配置）：短答案规范化精确匹配；长答案语义相似度 + 固定校准集 | 已实现（`services/scoring.py`，m08 评测时使用） |
 | FR-DS-SRC-004 | 公共评测集库：组织方预置、用户只查看与选择使用、不开放共享入库；条目经质量评估与治理审核、版本化；维度体系可配置、暂不写死 | 已实现（`services/public_set.py` + /api/public-sets、/api/dimensions） |
 | FR-DS-SRC-005 | Agent 评测前评测集组合选择：指定单个评测集 / 勾选公共库维度 / 多来源合并成临时标准化评测集 | 已实现（`services/composition.py` + /api/compositions） |
@@ -207,6 +207,8 @@
 ### 3.5 评测集组合选择与三类来源统一管理（BRD V1.3 §8.22，已实现）
 
 Agent 评测前（自动运行阶段）用户可选择：指定单个评测集、勾选公共评测集库维度、或合并多来源（文档生成 / 上传 / 公共库）形成**临时标准化评测集**；组合结果作为评测运行配置记录、版本化并参与审计。三类来源与组合选择均已实现（见 §8.22 表），组合解析结果直接作为 m08 EvaluationRun 的输入。
+
+多轮评测的最小入口仍然是一个已经存在的标准答案评测集，而不是先从错误记录反推样本：运行时按 `turns[]` 顺序发送前置对话，使用最终轮标准答案与目标回复做初筛；只有失败或不确定样本才需要保留并展示实际前置上下文进行错误分析。`key_turn`、`turn_type`、`depends_on_turns` 可作为高级标注，但不作为最小运行前置条件。
 
 实现：`services/composition.py` 提供 `create_composition`（组合校验 + 审计）与 `resolve_composition`（组合解析为统一运行输入，供 m08 EvaluationRun 消费）；来源支持 `doc_generated`（冻结版本 eval_case）/ `uploaded`（上传评测集）/ `public`（公共库），公共库可按维度勾选过滤。
 

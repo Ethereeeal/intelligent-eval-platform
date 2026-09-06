@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import logging
 import secrets
 import threading
@@ -73,20 +72,19 @@ def _prune_expired_confirm_tokens() -> None:
         _confirm_tokens.pop(token, None)
 
 
-def _issue_confirm_token(*, document_id: int, folder_path: str | None, file_hash: str) -> str:
-    """生成一次性确认凭据：绑定目标文档 + 新文件哈希，防确认时偷换文件。"""
+def _issue_confirm_token(*, document_id: int, folder_path: str | None) -> str:
+    """生成一次性确认凭据：绑定目标文档和目录，不使用内容哈希。"""
     _prune_expired_confirm_tokens()
     token = secrets.token_hex(16)
     _confirm_tokens[token] = {
         "document_id": document_id,
         "folder_path": folder_path,
-        "file_hash": file_hash,
         "created_at": time.time(),
     }
     return token
 
 
-def _validate_confirm_token(token: str, document_id: int, file_hash: str) -> str | None:
+def _validate_confirm_token(token: str, document_id: int) -> str | None:
     """校验并消费确认凭据；失败返回原因，成功返回 None（一次性）。"""
     entry = _confirm_tokens.pop(token, None)
     if entry is None:
@@ -95,8 +93,6 @@ def _validate_confirm_token(token: str, document_id: int, file_hash: str) -> str
         return "确认凭据已过期，请重新上传"
     if entry["document_id"] != document_id:
         return "确认目标文档已变化，请重新上传"
-    if entry["file_hash"] != file_hash:
-        return "确认内容与上传内容不一致，请重新上传"
     return None
 
 
@@ -105,12 +101,9 @@ def precheck_upload(
     folder_path: str | None = Form(None),
     file: UploadFile = File(...),
 ):
-    """上传预检（只读、不落盘）：计算哈希并判定 ok / conflict / duplicate / 弱提示。
+    """上传预检（只读、不落盘）：仅校验文件类型和大小。
 
-    - ok：无冲突，可直接上传；
-    - duplicate：内容已存在（全库哈希命中），应跳过；
-    - conflict：目标文件夹存在同名且内容不同，需用户确认后带 confirm_token 走 reupload；
-    - ok + same_name_elsewhere：其他位置有同名文件（弱提示，不拦截）。
+    文档允许重复上传，也允许同目录同名文件；文档唯一性不在本接口判定。
     """
     content = _read_upload_with_limit(file)
     file_name = repair_legacy_filename(file.filename or "upload.bin") or "upload.bin"
@@ -126,37 +119,6 @@ def precheck_upload(
             detail=f"文件大小 {len(content)} 超过上限 {settings.max_file_size} 字节",
         )
 
-    file_hash = hashlib.sha256(content).hexdigest()
-    fp = (folder_path or "").strip("/")
-    db = pipeline_service.database
-
-    dup_id = db.find_by_hash(file_hash)
-    if dup_id is not None:
-        return {"status": "duplicate", "existing_document_id": dup_id}
-
-    same = db.find_document_by_name_in_folder(file_name, fp)
-    if same is not None and same["file_hash"] != file_hash:
-        token = _issue_confirm_token(
-            document_id=same["document_id"],
-            folder_path=same.get("folder_path"),
-            file_hash=file_hash,
-        )
-        return {
-            "status": "conflict",
-            "existing_document_id": same["document_id"],
-            "existing_name": same["file_name"],
-            "existing_folder": same.get("folder_path") or "文档库",
-            "existing_upload_time": same.get("upload_time"),
-            "existing_size": same.get("file_size"),
-            "confirm_token": token,
-        }
-
-    elsewhere = [
-        item for item in db.find_documents_by_name(file_name)
-        if (item["folder_path"] or "") != fp
-    ]
-    if elsewhere:
-        return {"status": "ok", "same_name_elsewhere": elsewhere}
     return {"status": "ok"}
 
 
@@ -274,8 +236,7 @@ def reupload_document(
     content = _read_upload_with_limit(file)
     file_name = repair_legacy_filename(file.filename) if file.filename else None
     if confirm_token:
-        file_hash = hashlib.sha256(content).hexdigest()
-        token_error = _validate_confirm_token(confirm_token, document_id, file_hash)
+        token_error = _validate_confirm_token(confirm_token, document_id)
         if token_error:
             raise HTTPException(status_code=400, detail=token_error)
         try:
@@ -284,7 +245,7 @@ def reupload_document(
                 target_type="document",
                 target_id=str(document_id),
                 actor="web",
-                detail={"file_hash": file_hash, "file_name": file_name},
+                detail={"file_name": file_name},
             )
         except Exception:  # noqa: BLE001 — 审计失败不阻断覆盖确认
             logger.warning("审计写入失败 document.overwrite_confirmed id=%s", document_id)

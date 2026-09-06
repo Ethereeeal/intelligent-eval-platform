@@ -28,7 +28,7 @@
 
 | 服务 | 职责 | 对应 BRD |
 |---|---|---|
-| `services/uploaded_set.py` | 上传评测集：单轮模板（JSON/JSONL 先支持，Excel/CSV 预留可插拔）、格式校验、质量评估、入库状态机；多轮字段保留不启用 | FR-DS-SRC-001/002/003/006 |
+| `services/uploaded_set.py` | 上传评测集：单轮模板（JSON/JSONL 先支持，Excel/CSV 预留可插拔）、格式校验、质量评估、入库状态机；多轮 `turns[]` 字段保留，第一版运行支持固定历史 + 最终轮答案比对 | FR-DS-SRC-001/002/003/006 |
 | `services/public_set.py` | 公共评测集库：组织方预置、维度可配置、版本化（新增/更新/停用留痕） | FR-DS-SRC-004 |
 | `services/composition.py` | 评测集组合选择：指定单个/勾选维度/多来源合并 → 临时标准化评测集（EvalSetComposition） | FR-DS-SRC-005 |
 | `services/scoring.py` | 评分口径（运行侧配置）：短答案规范化精确匹配、长答案语义相似度 + 固定校准集 | FR-DS-SRC-003 |
@@ -67,7 +67,7 @@ modules/m08_auto_evaluation/
 | 表 | 关键字段 | 说明 |
 |---|---|---|
 | `uploaded_eval_set` | set_id、name、template_type(single/multi)、source_file、dimension、review_status、quality_snapshot(JSON)、created_at | 上传评测集主记录 |
-| `uploaded_eval_case` | case_id、set_id(FK)、q、a、evidence、dimension、session_id、turns(JSON)、key_turn、depends_on_turns(JSON)、no_evidence、quality(JSON) | 上传样本（单轮/多轮字段合一；多轮字段保留，Demo 不启用） |
+| `uploaded_eval_case` | case_id、set_id(FK)、q、a、evidence、dimension、session_id、turns(JSON)、key_turn、depends_on_turns(JSON)、no_evidence、quality(JSON) | 上传样本（单轮/多轮字段合一；最小运行只要求 turns 与最终轮标准答案，高级字段可选） |
 | `public_eval_set` | set_id、name、version、dimensions(JSON)、review_status、quality_snapshot(JSON)、status(active/retired) | 公共评测集库条目（版本化） |
 | `eval_set_dimension` | dimension_id、code、name、description、enabled | 可配置维度体系（FR-DS-SRC-004） |
 | `eval_set_composition` | composition_id、name、items(JSON: [{source, set_id/version_id, dimension}])、created_at | Agent 评测前组合（FR-DS-SRC-005） |
@@ -137,11 +137,12 @@ modules/m08_auto_evaluation/
 - 公共评测集库：占位条目演示（组织方预置、用户只读选择），维度体系可配置、待首批数据固化；
 - 评测集组合选择：指定单个 / 勾选公共库维度 / 多来源合并；
 - Agent 评测：mock + OpenAI 兼容双适配器（决策 4），批量运行 + 基础指标（检索/答案/拒答/耗时）+ D1–D9 基础归因；
+- 多轮最小闭环：从已有标准答案评测集开始，按 turns 顺序发送固定历史，先对最终轮做现有精确/语义评分；失败或不确定样本再保留前置对话供错误分析。该流程不依赖 Langfuse，也不要求 `key_turn` 等高级字段；
 - 业务需求书→测试功能点（§8.20）：轻量 EIU 提取，不生成标准答案。
 
 **延后（阶段 2+）：**
 
-- 多轮评测集（memory/coherence）完整评分（决策 5：Demo 不开发，但前端/后端均保留功能点与字段占位，后续优化实现）；语义评分固定校准集（待 §18 确认）；
+- 多轮评测集按轮完整计算 `memory/coherence` 和正式 Judge 校准（当前已持久化 `input_turns` / `turn_trace`，最小固定历史 + 最终轮评分先行，完整指标后续实现）；语义评分固定校准集（待 §18 确认）；
 - 治理审核 Skill 全量 S0 规则；公共库维度体系固化；ErrorBook 诊断视图深化。
 
 ---
@@ -164,4 +165,4 @@ modules/m08_auto_evaluation/
 | 2 | 上传样本落表 | **独立 `uploaded_eval_case` 表**（不复用 generated_case） |
 | 3 | Agent 评测 Demo 落点 | **Demo 必做**（运行 + 基础指标 + D1–D9 归因） |
 | 4 | 待测系统形态 | **mock + OpenAI 兼容双适配器（A+B）**；真实系统经适配器注册表后续扩展 |
-| 5 | 格式与多轮 | 文件格式**先支持 JSON/JSONL**，Excel/CSV 预留可插拔；**多轮 Demo 不开发，前端/后端保留功能点与字段占位**（作为后续优化项，见 §6）；**公共评测集库占位演示**（维度可配置，首批数据待确认） |
+| 5 | 格式与多轮 | 文件格式**先支持 JSON/JSONL**，Excel/CSV 预留可插拔；**多轮第一版采用已有标准答案集 + 固定历史 + 最终轮精确/语义初筛，失败样本再做上下文分析**，`key_turn` 等高级字段可选；逐轮 `memory/coherence` 与完整上下文持久化后续实现；**公共评测集库占位演示**（维度可配置，首批数据待确认） |

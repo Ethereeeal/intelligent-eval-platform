@@ -70,6 +70,10 @@ def _eval_case_to_sample(case: dict, source: str) -> dict:
         "source": source,
         "turns": None,
         "session_id": None,
+        "intent_label": case.get("intent_label") or case.get("intent_id"),
+        "rewrite_reference": case.get("rewrite_reference"),
+        "reference_contexts": case.get("reference_contexts") or case.get("evidence"),
+        "intermediate_reference": case.get("intermediate_reference") or case.get("node_contract"),
     }
 
 
@@ -101,6 +105,10 @@ def resolve_composition(db: DatabaseService, composition_id: int) -> list[dict]:
                         "source": source,
                         "session_id": case.get("session_id"),
                         "turns": case.get("turns"),
+                        "intent_label": case.get("intent_label") or case.get("intent_id"),
+                        "rewrite_reference": case.get("rewrite_reference"),
+                        "reference_contexts": case.get("reference_contexts") or case.get("evidence"),
+                        "intermediate_reference": case.get("intermediate_reference") or case.get("node_contract"),
                     }
                 )
         elif source == "public":
@@ -116,6 +124,10 @@ def resolve_composition(db: DatabaseService, composition_id: int) -> list[dict]:
                         "source": source,
                         "session_id": None,
                         "turns": None,
+                        "intent_label": case.get("intent_label") or case.get("intent_id"),
+                        "rewrite_reference": case.get("rewrite_reference"),
+                        "reference_contexts": case.get("reference_contexts") or case.get("evidence"),
+                        "intermediate_reference": case.get("intermediate_reference") or case.get("node_contract"),
                     }
                 )
     # 按组合项逐项过滤：item.dimension 非空时只保留该来源 + 该维度的样本；

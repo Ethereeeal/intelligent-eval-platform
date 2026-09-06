@@ -14,6 +14,7 @@
 """
 from __future__ import annotations
 
+from datetime import datetime
 from io import BytesIO
 from urllib.parse import quote
 
@@ -26,6 +27,7 @@ from openpyxl.utils import get_column_letter
 from modules.m05_dataset_lifecycle.services.composition import resolve_composition
 from modules.m08_auto_evaluation.schemas import (
     AdapterTestRequest,
+    ContextAnalysisRequest,
     ErrorBookUpdateRequest,
     EvaluationCaseRetryRequest,
     EvaluationExportRequest,
@@ -36,6 +38,7 @@ from modules.m08_auto_evaluation.services.adapter import (
     AdapterError,
     get_adapter,
 )
+from modules.m08_auto_evaluation.services.intermediate_metrics import normalize_intermediate_config
 from modules.m08_auto_evaluation.services.metrics import aggregate
 from modules.m08_auto_evaluation.services.optimization import cluster_error_book
 from modules.m08_auto_evaluation.services.runner import start_case_retry_async, start_run_async
@@ -66,6 +69,7 @@ def create_evaluation_run(payload: EvaluationRunRequest):
     try:
         samples = resolve_composition(_db, payload.composition_id)
         adapter = get_adapter(payload.adapter, payload.adapter_config)
+        intermediate_config = normalize_intermediate_config(payload.intermediate_eval.model_dump())
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except AdapterError as exc:
@@ -77,8 +81,14 @@ def create_evaluation_run(payload: EvaluationRunRequest):
         name=payload.name,
         adapter=payload.adapter,
         adapter_config=_sanitize_adapter_config(payload.adapter_config),
+        intermediate_eval=intermediate_config,
     )
-    start_run_async(run_id=run_id, samples=samples, adapter=adapter)
+    start_run_async(
+        run_id=run_id,
+        samples=samples,
+        adapter=adapter,
+        intermediate_config=intermediate_config,
+    )
     try:
         _db.save_audit(
             operation="evaluation_run.create",
@@ -89,6 +99,7 @@ def create_evaluation_run(payload: EvaluationRunRequest):
                 "composition_id": payload.composition_id,
                 "adapter": payload.adapter,
                 "total": len(samples),
+                "intermediate_eval": intermediate_config,
             },
         )
     except Exception:  # noqa: BLE001 — 审计失败不阻断
@@ -145,12 +156,12 @@ def _get_run_or_404(run_id: int) -> dict:
 def get_evaluation_run(run_id: int):
     run = _get_run_or_404(run_id)
     results = _db.list_evaluation_results(run_id)
-    return {"run": run, "summary": aggregate(results)}
+    return {"run": run, "summary": aggregate(results, run.get("intermediate_eval"))}
 
 
 @evaluation_router.get("/evaluation-runs/{run_id}/results")
 def evaluation_run_results(run_id: int):
-    _get_run_or_404(run_id)
+    run = _get_run_or_404(run_id)
     results = _db.list_evaluation_results(run_id)
     issues = _db.list_error_book(run_id=run_id)
     by_result = {item.get("result_id"): item for item in issues if item.get("result_id")}
@@ -160,7 +171,7 @@ def evaluation_run_results(run_id: int):
             by_case.setdefault(issue["case_uid"], issue)
     for item in results:
         item["error_book"] = by_result.get(item["result_id"]) or by_case.get(item.get("case_uid"))
-    return {"results": results, "summary": aggregate(results)}
+    return {"results": results, "summary": aggregate(results, run.get("intermediate_eval"))}
 
 
 @evaluation_router.get("/evaluation-results/{result_id}/attempts")
@@ -168,6 +179,37 @@ def evaluation_result_attempts(result_id: int):
     if _db.get_evaluation_result(result_id) is None:
         raise HTTPException(status_code=404, detail="evaluation result not found")
     return {"attempts": _db.list_evaluation_result_attempts(result_id)}
+
+
+@evaluation_router.patch("/evaluation-results/{result_id}/context-analysis")
+def update_context_analysis(result_id: int, payload: ContextAnalysisRequest):
+    """保存失败/不确定多轮样本的上下文分析，不覆盖原始评分。"""
+    result = _db.get_evaluation_result(result_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="evaluation result not found")
+    if not result.get("turn_trace"):
+        raise HTTPException(status_code=400, detail="该结果没有可分析的多轮请求上下文")
+    if not payload.note.strip():
+        raise HTTPException(status_code=400, detail="上下文分析备注不能为空")
+    if result.get("status") == "passed" and (result.get("scores") or {}).get("score") is not None:
+        raise HTTPException(status_code=400, detail="通过样本无需提交上下文错误分析")
+    analysis = {
+        "category": payload.category,
+        "note": payload.note.strip(),
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    updated = _db.update_evaluation_case_result(result_id, context_analysis=analysis)
+    issue = _db.get_error_book_item_for_result(
+        result_id,
+        run_id=result.get("run_id"),
+        case_uid=result.get("case_uid"),
+    )
+    if issue:
+        _db.update_error_book_item(
+            issue["item_id"],
+            root_cause=f"{payload.category}: {payload.note.strip()}",
+        )
+    return updated
 
 
 @evaluation_router.post("/evaluation-results/{result_id}/retry", status_code=202)
@@ -189,6 +231,7 @@ def retry_evaluation_result(result_id: int, payload: EvaluationCaseRetryRequest)
         source_result=result,
         adapter=adapter,
         analysis_threshold=payload.analysis_threshold,
+        intermediate_config=run.get("intermediate_eval"),
     )
     return {"result_id": result_id, "attempt_result_id": attempt_id, "status": "pending"}
 
@@ -305,8 +348,14 @@ def retry_evaluation_run(run_id: int):
         name=(run.get("name") or "评测运行") + "（重跑）",
         adapter=run["adapter"],
         adapter_config=_sanitize_adapter_config(run.get("adapter_config")),
+        intermediate_eval=run.get("intermediate_eval"),
     )
-    start_run_async(run_id=new_run_id, samples=samples, adapter=adapter)
+    start_run_async(
+        run_id=new_run_id,
+        samples=samples,
+        adapter=adapter,
+        intermediate_config=run.get("intermediate_eval"),
+    )
     return {"run_id": new_run_id, "status": "running", "total": len(samples)}
 
 

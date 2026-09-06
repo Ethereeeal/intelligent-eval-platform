@@ -5,7 +5,8 @@
 
 统一返回结构：
   {"answer": str|None, "turn_outputs": list|None, "retrieved": list|None,
-   "context": str|None, "usage": {"time_ms","tokens","cost"}, "error": str|None}
+   "context": str|None, "turn_trace": list|None,
+   "usage": {"time_ms","tokens","cost"}, "error": str|None}
 
 retrieved 为 None 表示待测系统未返回检索轨迹 → 运行报告标记"不可诊断检索层"。
 """
@@ -78,9 +79,29 @@ class MockAdapter(BaseAdapter):
         gold_answer: str | None = None,
         extra: dict | None = None,
     ) -> dict:
+        history: list[dict] = []
+        outputs: list[str] = []
+        trace: list[dict] = []
+        for index, turn in enumerate(turns):
+            if not isinstance(turn, dict):
+                continue
+            question = str(turn.get("q") or "")
+            history.append({"role": "user", "content": question})
+            request_messages = [dict(message) for message in history]
+            history.append({"role": "assistant", "content": self.reply})
+            outputs.append(self.reply)
+            trace.append({
+                "turn_index": index,
+                "question": question,
+                "expected_answer": turn.get("a"),
+                "actual_answer": self.reply,
+                "agent_called": True,
+                "request_messages": request_messages,
+            })
         return {
-            "answer": self.reply,
-            "turn_outputs": [self.reply for _ in turns],
+            "answer": self.reply if outputs else "",
+            "turn_outputs": outputs,
+            "turn_trace": trace,
             **self._base(),
         }
 
@@ -168,27 +189,50 @@ class OpenAiCompatibleAdapter(BaseAdapter):
         try:
             messages: list[dict] = []
             outputs: list[str] = []
+            trace: list[dict] = []
             total_elapsed_ms = 0
             total_tokens = 0
             for index, turn in enumerate(turns):
                 if not isinstance(turn, dict):
                     continue
-                messages.append({"role": "user", "content": str(turn.get("q") or "")})
+                question = str(turn.get("q") or "")
+                messages.append({"role": "user", "content": question})
                 is_last = index == len(turns) - 1
                 if not is_last and turn.get("key_turn") is None and turn.get("a"):
                     # 中间非关键轮：注入已给历史答案（memory/coherence 验证依赖前置信息）；
                     # 关键轮（key_turn）与最终轮必须由模型回答
-                    messages.append({"role": "assistant", "content": str(turn.get("a"))})
+                    expected = str(turn.get("a"))
+                    request_messages = [dict(message) for message in messages]
+                    messages.append({"role": "assistant", "content": expected})
+                    trace.append({
+                        "turn_index": index,
+                        "question": question,
+                        "expected_answer": turn.get("a"),
+                        "actual_answer": expected,
+                        "agent_called": False,
+                        "request_messages": request_messages,
+                        "history_source": "standard_answer",
+                    })
                 else:
+                    request_messages = [dict(message) for message in messages]
                     content, elapsed, tokens = self._chat(messages)
                     total_elapsed_ms += elapsed
                     total_tokens += tokens
                     outputs.append(content)
                     messages.append({"role": "assistant", "content": content})
+                    trace.append({
+                        "turn_index": index,
+                        "question": question,
+                        "expected_answer": turn.get("a"),
+                        "actual_answer": content,
+                        "agent_called": True,
+                        "request_messages": request_messages,
+                    })
             final = outputs[-1] if outputs else ""
             return {
                 "answer": final,
                 "turn_outputs": outputs,
+                "turn_trace": trace,
                 "retrieved": None,
                 "context": None,
                 "usage": {
@@ -198,12 +242,25 @@ class OpenAiCompatibleAdapter(BaseAdapter):
                 },
                 "error": None,
             }
-        except AdapterError:
-            raise
+        except AdapterError as exc:
+            return {
+                "answer": None,
+                "turn_outputs": outputs if "outputs" in locals() else None,
+                "turn_trace": trace if "trace" in locals() else None,
+                "retrieved": None,
+                "context": None,
+                "usage": {
+                    "time_ms": total_elapsed_ms if "total_elapsed_ms" in locals() else 0,
+                    "tokens": total_tokens if "total_tokens" in locals() else 0,
+                    "cost": 0.0,
+                },
+                "error": str(exc),
+            }
         except Exception as exc:  # noqa: BLE001
             return {
                 "answer": None,
                 "turn_outputs": None,
+                "turn_trace": trace if "trace" in locals() else None,
                 "retrieved": None,
                 "context": None,
                 "usage": {"time_ms": 0, "tokens": 0, "cost": 0.0},
@@ -223,6 +280,8 @@ class HttpAdapter(BaseAdapter):
         self.headers = cfg.get("headers") or {}
         self.body_template = cfg.get("body_template") or '{"question":"{{question}}"}'
         self.answer_path = str(cfg.get("answer_path") or "answer").strip()
+        self.retrieved_path = str(cfg.get("retrieved_path") or "").strip()
+        self.node_outputs_path = str(cfg.get("node_outputs_path") or "").strip()
         self.timeout = min(max(int(cfg.get("timeout_seconds") or 60), 1), 120)
         if not self.url.startswith(("http://", "https://")):
             raise AdapterError("通用 HTTP 请求地址必须以 http:// 或 https:// 开头")
@@ -232,22 +291,34 @@ class HttpAdapter(BaseAdapter):
             raise AdapterError("请求头必须为键值对象")
 
     @staticmethod
-    def _resolve_path(payload: object, path: str) -> str:
+    def _resolve_value(payload: object, path: str) -> object:
         value = payload
         for key in path.removeprefix("$").strip(".").split("."):
             if key:
                 if not isinstance(value, dict) or key not in value:
                     raise AdapterError(f"响应中未找到回答字段：{path}")
                 value = value[key]
+        return value
+
+    @classmethod
+    def _resolve_path(cls, payload: object, path: str) -> str:
+        value = cls._resolve_value(payload, path)
         return json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else str(value or "")
 
-    def _call(self, question: str) -> dict:
+    def _call(self, question: str, *, messages: list[dict] | None = None) -> dict:
         headers = {str(k): str(v) for k, v in self.headers.items() if str(k).strip()}
         url, data = self.url, None
+        request_messages = messages or [{"role": "user", "content": question}]
         if self.method == "GET":
-            url += ("&" if "?" in url else "?") + "question=" + quote(question)
+            query = "question=" + quote(question)
+            query += "&messages=" + quote(json.dumps(request_messages, ensure_ascii=False))
+            url += ("&" if "?" in url else "?") + query
         else:
-            data = str(self.body_template).replace("{{question}}", question).encode("utf-8")
+            body = str(self.body_template).replace("{{question}}", question)
+            body = body.replace(
+                "{{messages}}", json.dumps(request_messages, ensure_ascii=False)
+            )
+            data = body.encode("utf-8")
             headers.setdefault("Content-Type", "application/json")
         started = time.time()
         try:
@@ -257,25 +328,76 @@ class HttpAdapter(BaseAdapter):
             raise AdapterError(f"目标接口返回 HTTP {exc.code}") from exc
         except (URLError, TimeoutError, json.JSONDecodeError) as exc:
             raise AdapterError(f"目标接口调用失败：{exc}") from exc
-        return {"answer": self._resolve_path(payload, self.answer_path), "turn_outputs": None, "retrieved": None,
-                "context": None, "usage": {"time_ms": int((time.time() - started) * 1000), "tokens": 0, "cost": 0.0}, "error": None}
+        retrieved = self._resolve_value(payload, self.retrieved_path) if self.retrieved_path else None
+        node_outputs = self._resolve_value(payload, self.node_outputs_path) if self.node_outputs_path else None
+        return {
+            "answer": self._resolve_path(payload, self.answer_path),
+            "turn_outputs": None,
+            "retrieved": retrieved,
+            "node_outputs": node_outputs,
+            "context": None,
+            "usage": {"time_ms": int((time.time() - started) * 1000), "tokens": 0, "cost": 0.0},
+            "error": None,
+        }
 
     def run_single(self, question: str, *, gold_answer: str | None = None, extra: dict | None = None) -> dict:
         try:
             return self._call(question)
         except AdapterError as exc:
             return {"answer": None, "turn_outputs": None, "retrieved": None, "context": None,
-                    "usage": {"time_ms": 0, "tokens": 0, "cost": 0.0}, "error": str(exc)}
+                    "turn_trace": None, "usage": {"time_ms": 0, "tokens": 0, "cost": 0.0}, "error": str(exc)}
 
     def run_multi(self, turns: list[dict], *, gold_answer: str | None = None, extra: dict | None = None) -> dict:
-        outputs = []
-        for turn in turns:
-            result = self.run_single(str((turn or {}).get("q") or ""))
+        outputs: list[str] = []
+        trace: list[dict] = []
+        history: list[dict] = []
+        total_elapsed_ms = 0
+        last_retrieved = None
+        last_node_outputs = None
+        for index, turn in enumerate(turns):
+            if not isinstance(turn, dict):
+                continue
+            question = str(turn.get("q") or "")
+            history.append({"role": "user", "content": question})
+            request_messages = [dict(message) for message in history]
+            try:
+                result = self._call(question, messages=request_messages)
+            except AdapterError as exc:
+                return {
+                    "answer": None,
+                    "turn_outputs": outputs,
+                    "turn_trace": trace,
+                    "retrieved": None,
+                    "context": None,
+                    "usage": {"time_ms": total_elapsed_ms, "tokens": 0, "cost": 0.0},
+                    "error": str(exc),
+                }
             if result.get("error"):
-                return result
-            outputs.append(result["answer"])
-        return {"answer": outputs[-1] if outputs else "", "turn_outputs": outputs, "retrieved": None,
-                "context": None, "usage": {"time_ms": 0, "tokens": 0, "cost": 0.0}, "error": None}
+                return {**result, "turn_outputs": outputs, "turn_trace": trace}
+            answer = result.get("answer") or ""
+            outputs.append(answer)
+            last_retrieved = result.get("retrieved")
+            last_node_outputs = result.get("node_outputs")
+            total_elapsed_ms += result.get("usage", {}).get("time_ms") or 0
+            trace.append({
+                "turn_index": index,
+                "question": question,
+                "expected_answer": turn.get("a"),
+                "actual_answer": answer,
+                "agent_called": True,
+                "request_messages": request_messages,
+            })
+            history.append({"role": "assistant", "content": answer})
+        return {
+            "answer": outputs[-1] if outputs else "",
+            "turn_outputs": outputs,
+            "turn_trace": trace,
+            "retrieved": last_retrieved,
+            "node_outputs": last_node_outputs,
+            "context": None,
+            "usage": {"time_ms": total_elapsed_ms, "tokens": 0, "cost": 0.0},
+            "error": None,
+        }
 
 
 ADAPTER_REGISTRY: dict[str, type[BaseAdapter]] = {

@@ -6,6 +6,13 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
+class IntermediateEvalConfig(BaseModel):
+    """运行级中间评测配置；节点可选，节点内指标固定。"""
+
+    enabled: bool = False
+    nodes: list[Literal["rewrite", "intent", "rag"]] = Field(default_factory=list)
+
+
 class EvaluationRunRequest(BaseModel):
     """发起一次批量评测运行（组合作为输入）。"""
 
@@ -13,6 +20,7 @@ class EvaluationRunRequest(BaseModel):
     name: str | None = None
     adapter: str = "mock"
     adapter_config: dict | None = None
+    intermediate_eval: IntermediateEvalConfig = Field(default_factory=IntermediateEvalConfig)
 
 
 class EvaluationExportRequest(BaseModel):
@@ -34,6 +42,19 @@ class EvaluationCaseRetryRequest(BaseModel):
 
     adapter_config: dict | None = None
     analysis_threshold: float = Field(default=0.5, ge=0, le=1)
+
+
+class ContextAnalysisRequest(BaseModel):
+    """失败或不确定多轮样本的人工上下文分析。"""
+
+    category: Literal[
+        "memory_failure",
+        "contradiction",
+        "constraint_violation",
+        "answer_error",
+        "uncertain",
+    ]
+    note: str = Field(min_length=1, max_length=2000)
 
 
 class AdapterTestRequest(BaseModel):

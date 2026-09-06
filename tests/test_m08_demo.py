@@ -80,6 +80,37 @@ class M08DemoTests(unittest.TestCase):
             ]
         )
         self.assertEqual(result["usage"], {"time_ms": 24, "tokens": 14, "cost": 0.0})
+        self.assertEqual(len(result["turn_trace"]), 2)
+        self.assertEqual(result["turn_trace"][0]["request_messages"], [{"role": "user", "content": "first"}])
+        self.assertEqual(
+            result["turn_trace"][1]["request_messages"],
+            [
+                {"role": "user", "content": "first"},
+                {"role": "assistant", "content": "answer-1"},
+                {"role": "user", "content": "last"},
+            ],
+        )
+
+    def test_context_analysis_is_saved_without_overwriting_score(self):
+        source = {
+            "result_id": 11,
+            "run_id": 4,
+            "case_uid": "multi-11",
+            "status": "failed",
+            "scores": {"score": 0.1},
+            "turn_trace": [{"turn_index": 0, "request_messages": []}],
+        }
+        updated = {**source, "context_analysis": {"category": "memory_failure", "note": "忘记前文限制"}}
+        with patch.object(api._db, "get_evaluation_result", return_value=source), patch.object(
+            api._db, "update_evaluation_case_result", return_value=updated
+        ) as save, patch.object(api._db, "get_error_book_item_for_result", return_value=None):
+            result = api.update_context_analysis(
+                11,
+                api.ContextAnalysisRequest(category="memory_failure", note="忘记前文限制"),
+            )
+        self.assertEqual(result["scores"], {"score": 0.1})
+        self.assertEqual(result["context_analysis"]["category"], "memory_failure")
+        self.assertEqual(save.call_args.kwargs["context_analysis"]["note"], "忘记前文限制")
 
     def test_black_box_failure_is_not_assigned_a_retrieval_or_generation_cause(self):
         diagnosis = diagnose(

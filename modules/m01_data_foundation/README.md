@@ -12,8 +12,8 @@
 | 需求编号 | 需求 |
 |---|---|
 | FR-CORPUS-001 | 创建隔离的语料库（当前实现按「文档库 + 文件夹」组织，无 corpus 表，见 §2.1） |
-| FR-CORPUS-002 | 文件接入支持 PDF/DOCX/TXT/MD/CSV/XLSX；保存文件名/哈希/版本/权威等级 |
-| FR-CORPUS-004 | 文档更新（content_hash 变化）自动触发重新解析与 EIU 重抽，并显示更新进度，完成后提示"已更新完成"（已实现，见 §2.8） |
+| FR-CORPUS-002 | 文件接入支持 PDF/DOCX/TXT/MD/CSV/XLSX；保存文件名/类型/大小/目录和权威等级 |
+| FR-CORPUS-004 | 显式重传文档自动触发重新解析与 EIU 重抽，并显示更新进度，完成后提示"已更新完成"（已实现，见 §2.8） |
 | FR-CORPUS-003 | 文档安全预处理：病毒检测、敏感信息识别、提示注入识别、外发模型标记 |
 
 ### 8.2 结构化解析与可回溯定位
@@ -67,11 +67,10 @@ DELETE /api/folders?path=...    → 删除文件夹（递归子孙；其下文�
 ```
 POST /api/documents/upload
   → multipart/form-data: folder_path + purpose + upload_user + file
-  → 计算 SHA256 → 查重 → 存本地 → 写入 document 表 → 触发解析 → 返回 document_id
+  → 校验文件 → 存本地 → 写入 document 表 → 触发解析 → 返回 document_id
 
-POST /api/documents/precheck（只读预检，混合上传用）
-  → 返回 ok（可直接上传）/ duplicate（内容已存在，跳过）/ conflict（同名覆盖，签发 confirm_token）/
-    ok + same_name_elsewhere（其他位置同名，弱提示）
+POST /api/documents/precheck（只读文件校验）
+  → 返回 ok（文件类型和大小合法）
 ```
 
 **文件存储路径：** `storage/raw/{uuid12}_{original_filename}`（容器内 `/app/storage/raw`，docker 卷 `backend_storage` 持久化；`minio_path` 字段暂存本地绝对路径，MinIO 未接线）
@@ -84,7 +83,7 @@ POST /api/documents/precheck（只读预检，混合上传用）
 | file_name | VARCHAR(255) | |
 | file_type | VARCHAR(64) | PDF/DOCX/TXT/MD/CSV/XLSX |
 | file_size | BIGINT | |
-| file_hash | VARCHAR(128) | SHA256，UNIQUE，去重（相同内容不重复解析） |
+| file_hash | VARCHAR(128) | 历史兼容字段；不再保存内容哈希，不参与文档去重或版本判定 |
 | minio_path | VARCHAR(512) | 本地文件绝对路径（MinIO 接入后改为对象 key） |
 | upload_user | VARCHAR(128) | |
 | document_version | VARCHAR(64) | 覆盖式：文档不版本化，恒为单一版本（预留字段） |
@@ -208,11 +207,11 @@ Demo 阶段不实现完整的 FR-CORPUS-003，仅做：
 
 ### 2.8 文档重传闭环（FR-CORPUS-004，已实现）
 
-当某文档的 **content_hash 发生变化**（覆盖式重传），后端自动完成"重解析 → EIU 重抽 → 版本重建 → 删除旧文档"闭环，并向前端暴露统一进度：
+显式调用重传接口时，后端自动完成"重解析 → EIU 重抽 → 版本重建 → 删除旧文档"闭环，并向前端暴露统一进度；普通上传不会因为内容或文件名重复而拦截。
 
 **触发方式：**
-- 上传预检（`POST /api/documents/precheck`）+ 混合确认：目标文件夹同名且内容不同 → 用户确认后带 `confirm_token` 调 `POST /api/documents/{document_id}/reupload`；
-- 或直接显式调 reupload 接口（不传 token 也可，用于测试/接口调用）。
+- 由调用方明确指定已有文档并调用 `POST /api/documents/{document_id}/reupload`；
+- 普通 `POST /api/documents/upload` 始终创建新的文档记录，即使内容、文件名或目录相同。
 
 **闭环流程（m01 API 编排线程 `_run_reupload_chain`）：**
 
@@ -245,7 +244,7 @@ Demo 阶段不实现完整的 FR-CORPUS-003，仅做：
 | document_id | INT FK | 被更新的文档 |
 | job_type | VARCHAR | doc_update / eiu_extract |
 | status | VARCHAR | pending / running / done / failed |
-| phase | VARCHAR | parsing / eiu_extract / rebuild / unchanged |
+| phase | VARCHAR | parsing / eiu_extract / rebuild |
 | progress | INT | 0–100（整体刻度，见上表） |
 | message | VARCHAR | 阶段说明 / "已更新完成" / 失败原因 |
 | created_at | DATETIME | |
@@ -261,14 +260,14 @@ Demo 阶段不实现完整的 FR-CORPUS-003，仅做：
 | POST | `/api/folders` | 创建文件夹 |
 | PATCH | `/api/folders/move` | 移动/重命名文件夹（联动重写文档/问答对 folder_path） |
 | DELETE | `/api/folders?path=&owner=` | 删除文件夹（递归子孙，文档上移父目录，问答对物理删除） |
-| POST | `/api/documents/precheck` | 上传预检（只读）：ok / duplicate / conflict（签发 confirm_token）/ 弱提示 |
+| POST | `/api/documents/precheck` | 上传预检（只读）：校验文件类型和大小，返回 ok |
 | POST | `/api/documents/upload` | 上传文档，触发解析 |
 | GET | `/api/documents` | 文档列表 |
 | GET | `/api/documents/{document_id}` | 文档详情 |
 | GET | `/api/documents/{document_id}/blocks` | Block 列表（含章节树） |
 | PATCH | `/api/documents/{document_id}/move` | 移动文档到目标目录（重写 folder_path / purpose） |
 | PATCH | `/api/documents/{document_id}/rename` | 重命名文档（仅显示名，不影响落盘文件与问答对） |
-| POST | `/api/documents/{document_id}/reupload` | 上传同文档新版本（content_hash 变化则触发更新） |
+| POST | `/api/documents/{document_id}/reupload` | 显式重传指定文档并触发重解析、EIU 重抽和版本重建 |
 | DELETE | `/api/documents/{document_id}` | 物理删除文档（块 + EIU + 问答对 + 落盘文件） |
 | GET | `/api/jobs/{job_id}` | 查询更新/抽取任务进度与状态 |
 
@@ -277,11 +276,11 @@ Demo 阶段不实现完整的 FR-CORPUS-003，仅做：
 ## 4. Demo 实现清单
 
 - [x] `folder` 表 + 文件夹 CRUD / 移动 / 删除 API（无 corpus，见 §2.1）
-- [x] `document` 表 + 上传 API + 哈希去重 + 上传预检（precheck / confirm_token）
+- [x] `document` 表 + 上传 API + 文件类型/大小预检（文档不做内容或同名去重）
 - [x] `block` 表 + 解析器（TXT/MD/PDF/DOCX/XLSX/CSV）
 - [x] 层级文段构建（标题推断 + parent_block_id + section_path）
 - [x] 解析状态管理 + 错误记录
 - [x] EIU 向量化 + FAISS 索引（`EiuFaissIndex`，EIU 为核心向量化对象；Block 向量已废弃，仅作定位分片）
 - [x] 文件类型白名单 + 大小限制
-- [x] 文档重传闭环（content_hash 变化 → 覆盖式全量重算：重解析 + EIU 重抽 + 版本重建 + 删旧文档，无版本）
+- [x] 文档重传闭环（显式重传 → 覆盖式全量重算：重解析 + EIU 重抽 + 版本重建 + 删旧文档，无哈希版本判定）
 - [x] `doc_update_job` 进度状态机（parsing → eiu_extract → rebuild，进度统一单调）+ 进度查询 API

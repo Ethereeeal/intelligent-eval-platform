@@ -10,6 +10,10 @@ from __future__ import annotations
 from collections import Counter
 
 from modules.m05_dataset_lifecycle.services.scoring import score_answer
+from modules.m08_auto_evaluation.services.intermediate_metrics import (
+    aggregate_intermediate,
+    normalize_intermediate_config,
+)
 
 
 def score_case(sample: dict, result: dict) -> dict:
@@ -54,7 +58,7 @@ def score_case(sample: dict, result: dict) -> dict:
     }
 
 
-def aggregate(results: list[dict]) -> dict:
+def aggregate(results: list[dict], intermediate_config: dict | None = None) -> dict:
     """运行结果汇总：通过率、按难度/维度分组、耗时成本、错误率。"""
     scored = [r for r in results if r.get("scores") and r["scores"].get("score") is not None]
     errors = [r for r in results if r.get("status") == "error"]
@@ -81,6 +85,7 @@ def aggregate(results: list[dict]) -> dict:
         dim_bucket["total"] += 1
         if score is not None and score >= 0.5:
             dim_bucket["passed"] += 1
+    normalized_intermediate = normalize_intermediate_config(intermediate_config)
     return {
         "total": len(results),
         "scored": len(scored),
@@ -94,4 +99,8 @@ def aggregate(results: list[dict]) -> dict:
         "total_latency_ms": total_latency,
         "total_tokens": total_tokens,
         "total_cost": round(total_cost, 4),
+        "intermediate": aggregate_intermediate(
+            results,
+            normalized_intermediate["nodes"],
+        ) if normalized_intermediate["enabled"] else None,
     }

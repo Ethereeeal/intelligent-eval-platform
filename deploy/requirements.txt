@@ -25,6 +25,8 @@ torch>=2.2.0
 
 # LLM（OpenAI 兼容 API，用于 EIU 抽取 / 题目生成）
 openai>=1.30.0
+# RAGAS：中间 RAG 节点固定四指标（Context Precision / Recall / Faithfulness / Answer Relevancy）
+ragas>=0.4.0
 
 # 文档解析（按输入类型选装；当前 parser 仅支持 txt/md）
 PyMuPDF>=1.24.0                  # PDF（政策 / 财报常见），import 名 fitz
