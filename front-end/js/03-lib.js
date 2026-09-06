@@ -46,8 +46,8 @@
         <div class="sec-h mt">版本历史</div>
         <div class="ver-list">${d.versions.map(v => `<div class="ver"><span class="ver-tag">${v.tag}</span><span>${v.note}</span><span class="mut">${v.time}</span></div>`).join("")}</div>
         <div class="sec-h mt kp-sec-h">知识点 · ${d.kp.length} 条<button class="btn ghost sm kp-export-btn" id="dlEIUKp"><i data-lucide="download"></i>导出</button><button class="btn ghost icon-only sm kp-zoom-btn" id="kpFullscreenBtn" title="放大查看"><i data-lucide="maximize"></i></button></div>
-        ${claimSummaryHTML(d)}
-        ${d.kp && d.kp.length ? kpTableHTML(d.kp) : `<p class="muted mt">${isParsing ? "正在解析中..." : "未识别到知识点。"}</p>`}
+        <div data-document-quality="${escapeHTML(docId)}" class="document-quality" aria-live="polite">正在读取文档质量反馈…</div>
+        ${kpTableHTML(d.kp || [])}
       </div>`;
   }
 
@@ -73,12 +73,15 @@
   }
 
   function claimSummaryHTML(d) {
-    const s = d.claimStats || { candidate: (d.kp || []).length, verified: 0, needsReview: 0, rejected: 0, crossBlock: 0 };
+    const items = d.kp || [];
+    const s = { candidate: items.length, verified: items.filter(k => k.routeColor === "green").length,
+      needsReview: items.filter(k => k.routeColor === "yellow").length,
+      rejected: items.filter(k => k.routeColor === "red").length, crossBlock: items.filter(k => k.crossBlock).length };
     return `<div class="claim-summary" aria-label="知识点质量概览">
       <div><b>${s.candidate || 0}</b><span>候选知识点</span></div>
-      <div class="ok"><b>${s.verified || 0}</b><span>已验证，可生成</span></div>
-      <div class="warn"><b>${s.needsReview || 0}</b><span>待复核</span></div>
-      <div><b>${s.rejected || 0}</b><span>已排除</span></div>
+      <button type="button" class="ok" data-kp-filter="green" aria-pressed="true"><b>${s.verified}</b><span>已验证，可生成</span></button>
+      <button type="button" class="warn" data-kp-filter="yellow" aria-pressed="false"><b>${s.needsReview}</b><span>待复核</span></button>
+      <button type="button" class="bad" data-kp-filter="red" aria-pressed="false"><b>${s.rejected}</b><span>已排除</span></button>
       <div><b>${s.crossBlock || 0}</b><span>跨块证据</span></div>
     </div>`;
   }
@@ -91,35 +94,32 @@
     return kpStatusKey(status) === "verified" ? "已通过" : "待复核";
   }
   function kpTableHTML(all) {
-    const pending = all.filter(k => kpStatusKey(k.qualityStatus) !== "verified");
-    const allVerified = all.length > 0 && pending.length === 0;
     return `<div class="kp-review-wrap">
+      ${claimSummaryHTML({ kp: all })}
       <div class="qa-toolbar kp-review-toolbar">
-        <div class="kp-review-note"><i data-lucide="shield-check"></i><span>只有全部知识点复核通过，才能生成评测集</span></div>
-        <div class="qa-toolbar-right"><button class="btn primary sm kp-approve-all" type="button" ${allVerified ? "disabled" : ""}><i data-lucide="check-check"></i><span class="kp-approve-label">${allVerified ? "已全部通过" : "全部通过"}</span></button></div>
+        <div class="kp-review-note"><i data-lucide="shield-check"></i><span data-kp-note>绿色知识点自动参与出题；待复核和已排除项不影响其他知识点生成。</span></div>
       </div>
       <div class="kp-table kp-table-filterable">
       <div class="kp-th">
         <span>知识点<span class="col-filter" data-filter="stmt"><i data-lucide="filter"></i></span><span class="kp-resize" data-resize="0"></span></span>
         <span>验证状态<span class="col-filter" data-filter="status"><i data-lucide="filter"></i></span><span class="kp-resize" data-resize="1"></span></span>
         <span>质量检查<span class="col-filter" data-filter="quality"><i data-lucide="filter"></i></span><span class="kp-resize" data-resize="2"></span></span>
-        <span>优先级<span class="col-filter" data-filter="prio"><i data-lucide="filter"></i></span><span class="kp-resize" data-resize="3"></span></span>
-        <span>类型<span class="col-filter" data-filter="type"><i data-lucide="filter"></i></span><span class="kp-resize" data-resize="4"></span></span>
-        <span>证据链<span class="col-filter" data-filter="ev"><i data-lucide="filter"></i></span><span class="kp-resize" data-resize="5"></span></span>
+        <span>类型<span class="col-filter" data-filter="type"><i data-lucide="filter"></i></span><span class="kp-resize" data-resize="3"></span></span>
+        <span>证据链<span class="col-filter" data-filter="ev"><i data-lucide="filter"></i></span><span class="kp-resize" data-resize="4"></span></span>
         <span>来源文档<span class="col-filter" data-filter="src"><i data-lucide="filter"></i></span></span>
         <span>操作</span>
       </div>
-      ${all.map((k, i) => `<div class="kp-tr">
-        <span class="kp-td kp-td-stmt kp-c-stmt"><b>#${i + 1}</b><button type="button" class="kp-stmt-edit" data-eiu-id="${escapeHTML(String(k.id || "").replace(/^KP-/, ""))}" title="编辑知识点">${escapeHTML(k.stmt)}</button></span>
-        <span class="kp-td kp-c-status"><select class="kp-status-select" data-eiu-id="${escapeHTML(String(k.id || "").replace(/^KP-/, ""))}" aria-label="知识点验证状态"><option value="needs_review" ${kpStatusKey(k.qualityStatus) === "needs_review" ? "selected" : ""}>待复核</option><option value="verified" ${kpStatusKey(k.qualityStatus) === "verified" ? "selected" : ""}>已通过</option></select></span>
+      ${all.map((k, i) => `<div class="kp-tr" data-disposition="${escapeHTML(k.routeColor || "yellow")}"${k.routeColor === "green" ? "" : ' style="display:none" data-filtered="1"'}>
+        <span class="kp-td kp-td-stmt kp-c-stmt"><b>#${i + 1}</b><button type="button" class="kp-stmt-edit" data-eiu-id="${escapeHTML(String(k.id || "").replace(/^KP-/, ""))}" title="${k.routeColor === "red" ? "查看知识点与证据" : "编辑知识点"}">${escapeHTML(k.stmt)}</button></span>
+        <span class="kp-td kp-c-status"><span class="claim-status ${escapeHTML(k.qualityStatus)}">${escapeHTML(k.qualityLabel)}</span></span>
         <span class="kp-td kp-c-quality" title="${escapeHTML(k.qualityDetail || "")}">${escapeHTML(k.qualityText || "未检查")}</span>
-        <span class="kp-td kp-c-prio">${escapeHTML(k.prio)}</span>
         <span class="kp-td kp-c-type"><span class="pill br">${escapeHTML(k.type)}</span></span>
         <span class="kp-td kp-td-ev kp-c-ev">${k.crossBlock ? '<span class="cross-block-tag">跨块</span> ' : ''}${escapeHTML(k.evidenceChain || k.ev)}</span>
         <span class="kp-td kp-td-src kp-c-src">${escapeHTML(k.src)}</span>
-        <span class="kp-td kp-kp-actions"><button class="btn ghost icon-only sm kp-delete" type="button" data-eiu-id="${escapeHTML(String(k.id || "").replace(/^KP-/, ""))}" title="删除知识点" aria-label="删除知识点"><i data-lucide="trash-2"></i></button></span>
+        <span class="kp-td kp-kp-actions">${k.routeColor === "red" ? '<span class="muted">只读</span>' : `<button class="btn ghost icon-only sm kp-delete" type="button" data-eiu-id="${escapeHTML(String(k.id || "").replace(/^KP-/, ""))}" title="删除知识点" aria-label="删除知识点"><i data-lucide="trash-2"></i></button>`}</span>
       </div>`).join("")}
       </div>
+      <p class="muted mt" data-kp-empty hidden aria-live="polite">当前筛选下没有知识点。</p>
     </div>`;
   }
 
@@ -134,9 +134,8 @@
         <div><div class="lh-title">${d.name}</div><div class="lh-sub">知识点 · ${d.kp.length} 条</div></div>
         <div class="lib-actions"><button class="btn ghost sm" id="kpFullscreenBtn"><i data-lucide="maximize"></i>放大查看</button><button class="btn ghost sm" id="dlEIUKp"><i data-lucide="download"></i>导出知识点</button></div></div>
       <div class="card card-pad">
-        ${claimSummaryHTML(d)}
         ${kpTableHTML(d.kp)}
-        <p class="muted mt">正式口径：只有当前文档的全部知识点复核为“已通过”后，才允许生成评测集；编辑知识点后会自动回到“待复核”，需要重新确认。</p>
+        <p class="muted mt">绿色知识点可自动出题；编辑保存后由系统重新核验。</p>
       </div>`;
   }
 
@@ -169,6 +168,7 @@
       const kpf = $("#docContent #kpFullscreenBtn"); if (kpf) kpf.onclick = () => openKpFullscreen(DOCS[docId].kp, DOCS[docId].name);
       bindKpColFilters($("#docContent"));
       bindKpTableInteractions($("#docContent"), DOCS[docId].kp);
+      void loadDocumentQuality(docId);
       bindKpColResize($("#docContent .kp-table"));
       setupPager($("#docContent"), "#docContent .kp-tr", 15, "kpPager", "kpPage");
       enableHScrollDrag($("#docContent .kp-table"));
@@ -988,13 +988,9 @@
     setTimeout(() => {
       const s = overlay.querySelector("#kpfSearch");
       if (s) s.oninput = () => {
-        const kw = s.value.trim().toLowerCase();
-        overlay.querySelectorAll(".kp-tr").forEach(row => {
-          if (!kw) { row.style.display = ""; delete row.dataset.filtered; return; }
-          if (row.textContent.toLowerCase().includes(kw)) { row.style.display = ""; delete row.dataset.filtered; }
-          else { row.style.display = "none"; row.dataset.filtered = "1"; }
-        });
-        setupPager(overlay, ".kp-tr", 15, "kpFsPager", "kpPage");
+        const wrap = overlay.querySelector(".kp-review-wrap");
+        wrap.dataset.search = s.value.trim().toLowerCase();
+        applyKpFilters(wrap);
       };
       icons();
       bindKpColFilters(overlay);
@@ -1166,7 +1162,8 @@
   function openKpColFilter(field, anchor) {
     $$(".ctx-popup").forEach(p => p.remove());
     const pop = document.createElement("div"); pop.className = "ctx-popup col-filter-pop";
-    const cells = $$(`.kp-c-${field}`);
+    const wrap = anchor.closest(".kp-review-wrap");
+    const cells = [...wrap.querySelectorAll(`.kp-c-${field}`)];
     const vals = [...new Set(cells.map(c => kpFilterCellValue(c, field)).filter(Boolean))];
     pop.innerHTML = `<div class="up-title">筛选：${kpColFilterLabel[field] || field}</div>` + vals.map(v => `<label class="cf-item"><input type="checkbox" checked data-v="${escapeHTML(v)}"/> ${escapeHTML(v)}</label>`).join("") + `<button class="cf-apply">应用</button>`;
     pop.style.visibility = "hidden";
@@ -1175,13 +1172,9 @@
     bindPopupLifecycle(pop, anchor, 6, 8);
     pop.querySelector(".cf-apply").onclick = () => {
       const keep = new Set([...pop.querySelectorAll("input[data-v]:checked")].map(x => x.dataset.v));
-      $$(`.kp-table .kp-tr`).forEach(row => {
-        const cell = row.querySelector(`.kp-c-${field}`);
-        const f = kpFilterCellValue(cell, field);
-        if (keep.has(f)) { row.style.display = ""; delete row.dataset.filtered; }
-        else { row.style.display = "none"; row.dataset.filtered = "1"; }
-      });
-      state.kpPage = 1; refreshPagers(); pop.remove();
+      wrap._columnFilters = wrap._columnFilters || {};
+      wrap._columnFilters[field] = keep;
+      applyKpFilters(wrap); pop.remove();
     };
   }
   function bindKpColFilters(scope) {
@@ -1189,6 +1182,68 @@
       icon.onclick = (e) => { e.stopPropagation(); openKpColFilter(icon.dataset.filter, icon); };
     });
   }
+  function applyKpFilters(wrap) {
+    const disposition = wrap.dataset.disposition || "green";
+    const search = wrap.dataset.search || "";
+    let count = 0;
+    wrap.querySelectorAll("[data-kp-filter]").forEach(button => button.setAttribute("aria-pressed", String(button.dataset.kpFilter === disposition)));
+    wrap.querySelectorAll(".kp-tr").forEach(row => {
+      const matches = row.dataset.disposition === disposition && row.textContent.toLowerCase().includes(search)
+        && Object.entries(wrap._columnFilters || {}).every(([field, keep]) => keep.has(kpFilterCellValue(row.querySelector(`.kp-c-${field}`), field)));
+      row.style.display = matches ? "" : "none";
+      if (matches) { delete row.dataset.filtered; count++; } else row.dataset.filtered = "1";
+    });
+    wrap.querySelector("[data-kp-empty]").hidden = count > 0;
+    wrap.querySelector("[data-kp-note]").textContent = ({
+      green: "绿色知识点自动参与出题；待复核和已排除项不影响其他知识点生成。",
+      yellow: "这些知识点尚未达到出题要求，可编辑或删除；保存后系统自动重新核验。",
+      red: "已排除项不参与出题，保留声明、证据和排除原因，仅可查看。"
+    })[disposition];
+    state.kpPage = 1;
+    refreshPagers();
+  }
+
+  async function loadDocumentQuality(docId) {
+    const target = document.querySelector("#docContent [data-document-quality]");
+    if (!target || target.dataset.documentQuality !== docId) return;
+    const current = () => target.isConnected && target.dataset.documentQuality === docId;
+    const doc = DOCS[docId];
+    try {
+      const report = await apiGet(`/api/eiu/document/${Number(String(docId).replace(/^doc/, ""))}/quality-feedback`);
+      if (!current()) return;
+      const findings = report.findings || [];
+      if (!findings.length) {
+        target.textContent = (doc.kp || []).some(k => k.policyVersion)
+          ? "文档质量：本次抽取暂未发现质量问题。反馈仅供参考。"
+          : "文档质量：暂无本策略的反馈，请在重新抽取知识点后查看。";
+        return;
+      }
+      const risk = findings.some(f => f.severity === "risk");
+      target.innerHTML = `<details><summary>文档质量 · ${risk ? "有关键质量风险" : "有质量提示"} · ${findings.length} 项</summary><p class="muted">基于抽取结果的反馈，无需确认；绿色知识点仍可出题。</p>${findings.map(f => `<div class="document-quality-finding"><b>${escapeHTML(f.message || "质量提示")}</b><p>${escapeHTML((f.details || []).join("；"))}</p><p class="muted">${escapeHTML(f.system_action || "")}</p>${(f.block_ids || []).map(id => `<button type="button" class="btn ghost sm" data-source-block="${escapeHTML(String(id))}">查看原文 #${escapeHTML(String(id))}</button>`).join(" ")}</div>`).join("")}</details>`;
+      target.querySelectorAll("[data-source-block]").forEach(button => {
+        button.onclick = async () => {
+          button.disabled = true;
+          try {
+            const blocks = await apiGet(`/api/documents/${Number(String(docId).replace(/^doc/, ""))}/blocks`);
+            if (!current()) return;
+            const block = blocks.find(b => String(b.block_id) === button.dataset.sourceBlock);
+            if (!block) throw new Error("原文位置已失效，请刷新文档");
+            const text = document.createElement("pre");
+            text.className = "document-quality-source";
+            text.textContent = `${block.section_path || "原文"}\n${block.block_text || ""}`;
+            button.parentNode.querySelector(".document-quality-source")?.remove();
+            button.parentNode.appendChild(text);
+          } catch (error) { toast(`原文读取失败：${error.message}`, "warn"); }
+          finally { button.disabled = false; }
+        };
+      });
+    } catch (error) {
+      if (!current()) return;
+      target.innerHTML = '文档质量反馈暂时不可用。<button type="button" class="btn ghost sm">重试</button>';
+      target.querySelector("button").onclick = () => { void loadDocumentQuality(docId); };
+    }
+  }
+
   async function requestKpUpdate(eiuId, payload) {
     const response = await fetch(API_BASE + `/api/eiu/${encodeURIComponent(eiuId)}`, {
       method: "PUT",
@@ -1209,8 +1264,9 @@
     if (message) toast(message);
   }
   async function updateKpReview(eiuId, payload, message) {
-    await requestKpUpdate(eiuId, payload);
-    await refreshKpDocument(message);
+    const result = await requestKpUpdate(eiuId, payload);
+    const label = ({ green: "已验证，可生成", yellow: "待复核", red: "已排除" })[result.auto_disposition] || "等待系统核验";
+    await refreshKpDocument(`知识点已保存，系统核验结果：${label}`);
   }
   function closeKpFullscreen(scope) {
     if (scope?.classList.contains("kp-fullscreen")) {
@@ -1219,27 +1275,40 @@
     }
   }
   function openKpStatementEditor(cell, record, scope) {
+    const readOnly = record.routeColor === "red";
     const mask = document.createElement("div");
     mask.className = "modal-mask kp-statement-modal";
     mask.innerHTML = `<div class="modal"><div class="modal-head"><span>编辑知识点</span><button class="modal-x" type="button">×</button></div><div class="modal-body"><textarea class="es-input" data-kp-statement rows="6">${escapeHTML(record.stmt || "")}</textarea></div><div class="modal-foot"><button class="btn ghost modal-cancel" type="button">取消</button><button class="btn primary" data-save type="button">保存</button></div></div>`;
     document.body.appendChild(mask);
+    mask.querySelector(".modal-head span").textContent = readOnly ? "已排除知识点 · 只读" : "编辑知识点";
+    const details = document.createElement("div");
+    details.className = "kp-evidence-detail";
+    const note = record.exclusionReason || "保存后系统会重新核验忠实性与可追溯性、上下文完整性和原子性。";
+    details.innerHTML = `<p>${escapeHTML(note)}</p><p class="kp-check-detail">${escapeHTML(record.qualityDetail || "暂无检查详情")}</p><details><summary>查看原文证据</summary>${(record.evidenceDetails || []).map(e => `<p><b>Block #${escapeHTML(String(e.block_id))} · ${escapeHTML(e.section_path || "原文")}</b><br>${escapeHTML(e.text || "原文片段暂未提供")}</p>`).join("") || '<p>暂无证据片段</p>'}</details>`;
+    mask.querySelector(".modal-body").appendChild(details);
     const close = () => mask.remove();
     mask.querySelector(".modal-x").onclick = close;
     mask.querySelector(".modal-cancel").onclick = close;
     const editor = mask.querySelector("[data-kp-statement]");
     const save = mask.querySelector("[data-save]");
+    editor.readOnly = readOnly;
+    save.hidden = readOnly;
+    mask.querySelector(".modal-cancel").textContent = readOnly ? "关闭" : "取消";
     save.onclick = async () => {
+      if (readOnly) return;
       const statement = editor.value.trim();
       if (!statement) return toast("知识点不能为空", "warn");
       if (statement.length > 200) return toast("知识点不能超过 200 字", "warn");
       if (statement === (record.stmt || "").trim()) return close();
       save.disabled = true;
+      save.textContent = "保存并核验中…";
       try {
-        await updateKpReview(String(record.id || "").replace(/^KP-/, ""), { statement }, "知识点已保存，状态已回到待复核");
+        await updateKpReview(String(record.id || "").replace(/^KP-/, ""), { statement });
         closeKpFullscreen(scope);
         close();
       } catch (error) {
         save.disabled = false;
+        save.textContent = "保存";
         toast(`保存失败：${error.message || error}`, "warn");
       }
     };
@@ -1258,29 +1327,6 @@
     await refreshKpDocument("知识点已删除");
     closeKpFullscreen(scope);
   }
-  async function approveAllKp(all, button, scope) {
-    const targets = all.filter(k => k.id && kpStatusKey(k.qualityStatus) !== "verified");
-    if (!targets.length) return;
-    if (!window.confirm(`确认将当前文档的 ${targets.length} 条待复核知识点全部标记为“已通过”吗？`)) return;
-    button.disabled = true;
-    const label = button.querySelector(".kp-approve-label");
-    if (label) label.textContent = "通过中…";
-    let cursor = 0;
-    let failed = 0;
-    const worker = async () => {
-      while (cursor < targets.length) {
-        const item = targets[cursor++];
-        try {
-          await requestKpUpdate(String(item.id).replace(/^KP-/, ""), { quality_status: "verified" });
-        } catch (error) {
-          failed += 1;
-        }
-      }
-    };
-    await Promise.all(Array.from({ length: Math.min(8, targets.length) }, worker));
-    await refreshKpDocument(failed ? `${targets.length - failed} 条知识点已通过，${failed} 条更新失败` : `已通过 ${targets.length} 条知识点`);
-    closeKpFullscreen(scope);
-  }
   function bindKpTableInteractions(scope, all) {
     const root = scope || document;
     root.querySelectorAll(".kp-stmt-edit").forEach(button => {
@@ -1290,24 +1336,14 @@
         if (record) openKpStatementEditor(button.closest(".kp-td-stmt"), record, root);
       });
     });
-    root.querySelectorAll(".kp-status-select").forEach(select => {
-      select.addEventListener("change", async event => {
-        event.stopPropagation();
-        const previous = select.dataset.previous || "needs_review";
-        const next = kpStatusKey(select.value);
-        select.disabled = true;
-        try {
-          await updateKpReview(select.dataset.eiuId, { quality_status: next }, next === "verified" ? "知识点已通过验证" : "知识点已回到待复核");
-          closeKpFullscreen(root);
-        } catch (error) {
-          select.value = previous;
-          toast(`状态更新失败：${error.message || error}`, "warn");
-        } finally {
-          select.disabled = false;
-        }
-      });
-      select.dataset.previous = select.value;
+    root.querySelectorAll("[data-kp-filter]").forEach(button => {
+      button.onclick = () => {
+        const wrap = button.closest(".kp-review-wrap");
+        wrap.dataset.disposition = button.dataset.kpFilter;
+        applyKpFilters(wrap);
+      };
     });
+    root.querySelectorAll(".kp-review-wrap").forEach(wrap => applyKpFilters(wrap));
     root.querySelectorAll(".kp-delete").forEach(button => {
       button.addEventListener("click", async event => {
         event.stopPropagation();
@@ -1317,13 +1353,11 @@
         catch (error) { button.disabled = false; toast(`删除失败：${error.message || error}`, "warn"); }
       });
     });
-    const approveAll = root.querySelector(".kp-approve-all");
-    if (approveAll) approveAll.addEventListener("click", () => { void approveAllKp(all, approveAll, root); });
   }
   // 知识点表格列宽拖拽调整（与主评测集表一致）
   function bindKpColResize(table) {
     if (!table) return;
-    const defCols = [320, 120, 140, 96, 100, 260, 200, 76];
+    const defCols = [320, 120, 140, 100, 260, 200, 76];
     const cur = () => {
       const v = getComputedStyle(table).getPropertyValue("--kp-cols");
       if (v && v.trim()) return v.trim().split(/\s+/).map(s => parseFloat(s));
