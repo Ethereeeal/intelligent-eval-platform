@@ -143,7 +143,10 @@
           const qr = await fetch(API_BASE + `/api/quality-check?document_id=${docId}`, { method: "POST" }).catch(() => null);
           if (qr && qr.ok) {
             const qrBody = await qr.json().catch(() => null);
-            if (qrBody) toast(`「${d.name}」生成 ${gqr.generated || 0} 道 · 质检通过 ${qrBody.passed || 0} / 待确认 ${qrBody.failed || 0}`);
+            if (qrBody?.errors?.length) {
+              const firstError = qrBody.errors[0];
+              toast(`「${d.name}」质量检查失败 ${qrBody.errors.length} 条：${firstError.error || firstError.message || "未知错误"}`);
+            } else if (qrBody) toast(`「${d.name}」生成 ${gqr.generated || 0} 道 · 质检通过 ${qrBody.passed || 0} / 待确认 ${qrBody.failed || 0}`);
             else toast(`「${d.name}」生成完成，已执行质量校验`);
           } else {
             toast(`「${d.name}」评测集已生成，质量校验未执行（m04 接口异常）`);
@@ -238,11 +241,13 @@
     const firstDoc = Object.keys(DOCS)[0];
     if (firstDoc) { state.sel.doc = firstDoc; state.sel.kp = firstDoc; state.sel.qa = firstDoc; state.studioSrc = [firstDoc]; }
     renderNav(); syncBell(); bindGlobal(); renderSrcList(); renderStudioOpts(); renderMonitor(); goto("overview");
-    fillOverviewStats();
   })();
 
   // 概览：聚焦平台健康、待办、可执行评测集与最新完成任务，不混入中间产物累计数。
+  let overviewRequestId = 0;
+  let overviewHasLoaded = false;
   async function fillOverviewStats() {
+    const requestId = ++overviewRequestId;
     const set = (id, v) => { const el = $("#" + id); if (el) el.textContent = (v == null ? "—" : v); };
     const html = (value) => String(value == null ? "" : value).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
     const setMeta = (id, value, tone = "") => { const el = $("#" + id); if (el) { el.textContent = value; el.className = "kpi-trend " + tone; } };
@@ -255,7 +260,9 @@
       const box = $("#" + id); if (!box) return;
       box.innerHTML = rows.length ? rows.map(row => `<div class="overview-item${row.go ? " overview-item-link" : ""}"${row.go ? ` data-go="${row.go}" role="link" tabindex="0"` : ""}><span class="overview-item-ic ${row.tone || ""}"><i data-lucide="${row.icon}"></i></span><div class="overview-item-tx"><div class="overview-item-t">${html(row.title)}</div><div class="overview-item-m">${html(row.detail)}</div></div><div class="overview-item-v">${html(row.value)}</div></div>`).join("") : `<div class="overview-empty">${html(empty)}</div>`;
     };
-    set("kpiDocs", "…"); set("kpiTodo", "…"); set("kpiEvalSets", "…"); set("kpiLatestRun", "…");
+    if (!overviewHasLoaded) {
+      set("kpiDocs", "…"); set("kpiTodo", "…"); set("kpiEvalSets", "…"); set("kpiLatestRun", "…");
+    }
 
     const localDocs = Object.keys(DOCS).length;
     let docs = [], quality = {}, eiuCoverage = {}, compositions = [], runs = [], errorBook = [], uploadedSets = [];
@@ -277,6 +284,7 @@
       errorBook = Array.isArray(errorRes && errorRes.items) ? errorRes.items : [];
       uploadedSets = Array.isArray(uploadRes) ? uploadRes : [];
     } catch (e) { /* 后端不可用时保留空态，不用 mock 数据掩盖状态 */ }
+    if (requestId !== overviewRequestId) return;
 
     const documentTotal = docs.length || localDocs;
     const parsed = docs.filter(d => d.parse_status === "completed").length;
@@ -304,6 +312,7 @@
     const latest = completedRuns[0];
     let latestSummary = null;
     if (latest) latestSummary = await apiGet(`/api/evaluation-runs/${latest.run_id}/results`).catch(() => null);
+    if (requestId !== overviewRequestId) return;
     const summary = (latestSummary || {}).summary || {};
     if (!latest) {
       set("kpiLatestRun", "—"); setMeta("kpiLatestRunMeta", "暂无已完成评测");
@@ -345,4 +354,5 @@
       return { icon: running ? "loader-circle" : done ? "circle-check" : "circle-alert", tone: running ? "warn" : done ? "ok" : "err", title: run.name || `评测运行 #${run.run_id}`, detail: running ? `运行中 ${run.finished || 0}/${run.total || 0}` : done ? `完成于 ${formatTime(run.finished_at)}` : `${run.status || "未知状态"} · ${formatTime(run.created_at)}`, value: running ? `${run.progress || 0}%` : `${run.total || 0} 题` };
     }), "暂无评测运行记录。");
     icons();
+    overviewHasLoaded = true;
   }

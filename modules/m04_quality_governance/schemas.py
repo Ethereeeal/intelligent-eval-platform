@@ -66,6 +66,10 @@ class QualityCheckSummary(BaseModel):
         default_factory=list,
         description="失败样本列表: {case_id, failed_checks, reason, review_tag}",
     )
+    errors: list[dict] = Field(
+        default_factory=list,
+        description="未能完成检查的样本: {case_id, error_type, error}",
+    )
 
 
 class CaseQualityDetail(BaseModel):

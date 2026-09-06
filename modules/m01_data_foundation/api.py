@@ -104,6 +104,7 @@ def precheck_upload(
     """上传预检（只读、不落盘）：仅校验文件类型和大小。
 
     文档允许重复上传，也允许同目录同名文件；文档唯一性不在本接口判定。
+    显式重传接口仍单独保留确认令牌，用于防止误覆盖指定文档。
     """
     content = _read_upload_with_limit(file)
     file_name = repair_legacy_filename(file.filename or "upload.bin") or "upload.bin"

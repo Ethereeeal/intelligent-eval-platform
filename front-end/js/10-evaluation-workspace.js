@@ -3,11 +3,15 @@
   const state = window.__evWorkspace = window.__evWorkspace || {
     tab: "config",
     compositionId: null,
+    selectedSource: null,
     runId: null,
     results: [],
     filteredResults: [],
     threshold: .5,
     runs: [],
+    renderedRunId: null,
+    renderedResultsSignature: null,
+    pollTimer: null,
   };
   const $w = () => document.getElementById("evWorkspace");
   const post = async (path, body) => {
@@ -63,6 +67,11 @@
   const runStatusLabel = status => ({ pending: "等待中", running: "运行中", cancelling: "取消中", cancelled: "已取消", done: "已完成", failed: "失败" })[status] || status || "未知";
   const caseStatusLabel = status => ({ passed: "通过", failed: "未通过", error: "异常", unscored: "未评分", pending: "等待中" })[status] || status || "—";
   const intermediateNodeLabel = node => ({ rewrite: "改写", intent: "意图分类", rag: "RAG" })[node] || node;
+  const runStatusIcon = status => status === "done" ? "circle-check" : status === "failed" ? "circle-x" : status === "cancelled" ? "circle-stop" : ["running", "cancelling"].includes(status) ? "loader" : "clock";
+  const runStatusBadge = run => run.status === "done" && run.pass_rate != null
+    ? `<span class="tw-count" style="color:#2f7d5b;background:rgba(47,125,91,.12)">${Math.round(run.pass_rate * 100)}%</span>`
+    : run.status === "failed" ? `<span class="tw-count" style="color:#c0392b;background:rgba(192,57,43,.12)">失败</span>`
+    : `<span class="tw-count">${esc(runStatusLabel(run.status))}</span>`;
 
   function shell(content, sideExtra) {
     $w().innerHTML = `<div class="ev-layout"><aside class="ev-side"><button class="ev-side-item ${state.tab === "config" ? "on" : ""}" data-ev-tab="config"><i data-lucide="sliders-horizontal"></i><span>评测配置</span></button><button class="ev-side-item ${state.tab === "results" ? "on" : ""}" data-ev-tab="results"><i data-lucide="chart-no-axes-combined"></i><span>评测结果</span></button>${sideExtra || ""}</aside><div class="ev-main">${content}</div></div>`;
@@ -70,20 +79,56 @@
   }
 
   async function config() {
-    const compositions = await apiGet("/api/compositions");
-    if (window.__evSelectedCompositionId) { state.compositionId = Number(window.__evSelectedCompositionId); window.__evSelectedCompositionId = null; }
+    const [compositionsResponse, versionsResponse] = await Promise.all([
+      apiGet("/api/compositions"),
+      apiGet("/api/versions"),
+    ]);
+    const compositions = Array.isArray(compositionsResponse) ? compositionsResponse : [];
+    const versions = Array.isArray(versionsResponse) ? versionsResponse : [];
+    if (window.__evSelectedCompositionId) {
+      state.compositionId = Number(window.__evSelectedCompositionId);
+      state.selectedSource = { kind: "composition", compositionId: state.compositionId };
+      window.__evSelectedCompositionId = null;
+    }
+    const representedVersionIds = new Set(
+      compositions.flatMap(composition => (composition.items || [])
+        .filter(item => item?.source === "doc_generated")
+        .map(item => Number(item.version_id)))
+        .filter(Number.isFinite),
+    );
+    const sourceItems = [
+      ...compositions.map(composition => ({ kind: "composition", id: Number(composition.composition_id), data: composition })),
+      ...versions
+        .filter(version => version?.status === "frozen" && Number.isFinite(Number(version.version_id)))
+        .filter(version => !representedVersionIds.has(Number(version.version_id)))
+        .map(version => ({ kind: "version", id: Number(version.version_id), data: version })),
+    ];
+    const itemIsSelected = item => item.kind === "version"
+      ? state.selectedSource?.kind === "version" && Number(state.selectedSource.versionId) === item.id
+      : state.selectedSource?.kind !== "version" && Number(state.compositionId) === item.id;
+    const sourceRows = sourceItems.map(item => {
+      const selected = itemIsSelected(item);
+      if (item.kind === "version") {
+        const version = item.data;
+        const label = version.name || version.snapshot_metadata?.composition_name || version.version_number || `评测集版本 #${item.id}`;
+        const meta = `${version.version_number || `版本 #${item.id}`} · ${Number(version.case_count || 0)} 题`;
+        return `<label class="ev-composition ${selected ? "selected" : ""}"><input type="radio" name="evComposition" value="version:${item.id}" ${selected ? "checked" : ""}/><span><b>${esc(label)}</b><small>${esc(meta)}</small></span></label>`;
+      }
+      const composition = item.data;
+      return `<label class="ev-composition ${selected ? "selected" : ""}"><input type="radio" name="evComposition" value="composition:${item.id}" ${selected ? "checked" : ""}/><span><b>${esc(composition.name || `评测集组合 #${item.id}`)}</b><small>组合 #${item.id} · ${Array.isArray(composition.items) ? composition.items.length : 0} 个来源</small></span></label>`;
+    }).join("");
     const profiles = loadProfiles();
     shell(`<div class="card card-pad"><div class="ev-config-head"><div><div class="card-t">请求体设置</div><p>配置可保存为浏览器内的复用模板，密钥和 Header 值不会保存。</p></div><div class="ev-profile-actions"><select class="es-input" id="evProfile"><option value="">选择已保存配置</option>${profiles.map(item => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join("")}</select><button class="btn ghost" id="evSaveProfile"><i data-lucide="save"></i>保存配置</button><button class="btn ghost" id="evTestAdapter"><i data-lucide="plug-zap"></i>测试通路</button></div></div><div class="ev-call-types" id="evCallTypes"><button class="on" data-adapter="openai_compatible">OpenAI 兼容接口</button><button data-adapter="http">通用 HTTP</button><button data-adapter="mock">Mock 演示</button></div>
       <div id="evAdapterFields"></div></div>
-      <div class="card card-pad ev-section"><div class="card-t">选择评测集</div><p class="es-gen-hint">仅可选择评测库中的正式评测集版本。单个来源也需先创建为评测库版本，以便追踪与复用。</p><div class="ev-set-actions"><button class="btn ghost" id="evCreateSet"><i data-lucide="combine"></i>创建 / 合并评测集</button></div><div class="ev-compositions">${compositions.length ? compositions.map(c => `<label class="ev-composition ${Number(c.composition_id) === state.compositionId ? "selected" : ""}"><input type="radio" name="evComposition" value="${c.composition_id}" ${Number(c.composition_id) === state.compositionId ? "checked" : ""}/><span><b>${esc(c.name)}</b><small>版本 #${c.composition_id} · ${Array.isArray(c.items) ? c.items.length : 0} 个来源</small></span></label>`).join("") : `<div class="es-gen-hint">暂无评测库版本，请先创建或合并评测集。</div>`}</div></div>
-      <div class="card card-pad ev-section ev-intermediate-card"><div class="ev-section-title"><div><div class="card-t">中间节点评测</div><p class="es-gen-hint">可选；勾选后按固定指标评测智能体的中间节点。</p></div><label class="ev-switch-label"><input type="checkbox" id="evIntermediateEnabled"/><span>启用</span></label></div><div class="ev-intermediate-options" id="evIntermediateOptions"><label><input type="checkbox" value="rewrite" disabled/><span>改写</span></label><label><input type="checkbox" value="intent" disabled/><span>意图分类</span></label><label><input type="checkbox" value="rag" disabled/><span>RAG</span></label></div></div>
+      <div class="card card-pad ev-section"><div class="card-t">选择评测集</div><p class="es-gen-hint">评测库同时展示冻结版本和已创建的组合；冻结版本首次发起评测时会自动登记为可执行组合。</p><div class="ev-set-actions"><button class="btn ghost" id="evCreateSet"><i data-lucide="combine"></i>创建 / 合并评测集</button></div><div class="ev-compositions">${sourceRows || `<div class="es-gen-hint">暂无已冻结的评测集，请先生成并冻结评测集。</div>`}</div></div>
+      <div class="card card-pad ev-intermediate-card ev-section"><div class="ev-section-title"><div><div class="card-t">中间节点评测</div><p class="es-gen-hint">可选；勾选后按固定指标评测智能体的中间节点。</p></div><label class="ev-switch-label"><input type="checkbox" id="evIntermediateEnabled"/><span>启用</span></label></div><div class="ev-intermediate-options" id="evIntermediateOptions"><label><input type="checkbox" value="rewrite" disabled/><span>改写</span></label><label><input type="checkbox" value="intent" disabled/><span>意图分类</span></label><label><input type="checkbox" value="rag" disabled/><span>RAG</span></label></div></div>
       <div class="ev-run-foot"><label class="es-field">运行名称（可选）</label><input class="es-input" id="evRunName" placeholder="例如：客服智能体 v0.1 回归测试"/><button class="btn primary" id="evStart"><i data-lucide="play"></i>发起评测</button></div>`);
     // Demo 不提供 Mock 入口；评测集以可展开的“评测库”目录展示。
     document.querySelector('[data-adapter="mock"]').remove();
     const compositionBox = document.querySelector(".ev-compositions");
     const folder = document.createElement("button");
     folder.type = "button"; folder.className = "ev-library-folder";
-    folder.innerHTML = `<i data-lucide="chevron-down"></i><i data-lucide="folder-open"></i><b>评测库</b><span>${compositions.length}</span>`;
+    folder.innerHTML = `<i data-lucide="chevron-down"></i><i data-lucide="folder-open"></i><b>评测库</b><span>${sourceItems.length}</span>`;
     compositionBox.parentNode.insertBefore(folder, compositionBox);
     folder.onclick = () => { const closed = compositionBox.classList.toggle("collapsed"); folder.querySelector("svg").setAttribute("data-lucide", closed ? "chevron-right" : "chevron-down"); icons(); };
     const nameInput = document.getElementById("evRunName");
@@ -91,7 +136,18 @@
     setAdapter(state.draftAdapter || "openai_compatible");
     if (state.draftConfig) applyAdapterConfig(state.adapter, state.draftConfig);
     document.querySelectorAll("#evCallTypes button").forEach(b => b.onclick = () => setAdapter(b.dataset.adapter));
-    document.querySelectorAll("input[name=evComposition]").forEach(i => i.onchange = () => { state.compositionId = Number(i.value); document.querySelectorAll(".ev-composition").forEach(x => x.classList.toggle("selected", x.querySelector("input").checked)); });
+    document.querySelectorAll("input[name=evComposition]").forEach(i => i.onchange = () => {
+      const [kind, rawId] = i.value.split(":");
+      const id = Number(rawId);
+      if (kind === "version") {
+        state.compositionId = null;
+        state.selectedSource = { kind: "version", versionId: id };
+      } else {
+        state.compositionId = id;
+        state.selectedSource = { kind: "composition", compositionId: id };
+      }
+      document.querySelectorAll(".ev-composition").forEach(x => x.classList.toggle("selected", x.querySelector("input").checked));
+    });
     const intermediateToggle = document.getElementById("evIntermediateEnabled");
     const intermediateOptions = [...document.querySelectorAll("#evIntermediateOptions input")];
     intermediateToggle.onchange = () => intermediateOptions.forEach(input => { input.disabled = !intermediateToggle.checked; });
@@ -175,10 +231,39 @@
   }
 
   async function start() {
-    if (!state.compositionId) return toast("请先从评测库选择一个评测集");
+    const selectedSource = state.selectedSource || (state.compositionId ? { kind: "composition", compositionId: Number(state.compositionId) } : null);
+    if (!selectedSource) return toast("请先从评测库选择一个评测集");
     try {
-      const compositions = await apiGet("/api/compositions");
-      const composition = compositions.find(item => Number(item.composition_id) === Number(state.compositionId));
+      const [compositionsResponse, versionsResponse] = await Promise.all([
+        apiGet("/api/compositions"),
+        apiGet("/api/versions"),
+      ]);
+      const compositions = Array.isArray(compositionsResponse) ? compositionsResponse : [];
+      const versions = Array.isArray(versionsResponse) ? versionsResponse : [];
+      let composition;
+      if (selectedSource.kind === "version") {
+        const version = versions.find(item => Number(item.version_id) === Number(selectedSource.versionId) && item.status === "frozen");
+        if (!version) return toast("所选冻结版本不存在或尚未冻结，请重新选择");
+        composition = compositions.find(item => (item.items || []).some(source => source?.source === "doc_generated" && Number(source.version_id) === Number(version.version_id)));
+        if (!composition) {
+          const name = version.name || version.snapshot_metadata?.composition_name || version.version_number || `评测集版本 #${version.version_id}`;
+          const created = await post("/api/compositions", {
+            name,
+            items: [{ source: "doc_generated", version_id: Number(version.version_id) }],
+            created_by: "web",
+          });
+          composition = {
+            composition_id: created.composition_id,
+            name,
+            items: [{ source: "doc_generated", version_id: Number(version.version_id) }],
+            created_at: version.created_at,
+          };
+        }
+        state.compositionId = Number(composition.composition_id);
+        state.selectedSource = { kind: "composition", compositionId: state.compositionId };
+      } else {
+        composition = compositions.find(item => Number(item.composition_id) === Number(selectedSource.compositionId));
+      }
       if (!composition) return toast("所选评测集版本不存在，请重新选择");
       const intermediateEval = readIntermediateConfig();
       if (intermediateEval.error) return toast(intermediateEval.error);
@@ -308,6 +393,72 @@
     target.replaceWith(holder.firstElementChild); icons();
   }
 
+  function progressHTML(run) {
+    if (!run || !["running", "cancelling"].includes(run.status)) return "";
+    return `<section class="ev-progress-card"><div class="ev-progress-head"><div><span class="ev-running-dot"></span><b>${run.status === "cancelling" ? "正在取消" : "评测执行中"}</b><small>${run.status === "cancelling" ? "当前单题请求结束后停止" : "完成后将自动刷新指标与原始报告"}</small></div><div class="ev-progress-actions"><strong>${Number(run.progress || 0)}%</strong>${run.status === "running" ? '<button class="btn ghost" id="evCancelRun"><i data-lucide="square"></i>取消运行</button>' : ""}</div></div><div class="ev-bar"><span style="width:${Number(run.progress || 0)}%"></span></div><div class="ev-progress-meta"><span>${Number(run.finished || 0)} / ${Number(run.total || 0)} 题</span><span><i data-lucide="clock-3"></i>预计剩余 ${esc(estimateRemaining(run))}</span></div></section>`;
+  }
+
+  function scheduleResultsPoll(run) {
+    if (state.pollTimer) clearTimeout(state.pollTimer);
+    if (!run || !["running", "cancelling"].includes(run.status)) {
+      state.pollTimer = null;
+      return;
+    }
+    const pollingRunId = Number(run.run_id);
+    state.pollTimer = setTimeout(() => {
+      state.pollTimer = null;
+      if (state.tab === "results" && Number(state.runId) === pollingRunId) render();
+    }, 2000);
+  }
+
+  function syncRunCatalog(runs) {
+    const catalog = document.querySelector(".ev-side-catalog");
+    if (!catalog) return;
+    let changed = false;
+    const rows = Array.from(catalog.querySelectorAll(".tree-row[data-run-id]"));
+    runs.forEach(run => {
+      const row = rows.find(item => Number(item.dataset.runId) === Number(run.run_id));
+      if (!row) return;
+      if (row.dataset.runStatus === String(run.status || "")) return;
+      const icon = row.querySelector(".tw-ic");
+      if (icon) {
+        icon.outerHTML = `<i data-lucide="${runStatusIcon(run.status)}" class="tw-ic"></i>`;
+        changed = true;
+      }
+      const badge = row.querySelector(".tw-count");
+      if (badge) {
+        badge.outerHTML = runStatusBadge(run);
+        changed = true;
+      }
+      row.dataset.runStatus = String(run.status || "");
+    });
+    if (changed) icons();
+  }
+
+  function updateResultPage(run, runs) {
+    const nextResultsSignature = JSON.stringify(state.results);
+    const resultsChanged = state.renderedResultsSignature !== nextResultsSignature;
+    const status = document.querySelector(".ev-result-title .es-tag");
+    if (status) status.textContent = runStatusLabel(run.status);
+    const progress = document.querySelector(".ev-progress-card");
+    const nextProgress = progressHTML(run);
+    const metricsAnchor = document.getElementById("evAnalysisMetrics");
+    if (nextProgress) {
+      if (progress) progress.outerHTML = nextProgress;
+      else if (metricsAnchor) metricsAnchor.insertAdjacentHTML("beforebegin", nextProgress);
+    } else if (progress) {
+      progress.remove();
+    }
+    syncRunCatalog(runs);
+    if (resultsChanged) {
+      filterRows();
+      state.renderedResultsSignature = nextResultsSignature;
+    }
+    const cancelButton = document.getElementById("evCancelRun");
+    if (cancelButton) cancelButton.onclick = () => cancelRun(run);
+    icons();
+  }
+
   async function results() {
     const [runs, compositions] = await Promise.all([
       apiGet("/api/evaluation-runs"),
@@ -316,9 +467,15 @@
     state.runs = runs;
     if (!state.runId && runs[0]) state.runId = runs[0].run_id;
     let data = { results: [], summary: {} }, run = null;
-    if (state.runId) { data = await apiGet(`/api/evaluation-runs/${state.runId}/results`); run = runs.find(x => x.run_id === state.runId); }
+    if (state.runId) { data = await apiGet(`/api/evaluation-runs/${state.runId}/results`); run = runs.find(x => Number(x.run_id) === Number(state.runId)); }
     if (run) run = { ...run, summary: data.summary || {} };
     state.results = data.results || [];
+    const sameRunPage = run && state.renderedRunId != null && Number(state.renderedRunId) === Number(run.run_id) && document.querySelector(".ev-result-content") && document.getElementById("evReportRows");
+    if (sameRunPage) {
+      updateResultPage(run, runs);
+      scheduleResultsPoll(run);
+      return;
+    }
     const groups = compositions.map(composition => ({
       ...composition,
       runs: runs.filter(item => Number(item.composition_id) === Number(composition.composition_id)),
@@ -329,21 +486,17 @@
     const catalog = runs.length ? `<div class="es-library-tree ev-side-catalog">${groups.map(group => {
       const selected = run && String(group.composition_id) === String(run.composition_id);
       const runNode = item => {
-        const icon = item.status === "done" ? "circle-check" : item.status === "failed" ? "circle-x" : item.status === "cancelled" ? "circle-stop" : ["running", "cancelling"].includes(item.status) ? "loader" : "clock";
-        const badge = item.status === "done" && item.pass_rate != null
-          ? `<span class="tw-count" style="color:#2f7d5b;background:rgba(47,125,91,.12)">${Math.round(item.pass_rate * 100)}%</span>`
-          : item.status === "failed" ? `<span class="tw-count" style="color:#c0392b;background:rgba(192,57,43,.12)">失败</span>`
-          : `<span class="tw-count">${esc(runStatusLabel(item.status))}</span>`;
-        return `<div class="tree-row ${item.run_id === state.runId ? "active" : ""}" data-run-id="${item.run_id}"><i data-lucide="${icon}" class="tw-ic"></i><span class="tw-name">${esc(item.name || `运行 #${item.run_id}`)}</span>${badge}<button class="tree-dots" data-run-dots="${item.run_id}" title="更多操作"><i data-lucide="more-horizontal"></i></button></div>`;
+        return `<div class="tree-row ${Number(item.run_id) === Number(state.runId) ? "active" : ""}" data-run-id="${item.run_id}" data-run-status="${esc(item.status)}"><i data-lucide="${runStatusIcon(item.status)}" class="tw-ic"></i><span class="tw-name">${esc(item.name || `运行 #${item.run_id}`)}</span>${runStatusBadge(item)}<button class="tree-dots" data-run-dots="${item.run_id}" title="更多操作"><i data-lucide="more-horizontal"></i></button></div>`;
       };
       return `<div class="tree-node">
         <div class="tree-row tree-folder" data-ev-group="${esc(String(group.composition_id))}"><i data-lucide="folder" class="tw-ic"></i><span class="tw-name">${esc(group.name || `评测集 #${group.composition_id}`)}</span><span class="tw-count">${group.runs.length}</span><i data-lucide="${selected ? "chevron-down" : "chevron-right"}" class="tw-chev"></i></div>
         <div class="tree-children ${selected ? "open" : ""}">${group.runs.map(runNode).join("")}</div>
       </div>`;
     }).join("")}</div>` : `<div class="es-library-tree ev-side-catalog"><div class="ev-empty-catalog"><i data-lucide="folder-search"></i><span>暂无评测结果</span></div></div>`;
-    const progress = run && ["running", "cancelling"].includes(run.status) ? `<section class="ev-progress-card"><div class="ev-progress-head"><div><span class="ev-running-dot"></span><b>${run.status === "cancelling" ? "正在取消" : "评测执行中"}</b><small>${run.status === "cancelling" ? "当前单题请求结束后停止" : "完成后将自动刷新指标与原始报告"}</small></div><div class="ev-progress-actions"><strong>${Number(run.progress || 0)}%</strong>${run.status === "running" ? '<button class="btn ghost" id="evCancelRun"><i data-lucide="square"></i>取消运行</button>' : ""}</div></div><div class="ev-bar"><span style="width:${Number(run.progress || 0)}%"></span></div><div class="ev-progress-meta"><span>${Number(run.finished || 0)} / ${Number(run.total || 0)} 题</span><span><i data-lucide="clock-3"></i>预计剩余 ${esc(estimateRemaining(run))}</span></div></section>` : "";
+    const progress = progressHTML(run);
     const content = run ? `<div class="ev-result-title"><div><span class="es-tag">${esc(runStatusLabel(run.status))}</span><h2>${esc(run.name || `运行 #${run.run_id}`)}</h2><p>${esc(selectedComposition?.name || `评测集 #${run.composition_id}`)} · 版本 #${esc(run.composition_id)} · ${esc(formatDateTime(run.created_at))}</p></div><div class="ev-result-actions"><button class="btn ghost" id="evCompareRun"><i data-lucide="git-compare-arrows"></i>版本对比</button><label class="ev-threshold">分析阈值<input class="es-input" id="evThreshold" type="number" min="0" max="1" step=".05" value="${state.threshold}"/><small>仅影响当前页面分析</small></label></div></div>${progress}${metrics(state.results)}${intermediateMetrics(run, state.results)}<div class="card card-pad ev-report"><div class="ev-report-head"><div><div class="card-t">原始评测报告</div><p>原始结果不会因人工处置消失；点击任意行查看评分明细、处理记录和单题复测。</p></div><div class="ev-export-wrap"><button class="btn ghost" id="evExportToggle"><i data-lucide="download"></i>导出报告<i data-lucide="chevron-down"></i></button><div class="ev-export-popover" id="evExportPopover" hidden><label><input type="checkbox" id="evExportFiltered"/>仅导出当前筛选结果</label><small>默认导出当前运行的全部原始报告</small><button class="btn primary" id="evExportConfirm"><i data-lucide="file-spreadsheet"></i>导出 Excel</button></div></div></div><div class="ev-filters"><input class="es-input" id="evSearch" placeholder="搜索问题、标准答案或智能体回答"/><select class="es-input" id="evStatus"><option value="">全部结果</option><option value="meets">达到分析阈值</option><option value="below">答案未通过</option><option value="error">调用异常</option><option value="unscored">未评分</option><option value="open">待处理</option><option value="processed">已处理待复测</option><option value="verified">已验证</option><option value="ignored">已忽略</option></select></div><div class="ev-table-wrap"><table class="ev-table"><thead><tr><th>问题 / 标准答案</th><th>智能体回答 A'</th><th>得分</th><th>耗时</th><th>结果 / 处理状态</th></tr></thead><tbody id="evReportRows"></tbody></table></div></div>` : `<div class="ev-result-empty"><span><i data-lucide="chart-no-axes-combined"></i></span><h2>选择一次评测运行</h2><p>从左侧「评测结果目录」中展开并选择运行，即可查看指标和原始报告。</p><button class="btn primary" id="evConfigBtn">前往评测配置</button></div>`;
     shell(`<div class="ev-results-layout ev-results-single"><div class="ev-result-content">${content}</div></div>`, catalog);
+    state.renderedRunId = run ? Number(run.run_id) : null;
     // 仿评测集库目录交互（事件委托到稳定的父容器，子节点重建也不丢监听）
     const catalogEl = $w().querySelector(".ev-side-catalog");
     if (catalogEl) {
@@ -375,16 +528,17 @@
     document.getElementById("evExportConfirm").onclick = exportReport;
     document.getElementById("evCompareRun").onclick = () => openRunComparison(run, runs);
     if (document.getElementById("evCancelRun")) document.getElementById("evCancelRun").onclick = () => cancelRun(run);
-    filterRows(); icons();
-    if (run && ["running", "cancelling"].includes(run.status)) {
-      const pollingRunId = run.run_id;
-      setTimeout(() => { if (state.tab === "results" && state.runId === pollingRunId) render(); }, 2000);
-    }
+    filterRows();
+    state.renderedResultsSignature = JSON.stringify(state.results);
+    icons();
+    scheduleResultsPoll(run);
   }
 
   function filterRows() {
-    const q = document.getElementById("evSearch").value.toLowerCase(), status = document.getElementById("evStatus").value;
-    state.threshold = Math.min(1, Math.max(0, Number(document.getElementById("evThreshold").value || .5)));
+    const search = document.getElementById("evSearch"), statusFilter = document.getElementById("evStatus"), thresholdInput = document.getElementById("evThreshold"), reportRows = document.getElementById("evReportRows");
+    if (!search || !statusFilter || !thresholdInput || !reportRows) return;
+    const q = search.value.toLowerCase(), status = statusFilter.value;
+    state.threshold = Math.min(1, Math.max(0, Number(thresholdInput.value || .5)));
     const matchesStatus = item => {
       const score = item.scores?.score;
       if (!status) return true;
@@ -398,7 +552,9 @@
     const rows = state.results.filter(r => { const hay = `${r.question} ${r.gold_answer} ${r.answer} ${r.error_message}`.toLowerCase(); return (!q || hay.includes(q)) && matchesStatus(r); });
     state.filteredResults = rows;
     const issueLabel = value => ({ open: "待处理", processed: "已处理待复测", verified: "已验证", ignored: "已忽略" })[value] || "";
-    document.getElementById("evReportRows").innerHTML = rows.length ? rows.map(r => {
+    const tableWrap = reportRows.closest(".ev-table-wrap");
+    const scrollTop = tableWrap?.scrollTop || 0;
+    reportRows.innerHTML = rows.length ? rows.map(r => {
       const s = r.scores || {};
       const resultLabel = r.status === "error" ? "调用异常" : s.score == null ? "未评分" : Number(s.score) >= state.threshold ? "达到分析阈值" : "答案未通过";
       const resultClass = r.status === "error" ? "bad" : s.score == null ? "" : Number(s.score) >= state.threshold ? "ok" : "warn";
@@ -409,6 +565,7 @@
       row.onclick = () => openResultDetail(state.results.find(item => Number(item.result_id) === Number(row.dataset.resultId)));
       row.onkeydown = event => { if (["Enter", " "].includes(event.key)) { event.preventDefault(); row.click(); } };
     });
+    if (tableWrap) tableWrap.scrollTop = scrollTop;
     refreshAnalysisMetrics();
   }
 
@@ -621,10 +778,16 @@
 
   async function render() {
     if (!$w()) return;
-    shell(`<div class="card card-pad ev-load-state"><span class="spinner"></span><div><b>正在加载${state.tab === "config" ? "评测配置" : "评测结果"}</b><p class="es-gen-hint">正在连接后端并同步最新数据…</p></div></div>`);
+    const keepCurrentResults = state.tab === "results" && state.renderedRunId != null && state.runId != null && Number(state.renderedRunId) === Number(state.runId) && Boolean($w().querySelector(".ev-result-content"));
+    if (!keepCurrentResults) shell(`<div class="card card-pad ev-load-state"><span class="spinner"></span><div><b>正在加载${state.tab === "config" ? "评测配置" : "评测结果"}</b><p class="es-gen-hint">正在连接后端并同步最新数据…</p></div></div>`);
     try {
       if (state.tab === "config") await config(); else await results();
     } catch (error) {
+      if (keepCurrentResults) {
+        const activeRun = state.runs.find(item => Number(item.run_id) === Number(state.runId));
+        scheduleResultsPoll(activeRun || { run_id: state.runId, status: "running" });
+        return;
+      }
       shell(`<div class="card card-pad ev-load-state ev-load-error"><span><i data-lucide="cloud-alert"></i></span><div><b>数据加载失败</b><p class="es-gen-hint">${esc(error.message || "无法连接后端服务")}</p><button class="btn ghost" id="evRetryLoad"><i data-lucide="refresh-cw"></i>重新加载</button></div></div>`);
       document.getElementById("evRetryLoad").onclick = render;
       icons();

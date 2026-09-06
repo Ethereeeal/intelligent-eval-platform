@@ -215,7 +215,8 @@ class LLMClient:
   3. llm.extract_json(prompt) → 调 LLM 拿到 JSON 数组
   4. validate_eiu(items) → 校验每条 EIU 字段完整性
   5. 写入 eiu 表 → 绑定 corpus_id + block_id
-  6. 更新 job.progress = 已处理 Block 数 / 总段落 Block 数
+  6. 每完成 10 个 Block 更新一次 job.progress，最后一个 Block 收口到本阶段末点
+  7. 单个 Block 异常隔离：模型响应或上下文映射异常记录为红色待复核项，继续处理后续 Block；缺失/非法 block_id 回退到当前 Block
 ```
 
 ---
@@ -376,7 +377,7 @@ POST /api/corpus/{corpus_id}/eiu/extract
   → 创建 job (job_type="eiu_extract", status="pending")
   → 后台线程逐 Block 调 LLM
   → progress = 已处理 Block 数 / 总段落 Block 数 × 100
-  → 每处理完一个 Block: 更新 progress + message
+  → 每完成 10 个 Block 更新一次 progress；最后一个 Block 即使不足 10 个也更新
   → 全部完成: status="completed", message="EIU 抽取完成，共 N 条"
   → 失败: status="failed", message=错误详情
 ```

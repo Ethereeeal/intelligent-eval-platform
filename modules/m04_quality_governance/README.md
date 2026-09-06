@@ -95,9 +95,12 @@
   },
   "failed_cases": [
     { "case_id": 3, "failed_checks": ["faithfulness"], "reason": "答案要点#2无原文支持" }
-  ]
+  ],
+  "errors": []
 }
 ```
+
+`errors` 用于返回未能完成检查的样本（`case_id`、`error_type`、`error`）。这类异常不会阻断同批其他题目，后端会记录带堆栈的错误日志；调用方不能仅依据 HTTP 200 判断质量检查全部完成。
 
 ### 2.4 Sample 审核状态机（Demo 简化版）
 

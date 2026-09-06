@@ -74,13 +74,19 @@ function esStructuralQuality(rows, snapshot) {
 function esGeneratedQuality(summary, rows) {
   const byCheck = summary?.by_check_type || {};
   const keys = ["answerability", "faithfulness", "uniqueness", "evidence_sufficiency", "question_relevance"];
-  if (!keys.some(key => byCheck[key])) return { ...esStructuralQuality(rows), source: "待后端质量检查" };
+  const checkedCount = keys.reduce((total, key) => {
+    const item = byCheck[key] || {};
+    return total + Number(item.passed || 0) + Number(item.failed || 0);
+  }, 0);
+  // /api/quality-check/results 会预置五个空维度；仅判断 key 是否存在会把
+  // “尚未质检”误算成五项 0 分，导致雷达图塌缩。无真实检查记录时明确显示等待态。
+  if (!checkedCount) return { source: "待后端质量检查", pending: true, scores: keys.map(() => null) };
   return {
     source: "后端五项质量检查",
     scores: keys.map(key => {
       const item = byCheck[key] || {};
       const checked = Number(item.passed || 0) + Number(item.failed || 0);
-      return checked ? Math.round(Number(item.passed || 0) / checked * 100) : 0;
+      return checked ? Math.round(Number(item.passed || 0) / checked * 100) : null;
     }),
   };
 }
@@ -90,15 +96,20 @@ function esQualityDashboardHTML(kind, id, quality, rows) {
   const chartKey = `${kind}-${String(id).replace(/[^a-zA-Z0-9_-]/g, "_")}`;
   const difficulty = { "简单": 0, "中等": 0, "难": 0 };
   rows.forEach(row => { difficulty[row.diff] = (difficulty[row.diff] || 0) + 1; });
-  const qualityLegend = ES_QUALITY_DIMENSIONS.map((label, index) => `<span><i></i>${label}<b>${quality.scores[index]}%</b></span>`).join("");
+  const qualityLegend = ES_QUALITY_DIMENSIONS.map((label, index) => {
+    const score = quality.scores[index];
+    const value = quality.pending ? "待质检" : score == null ? "暂无结果" : `${score}%`;
+    return `<span><i></i>${label}<b>${value}</b></span>`;
+  }).join("");
+  const qualityChart = quality.pending ? `<div class="es-quality-pending">尚未完成后端五项质量检查<br><small>质检完成后自动显示真实雷达数据</small></div>` : `<div class="es-quality-chart"><canvas id="esQualityRadar-${chartKey}"></canvas></div>`;
   return `<section class="es-quality-dashboard ${kind === "generate" ? "has-difficulty" : ""}">
-    <div class="es-quality-panel"><div class="es-quality-title"><span>五维质量评估</span><small>${escapeHTML(quality.source)}</small></div><div class="es-quality-chart"><canvas id="esQualityRadar-${chartKey}"></canvas></div><div class="es-quality-legend">${qualityLegend}</div></div>
+    <div class="es-quality-panel"><div class="es-quality-title"><span>五维质量评估</span><small>${escapeHTML(quality.source)}</small></div>${qualityChart}<div class="es-quality-legend">${qualityLegend}</div></div>
     ${kind === "generate" ? `<div class="es-quality-panel"><div class="es-quality-title"><span class="es-quality-title-main">难度分布 <button class="es-quality-info" type="button" aria-label="查看难度说明" aria-describedby="esDifficultyTip-${chartKey}"><i data-lucide="circle-help"></i><span class="es-quality-info-tip" id="esDifficultyTip-${chartKey}" role="tooltip"><b>难度说明</b><br>简单：单段直接事实，可从原文直接回答。<br>中等：需要条件推理、二跳或轻微消歧。<br>难：需要跨段多跳、计算、复杂消歧或对抗。</span></button></span><small>${rows.length} 题</small></div><div class="es-quality-chart"><canvas id="esDifficultyRing-${chartKey}"></canvas></div><div class="es-difficulty-legend"><span><i class="easy"></i>简单 <b>${difficulty["简单"]}</b></span><span><i class="medium"></i>中等 <b>${difficulty["中等"]}</b></span><span><i class="hard"></i>难 <b>${difficulty["难"]}</b></span></div></div>` : ""}
   </section>`;
 }
 
 function esBindQualityCharts(target, kind, id, quality, rows) {
-  if (!quality || kind === "public" || !window.Chart) return;
+  if (!quality || quality.pending || kind === "public" || !window.Chart) return;
   const chartKey = `${kind}-${String(id).replace(/[^a-zA-Z0-9_-]/g, "_")}`;
   const registry = window.__esQualityCharts || (window.__esQualityCharts = {});
   const mount = (key, canvas, config) => {

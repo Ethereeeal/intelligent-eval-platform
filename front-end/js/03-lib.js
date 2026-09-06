@@ -33,7 +33,7 @@
   function docContentHTML(docId) {
     const d = DOCS[docId];
     const isParsing = /上传中|解析中|抽取中/.test(d.status || "");
-    const progressBar = isParsing ? `<div class="upload-prog-wrap mt"><div class="upload-prog-track"><div class="upload-prog-bar" style="width:${Math.round(d.parseProgress||0)}%"></div></div><span class="upload-prog-txt">知识点解析中 ${Math.round(d.parseProgress||0)}%</span></div>` : "";
+    const progressBar = isParsing ? `<div class="upload-prog-wrap mt"><div class="upload-prog-track"><div class="upload-prog-bar" style="width:${Math.round(d.parseProgress||0)}%"></div></div><span class="upload-prog-txt">解析进度 ${Math.round(d.parseProgress||0)}%</span></div>` : "";
     return `<div class="lib-head">
         <div class="lh-ic"><i data-lucide="file-text"></i></div>
         <div><div class="lh-title">${d.name}</div><div class="lh-sub">${d.type} · ${d.size} · ${d.status} · ${d.ver} · ${d.updated}</div></div>
@@ -83,9 +83,22 @@
     </div>`;
   }
 
-  // 知识点表：状态与四项检查优先，证据链支持跨 Block 追溯。
+  // 知识点表：沿用评测集库表格交互；知识点声明可编辑、状态可复核，删除为软删除。
+  function kpStatusKey(status) {
+    return status === "verified" ? "verified" : "needs_review";
+  }
+  function kpStatusLabel(status) {
+    return kpStatusKey(status) === "verified" ? "已通过" : "待复核";
+  }
   function kpTableHTML(all) {
-    return `<div class="kp-table kp-table-filterable">
+    const pending = all.filter(k => kpStatusKey(k.qualityStatus) !== "verified");
+    const allVerified = all.length > 0 && pending.length === 0;
+    return `<div class="kp-review-wrap">
+      <div class="qa-toolbar kp-review-toolbar">
+        <div class="kp-review-note"><i data-lucide="shield-check"></i><span>只有全部知识点复核通过，才能生成评测集</span></div>
+        <div class="qa-toolbar-right"><button class="btn primary sm kp-approve-all" type="button" ${allVerified ? "disabled" : ""}><i data-lucide="check-check"></i><span class="kp-approve-label">${allVerified ? "已全部通过" : "全部通过"}</span></button></div>
+      </div>
+      <div class="kp-table kp-table-filterable">
       <div class="kp-th">
         <span>知识点<span class="col-filter" data-filter="stmt"><i data-lucide="filter"></i></span><span class="kp-resize" data-resize="0"></span></span>
         <span>验证状态<span class="col-filter" data-filter="status"><i data-lucide="filter"></i></span><span class="kp-resize" data-resize="1"></span></span>
@@ -97,15 +110,16 @@
         <span>操作</span>
       </div>
       ${all.map((k, i) => `<div class="kp-tr">
-        <span class="kp-td kp-td-stmt kp-c-stmt"><b>#${i + 1}</b> ${escapeHTML(k.stmt)}</span>
-        <span class="kp-td kp-c-status"><span class="claim-status ${escapeHTML(k.qualityStatus || "candidate")}">${escapeHTML(k.qualityLabel || "候选")}</span></span>
+        <span class="kp-td kp-td-stmt kp-c-stmt"><b>#${i + 1}</b><button type="button" class="kp-stmt-edit" data-eiu-id="${escapeHTML(String(k.id || "").replace(/^KP-/, ""))}" title="编辑知识点">${escapeHTML(k.stmt)}</button></span>
+        <span class="kp-td kp-c-status"><select class="kp-status-select" data-eiu-id="${escapeHTML(String(k.id || "").replace(/^KP-/, ""))}" aria-label="知识点验证状态"><option value="needs_review" ${kpStatusKey(k.qualityStatus) === "needs_review" ? "selected" : ""}>待复核</option><option value="verified" ${kpStatusKey(k.qualityStatus) === "verified" ? "selected" : ""}>已通过</option></select></span>
         <span class="kp-td kp-c-quality" title="${escapeHTML(k.qualityDetail || "")}">${escapeHTML(k.qualityText || "未检查")}</span>
         <span class="kp-td kp-c-prio">${escapeHTML(k.prio)}</span>
         <span class="kp-td kp-c-type"><span class="pill br">${escapeHTML(k.type)}</span></span>
         <span class="kp-td kp-td-ev kp-c-ev">${k.crossBlock ? '<span class="cross-block-tag">跨块</span> ' : ''}${escapeHTML(k.evidenceChain || k.ev)}</span>
         <span class="kp-td kp-td-src kp-c-src">${escapeHTML(k.src)}</span>
-        <span class="kp-td kp-review-actions">${k.qualityStatus === "needs_review" ? `<button class="btn ghost sm kp-review-action" data-eiu-id="${escapeHTML(String(k.id || "").replace(/^KP-/, ""))}" data-review-action="approve">通过</button><button class="btn ghost sm kp-review-action" data-eiu-id="${escapeHTML(String(k.id || "").replace(/^KP-/, ""))}" data-review-action="edit">编辑</button><button class="btn ghost sm kp-review-action danger" data-eiu-id="${escapeHTML(String(k.id || "").replace(/^KP-/, ""))}" data-review-action="reject">排除</button>` : ["verified", "rejected"].includes(k.qualityStatus) ? `<button class="btn ghost sm kp-review-action" data-eiu-id="${escapeHTML(String(k.id || "").replace(/^KP-/, ""))}" data-review-action="reopen">重新复核</button>` : '<span class="muted">—</span>'}</span>
+        <span class="kp-td kp-kp-actions"><button class="btn ghost icon-only sm kp-delete" type="button" data-eiu-id="${escapeHTML(String(k.id || "").replace(/^KP-/, ""))}" title="删除知识点" aria-label="删除知识点"><i data-lucide="trash-2"></i></button></span>
       </div>`).join("")}
+      </div>
     </div>`;
   }
 
@@ -122,7 +136,7 @@
       <div class="card card-pad">
         ${claimSummaryHTML(d)}
         ${kpTableHTML(d.kp)}
-        <p class="muted mt">正式口径：仅“已验证”声明进入覆盖率分母和问答生成；待复核声明保留在候选池。绿色为确定性验证，黄色为 LLM 审查，红色为人工复核；可在待复核项直接通过、编辑后通过或排除。</p>
+        <p class="muted mt">正式口径：只有当前文档的全部知识点复核为“已通过”后，才允许生成评测集；编辑知识点后会自动回到“待复核”，需要重新确认。</p>
       </div>`;
   }
 
@@ -154,7 +168,7 @@
       };
       const kpf = $("#docContent #kpFullscreenBtn"); if (kpf) kpf.onclick = () => openKpFullscreen(DOCS[docId].kp, DOCS[docId].name);
       bindKpColFilters($("#docContent"));
-      bindKpReviewActions($("#docContent"));
+      bindKpTableInteractions($("#docContent"), DOCS[docId].kp);
       bindKpColResize($("#docContent .kp-table"));
       setupPager($("#docContent"), "#docContent .kp-tr", 15, "kpPager", "kpPage");
       enableHScrollDrag($("#docContent .kp-table"));
@@ -984,7 +998,7 @@
       };
       icons();
       bindKpColFilters(overlay);
-      bindKpReviewActions(overlay);
+      bindKpTableInteractions(overlay, all);
       bindKpColResize(overlay.querySelector(".kp-table"));
       setupPager(overlay, ".kp-tr", 15, "kpFsPager", "kpPage");
       enableHScrollDrag(overlay.querySelector(".kp-table"));
@@ -1141,11 +1155,19 @@
 
   // 知识点表格列筛选（与评测集列筛选机制一致）
   const kpColFilterLabel = { stmt: "知识点", status: "验证状态", quality: "质量检查", prio: "优先级", type: "类型", ev: "证据链", src: "来源文档" };
+  function kpFilterCellValue(cell, field) {
+    if (!cell) return "—";
+    if (field === "status") {
+      const select = cell.querySelector(".kp-status-select");
+      return select ? kpStatusLabel(select.value) : cell.textContent.trim() || "—";
+    }
+    return cell.textContent.replace(/^#\d+\s*/, "").trim() || "—";
+  }
   function openKpColFilter(field, anchor) {
     $$(".ctx-popup").forEach(p => p.remove());
     const pop = document.createElement("div"); pop.className = "ctx-popup col-filter-pop";
     const cells = $$(`.kp-c-${field}`);
-    const vals = [...new Set(cells.map(c => c.textContent.replace(/^#\d+\s*/, "").trim()).filter(Boolean))];
+    const vals = [...new Set(cells.map(c => kpFilterCellValue(c, field)).filter(Boolean))];
     pop.innerHTML = `<div class="up-title">筛选：${kpColFilterLabel[field] || field}</div>` + vals.map(v => `<label class="cf-item"><input type="checkbox" checked data-v="${escapeHTML(v)}"/> ${escapeHTML(v)}</label>`).join("") + `<button class="cf-apply">应用</button>`;
     pop.style.visibility = "hidden";
     document.body.appendChild(pop);
@@ -1155,7 +1177,7 @@
       const keep = new Set([...pop.querySelectorAll("input[data-v]:checked")].map(x => x.dataset.v));
       $$(`.kp-table .kp-tr`).forEach(row => {
         const cell = row.querySelector(`.kp-c-${field}`);
-        const f = cell ? cell.textContent.replace(/^#\d+\s*/, "").trim() : "—";
+        const f = kpFilterCellValue(cell, field);
         if (keep.has(f)) { row.style.display = ""; delete row.dataset.filtered; }
         else { row.style.display = "none"; row.dataset.filtered = "1"; }
       });
@@ -1167,7 +1189,7 @@
       icon.onclick = (e) => { e.stopPropagation(); openKpColFilter(icon.dataset.filter, icon); };
     });
   }
-  async function updateKpReview(eiuId, payload, message) {
+  async function requestKpUpdate(eiuId, payload) {
     const response = await fetch(API_BASE + `/api/eiu/${encodeURIComponent(eiuId)}`, {
       method: "PUT",
       headers: { "Content-Type": "application/json", "Accept": "application/json" },
@@ -1178,154 +1200,130 @@
       try { detail = (await response.json()).detail || detail; } catch (e) {}
       throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
     }
+    return response.json();
+  }
+  async function refreshKpDocument(message) {
     await loadData();
     renderNav();
     renderLibContent("doc", state.sel.doc);
-    toast(message);
+    if (message) toast(message);
   }
-  async function postKpReview(path, payload, message) {
-    const response = await fetch(API_BASE + path, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "Accept": "application/json" },
-      body: JSON.stringify(payload)
+  async function updateKpReview(eiuId, payload, message) {
+    await requestKpUpdate(eiuId, payload);
+    await refreshKpDocument(message);
+  }
+  function closeKpFullscreen(scope) {
+    if (scope?.classList.contains("kp-fullscreen")) {
+      scope.remove();
+      document.body.style.overflow = "";
+    }
+  }
+  function openKpStatementEditor(cell, record, scope) {
+    const mask = document.createElement("div");
+    mask.className = "modal-mask kp-statement-modal";
+    mask.innerHTML = `<div class="modal"><div class="modal-head"><span>编辑知识点</span><button class="modal-x" type="button">×</button></div><div class="modal-body"><textarea class="es-input" data-kp-statement rows="6">${escapeHTML(record.stmt || "")}</textarea></div><div class="modal-foot"><button class="btn ghost modal-cancel" type="button">取消</button><button class="btn primary" data-save type="button">保存</button></div></div>`;
+    document.body.appendChild(mask);
+    const close = () => mask.remove();
+    mask.querySelector(".modal-x").onclick = close;
+    mask.querySelector(".modal-cancel").onclick = close;
+    const editor = mask.querySelector("[data-kp-statement]");
+    const save = mask.querySelector("[data-save]");
+    save.onclick = async () => {
+      const statement = editor.value.trim();
+      if (!statement) return toast("知识点不能为空", "warn");
+      if (statement.length > 200) return toast("知识点不能超过 200 字", "warn");
+      if (statement === (record.stmt || "").trim()) return close();
+      save.disabled = true;
+      try {
+        await updateKpReview(String(record.id || "").replace(/^KP-/, ""), { statement }, "知识点已保存，状态已回到待复核");
+        closeKpFullscreen(scope);
+        close();
+      } catch (error) {
+        save.disabled = false;
+        toast(`保存失败：${error.message || error}`, "warn");
+      }
+    };
+    editor.focus();
+  }
+  async function deleteKp(eiuId, scope) {
+    const response = await fetch(API_BASE + `/api/eiu/${encodeURIComponent(eiuId)}`, {
+      method: "DELETE",
+      headers: { "Accept": "application/json" }
     });
     if (!response.ok) {
       let detail = `请求失败（${response.status}）`;
       try { detail = (await response.json()).detail || detail; } catch (e) {}
       throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
     }
-    await loadData();
-    renderNav();
-    renderLibContent("doc", state.sel.doc);
-    toast(message);
+    await refreshKpDocument("知识点已删除");
+    closeKpFullscreen(scope);
   }
-  function setupKpSplitMerge(scope) {
-    const root = scope || document;
-    const table = root.querySelector(".kp-table");
-    if (!table || root.querySelector(".kp-merge-toolbar")) return;
-    const eligible = [...table.querySelectorAll('.kp-review-action[data-review-action="approve"]')];
-    if (!eligible.length) return;
-    eligible.forEach(approve => {
-      const row = approve.closest(".kp-tr");
-      const statement = row?.querySelector(".kp-td-stmt");
-      const actions = approve.closest(".kp-review-actions");
-      if (!row || !statement || !actions) return;
-      const eiuId = approve.dataset.eiuId;
-      if (!statement.querySelector(".kp-merge-select")) {
-        const check = document.createElement("input");
-        check.type = "checkbox"; check.className = "kp-merge-select"; check.dataset.eiuId = eiuId;
-        check.setAttribute("aria-label", "选择知识点用于合并");
-        statement.prepend(check);
-      }
-      if (!actions.querySelector('[data-review-action="split"]')) {
-        const split = document.createElement("button");
-        split.className = "btn ghost sm kp-review-action";
-        split.dataset.eiuId = eiuId; split.dataset.reviewAction = "split"; split.textContent = "拆分";
-        actions.insertBefore(split, actions.querySelector('[data-review-action="reject"]'));
-      }
-    });
-    const toolbar = document.createElement("div");
-    toolbar.className = "kp-merge-toolbar";
-    toolbar.innerHTML = '<span>勾选待复核知识点后可合并；合并结果仍需复核。</span><button class="btn ghost sm" type="button" disabled>合并所选（0）</button>';
-    table.before(toolbar);
-    const mergeButton = toolbar.querySelector("button");
-    const selected = () => [...table.querySelectorAll(".kp-merge-select:checked")].map(input => Number(input.dataset.eiuId)).filter(Boolean);
-    const sync = () => { const ids = selected(); mergeButton.disabled = ids.length < 2; mergeButton.textContent = `合并所选（${ids.length}）`; };
-    table.querySelectorAll(".kp-merge-select").forEach(input => input.addEventListener("change", sync));
-    mergeButton.addEventListener("click", async () => {
-      const ids = selected();
-      if (ids.length < 2) return;
-      const statement = window.prompt("请输入合并后的完整知识点；合并后会进入待复核：");
-      if (!statement || !statement.trim()) return;
-      try { await postKpReview("/api/eiu/merge", { source_eiu_ids: ids, statement: statement.trim() }, "知识点已合并，等待复核"); }
-      catch (error) { toast(`合并失败：${error.message || error}`); }
-    });
-  }
-  async function loadKpRelationshipHints(scope) {
-    const docId = Number(state.sel.doc);
-    if (!docId || !scope) return;
-    try {
-      const response = await fetch(API_BASE + `/api/eiu/document/${encodeURIComponent(docId)}/relationships`, {
-        headers: { "Accept": "application/json" }
-      });
-      if (!response.ok) return;
-      const report = await response.json();
-      const labels = { exact_duplicate: "重复", contains: "包含", overlaps: "重叠", conflict: "冲突" };
-      const hints = new Map();
-      (report.samples || []).forEach(item => {
-        const label = labels[item.relation_type] || item.relation_type;
-        [item.left_eiu_id, item.right_eiu_id].forEach(id => {
-          if (!id) return;
-          const current = hints.get(String(id)) || [];
-          if (!current.includes(label)) current.push(label);
-          hints.set(String(id), current);
-        });
-      });
-      hints.forEach((labelsForEiu, eiuId) => {
-        const action = scope.querySelector(`.kp-review-action[data-eiu-id="${eiuId}"]`);
-        const cell = action && action.closest(".kp-review-actions");
-        if (!cell || cell.querySelector(".claim-relation-hint")) return;
-        const hint = document.createElement("span");
-        hint.className = `claim-relation-hint${labelsForEiu.includes("冲突") ? " conflict" : ""}`;
-        hint.textContent = labelsForEiu.join("/");
-        hint.title = "关系诊断仅作复核提示；请确认原文证据后再合并或修改。";
-        cell.append(hint);
-      });
-    } catch (error) { /* 关系提示不可用不影响既有审核操作。 */ }
-  }
-
-  function bindKpReviewActions(scope) {
-    setupKpSplitMerge(scope);
-    void loadKpRelationshipHints(scope);
-    (scope || document).querySelectorAll(".kp-review-action").forEach(button => {
-      if (button.dataset.bound) return;
-      button.dataset.bound = "1";
-      button.addEventListener("click", async event => {
-        event.stopPropagation();
-        const eiuId = button.dataset.eiuId;
-        if (!eiuId) return;
+  async function approveAllKp(all, button, scope) {
+    const targets = all.filter(k => k.id && kpStatusKey(k.qualityStatus) !== "verified");
+    if (!targets.length) return;
+    if (!window.confirm(`确认将当前文档的 ${targets.length} 条待复核知识点全部标记为“已通过”吗？`)) return;
+    button.disabled = true;
+    const label = button.querySelector(".kp-approve-label");
+    if (label) label.textContent = "通过中…";
+    let cursor = 0;
+    let failed = 0;
+    const worker = async () => {
+      while (cursor < targets.length) {
+        const item = targets[cursor++];
         try {
-          if (button.dataset.reviewAction === "approve") {
-            await updateKpReview(eiuId, { quality_status: "verified" }, "知识点已通过验证");
-          } else if (button.dataset.reviewAction === "edit") {
-            const row = button.closest(".kp-tr");
-            const current = row?.querySelector(".kp-td-stmt")?.textContent.replace(/^#\d+\s*/, "").trim() || "";
-            const statement = window.prompt("编辑知识点；确认其已被当前证据完整支持后可直接通过：", current);
-            if (statement != null && statement.trim()) {
-              await updateKpReview(eiuId, { statement: statement.trim(), quality_status: "verified" }, "知识点已编辑并通过验证");
-            }
-          } else if (button.dataset.reviewAction === "split") {
-            const text = window.prompt("请输入拆分后的知识点，每行一条；拆分结果需分别复核：");
-            const statements = text == null ? [] : text.split(/\n+/).map(value => value.trim()).filter(Boolean);
-            if (statements.length >= 2) {
-              await postKpReview(`/api/eiu/${encodeURIComponent(eiuId)}/split`, { statements }, "知识点已拆分，等待分别复核");
-            } else if (text != null) {
-              toast("请至少填写两条不同的知识点");
-            }
-          } else if (button.dataset.reviewAction === "reopen") {
-            await updateKpReview(
-              eiuId,
-              { is_questionable: true, exclusion_reason: null, quality_status: "needs_review" },
-              "知识点已回退到待复核"
-            );
-          } else if (button.dataset.reviewAction === "reject") {
-            const reason = window.prompt("请填写排除原因（例如：重复强调、外部引用缺失、非实质内容）：");
-            if (reason != null && reason.trim()) {
-              await updateKpReview(eiuId, { is_questionable: false, exclusion_reason: reason.trim(), quality_status: "rejected" }, "知识点已排除");
-            } else if (reason != null) {
-              toast("排除操作需要填写原因");
-            }
-          }
+          await requestKpUpdate(String(item.id).replace(/^KP-/, ""), { quality_status: "verified" });
         } catch (error) {
-          toast(`操作失败：${error.message || error}`);
+          failed += 1;
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(8, targets.length) }, worker));
+    await refreshKpDocument(failed ? `${targets.length - failed} 条知识点已通过，${failed} 条更新失败` : `已通过 ${targets.length} 条知识点`);
+    closeKpFullscreen(scope);
+  }
+  function bindKpTableInteractions(scope, all) {
+    const root = scope || document;
+    root.querySelectorAll(".kp-stmt-edit").forEach(button => {
+      button.addEventListener("click", event => {
+        event.stopPropagation();
+        const record = all.find(item => String(item.id || "").replace(/^KP-/, "") === button.dataset.eiuId);
+        if (record) openKpStatementEditor(button.closest(".kp-td-stmt"), record, root);
+      });
+    });
+    root.querySelectorAll(".kp-status-select").forEach(select => {
+      select.addEventListener("change", async event => {
+        event.stopPropagation();
+        const previous = select.dataset.previous || "needs_review";
+        const next = kpStatusKey(select.value);
+        select.disabled = true;
+        try {
+          await updateKpReview(select.dataset.eiuId, { quality_status: next }, next === "verified" ? "知识点已通过验证" : "知识点已回到待复核");
+          closeKpFullscreen(root);
+        } catch (error) {
+          select.value = previous;
+          toast(`状态更新失败：${error.message || error}`, "warn");
+        } finally {
+          select.disabled = false;
         }
       });
+      select.dataset.previous = select.value;
     });
+    root.querySelectorAll(".kp-delete").forEach(button => {
+      button.addEventListener("click", async event => {
+        event.stopPropagation();
+        if (!button.dataset.eiuId || !window.confirm("确定删除这个知识点吗？删除后它将不再参与评测集生成。")) return;
+        button.disabled = true;
+        try { await deleteKp(button.dataset.eiuId, root); }
+        catch (error) { button.disabled = false; toast(`删除失败：${error.message || error}`, "warn"); }
+      });
+    });
+    const approveAll = root.querySelector(".kp-approve-all");
+    if (approveAll) approveAll.addEventListener("click", () => { void approveAllKp(all, approveAll, root); });
   }
   // 知识点表格列宽拖拽调整（与主评测集表一致）
   function bindKpColResize(table) {
     if (!table) return;
-    const defCols = [320, 104, 104, 96, 100, 260, 200];
+    const defCols = [320, 120, 140, 96, 100, 260, 200, 76];
     const cur = () => {
       const v = getComputedStyle(table).getPropertyValue("--kp-cols");
       if (v && v.trim()) return v.trim().split(/\s+/).map(s => parseFloat(s));
@@ -1353,7 +1351,7 @@
     el.classList.add("scroll-drag");
     let down = false, startX = 0, startLeft = 0, moved = false;
     el.addEventListener("mousedown", (e) => {
-      if (e.target.closest("button, input, .col-filter, a, .qa-resize, .kp-resize, .qa-cell-editable")) return;
+      if (e.target.closest("button, input, select, .col-filter, a, .qa-resize, .kp-resize, .qa-cell-editable")) return;
       down = true; moved = false; startX = e.pageX; startLeft = el.scrollLeft; el.classList.add("dragging");
     });
     window.addEventListener("mouseup", () => { down = false; el.classList.remove("dragging"); });

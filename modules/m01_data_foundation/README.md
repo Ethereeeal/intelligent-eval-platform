@@ -210,7 +210,7 @@ Demo 阶段不实现完整的 FR-CORPUS-003，仅做：
 显式调用重传接口时，后端自动完成"重解析 → EIU 重抽 → 版本重建 → 删除旧文档"闭环，并向前端暴露统一进度；普通上传不会因为内容或文件名重复而拦截。
 
 **触发方式：**
-- 由调用方明确指定已有文档并调用 `POST /api/documents/{document_id}/reupload`；
+- 由调用方明确指定已有文档并调用 `POST /api/documents/{document_id}/reupload`；显式重传仍需确认令牌以防误覆盖；
 - 普通 `POST /api/documents/upload` 始终创建新的文档记录，即使内容、文件名或目录相同。
 
 **闭环流程（m01 API 编排线程 `_run_reupload_chain`）：**
