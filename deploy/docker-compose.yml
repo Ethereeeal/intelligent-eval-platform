@@ -50,6 +50,9 @@ services:
       # LLM（OpenAI 兼容 API）：DeepSeek，配置来自 ../.env（已 gitignore，本地使用，不入库）
       LLM_TEMPERATURE: "0.1"
       LLM_MAX_TOKENS: "4096"
+      EIU_LLM_TIMEOUT_SECONDS: "30"
+      EIU_LLM_MAX_ATTEMPTS: "2"
+      EIU_LLM_CONCURRENCY: "3"
       # P0 安全加固：生产必须设置 API_TOKEN（默认关闭，Demo 联调保持无鉴权）；
       # CORS 白名单默认 localhost:8080（前端同源代理），直连/局域网访问按需追加
       # API_TOKEN: "change-me"

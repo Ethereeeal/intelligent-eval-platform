@@ -99,6 +99,13 @@ class EiuQualityEvaluator:
         ]
 
         checks = self._evaluate(statement, source_text, deduped)
+        # 禁止出现“3/3 质量通过但状态被隐藏标记强制打回”的矛盾。若外部审查
+        # 确有阻断（例如二次审查不一致），它必须成为前端可见的完整性警告。
+        if force_needs_review and all(check["status"] == "pass" for check in checks.values()):
+            checks["completeness"] = _check(
+                "warning",
+                ["自动补证或一致性审查尚未形成可靠结论"],
+            )
         complexity = self._complexity(statement, deduped)
         result["quality_checks"] = checks
         result["quality_score"] = round(

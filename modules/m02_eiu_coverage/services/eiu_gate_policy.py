@@ -8,10 +8,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
+from modules.shared.core.config import settings
+
+
+logger = logging.getLogger(__name__)
 
 QUALITY_POLICY_VERSION = "eiu-gate-v1"
 IMPORTANCE_LEVELS = {"P0", "P1", "P2"}
@@ -69,6 +75,17 @@ class EiuGatePolicy:
         LLM 可用时按整篇文档（标题、段落路径、所有候选）判定 P0/P1/P2；离线时
         只给保守的 P1/P2 兜底，避免把规则谓词错误等同于“核心内容”。
         """
+        classified = self.classify_document(document=document, items=items, blocks=blocks)
+        return self.finalize_document(document=document, items=classified)
+
+    def classify_document(
+        self,
+        *,
+        document: dict[str, Any],
+        items: list[dict[str, Any]],
+        blocks: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """在补齐前批量判定相对文档目的的重要性，不执行最终三色处置。"""
         result = [dict(item) for item in items]
         for index, item in enumerate(result):
             item["canonical_intent_key"] = _canonical_key(item)
@@ -82,8 +99,26 @@ class EiuGatePolicy:
             item["content_priority"] = decision.get("importance_level", "P1")
             item["importance_reason"] = decision.get("reason") or "按文档整体上下文完成重要性判定"
             item["evaluation_profiles"] = decision.get("evaluation_profiles") or self._default_profiles(item)
-            self._apply_quality_disposition(item)
+            item.pop("_policy_index", None)
+        return result
 
+    def finalize_document(
+        self,
+        *,
+        document: dict[str, Any],
+        items: list[dict[str, Any]],
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        """依据既有重要性与三项质量结果收口，不再次调用 LLM。"""
+        result = [dict(item) for item in items]
+        for index, item in enumerate(result):
+            item.setdefault("canonical_intent_key", _canonical_key(item))
+            item.setdefault("importance_signals", self._importance_signals(item))
+            item.setdefault("content_priority", "P1")
+            item.setdefault("importance_reason", "采用抽取前的文档级重要性判定")
+            item.setdefault("evaluation_profiles", self._default_profiles(item))
+            item["quality_policy_version"] = QUALITY_POLICY_VERSION
+            item["_policy_index"] = index
+            self._apply_quality_disposition(item)
         duplicate_findings = self._archive_true_duplicates(result)
         findings = self._build_quality_findings(document, result, duplicate_findings)
         for item in result:
@@ -108,21 +143,19 @@ class EiuGatePolicy:
         blocks: list[dict[str, Any]],
     ) -> dict[int, dict[str, Any]]:
         decisions = self._ask_llm_for_importance(document, items, blocks)
-        if decisions:
-            return decisions
-
-        # 离线降级：不把“不得/必须”等规则类型直接升级为 P0。只有明显背景/示例
-        # 降为 P2，其余保守地标为 P1，并等待具备模型时按文档整体重算。
-        fallback: dict[int, dict[str, Any]] = {}
+        # 对模型失败或漏返回的批次逐项降级，不让一个坏批次抹掉其他批次的判断。
+        # 降级不把“不得/必须”等规则类型直接升级为 P0。
         for item in items:
+            if item["_policy_index"] in decisions:
+                continue
             statement = str(item.get("statement") or "")
             priority = "P2" if _EXAMPLE_RE.search(statement) else "P1"
-            fallback[item["_policy_index"]] = {
+            decisions[item["_policy_index"]] = {
                 "importance_level": priority,
                 "reason": "LLM 不可用，采用不将规则类型等同于文档重要性的保守降级判定",
                 "evaluation_profiles": self._default_profiles(item, priority=priority),
             }
-        return fallback
+        return decisions
 
     def _ask_llm_for_importance(
         self,
@@ -132,24 +165,12 @@ class EiuGatePolicy:
     ) -> dict[int, dict[str, Any]]:
         if self.llm is None or getattr(self.llm, "use_offline", True):
             return {}
-        payload = {
-            "document": {
-                "name": document.get("file_name"),
-                "purpose": document.get("purpose"),
-                "sections": list(dict.fromkeys(
-                    str(block.get("section_path") or "") for block in blocks if block.get("section_path")
-                ))[:80],
-            },
-            "candidates": [
-                {
-                    "candidate_id": item["_policy_index"],
-                    "statement": item.get("statement"),
-                    "section_path": item.get("section_path"),
-                    "eiu_type": item.get("eiu_type"),
-                    "signals": item.get("importance_signals"),
-                }
-                for item in items
-            ],
+        document_context = {
+            "name": document.get("file_name"),
+            "purpose": document.get("purpose"),
+            "sections": list(dict.fromkeys(
+                str(block.get("section_path") or "") for block in blocks if block.get("section_path")
+            ))[:80],
         }
         system_prompt = (
             "你是评测集知识覆盖规划器。仅依据同一文档的目的、章节结构和全部候选，"
@@ -159,13 +180,36 @@ class EiuGatePolicy:
             "candidate_id、importance_level(P0/P1/P2)、reason、evaluation_profiles"
             "（developer_smoke/test_full/business 的子集）。"
         )
-        try:
-            raw = self.llm.extract_json(system_prompt, json.dumps(payload, ensure_ascii=False))
-        except Exception:  # LLM 故障必须降级，不能中断文档处理
-            return {}
+        candidate_rows = [{
+            "candidate_id": item["_policy_index"],
+            "statement": item.get("statement"),
+            "section_path": item.get("section_path"),
+            "eiu_type": item.get("eiu_type"),
+            "signals": item.get("importance_signals"),
+        } for item in items]
+        batches = [candidate_rows[index:index + 20] for index in range(0, len(candidate_rows), 20)]
+
+        def classify_batch(batch: list[dict[str, Any]]) -> list[dict]:
+            payload = {"document": document_context, "candidates": batch}
+            return self.llm.extract_json(system_prompt, json.dumps(payload, ensure_ascii=False))
+
+        raw_rows: list[dict] = []
+        workers = min(settings.eiu_llm_concurrency, len(batches))
+        with ThreadPoolExecutor(max_workers=max(1, workers), thread_name_prefix="eiu-importance") as pool:
+            futures = {pool.submit(classify_batch, batch): batch for batch in batches}
+            for future in as_completed(futures):
+                try:
+                    raw_rows.extend(future.result())
+                except Exception as exc:  # noqa: BLE001 — 单批失败只降级该批
+                    # 单批失败由 _classify_importance 对对应 candidate_id 逐项安全降级。
+                    logger.warning(
+                        "EIU importance batch failed",
+                        extra={"candidate_count": len(futures[future]), "error_type": type(exc).__name__},
+                    )
+                    continue
         decisions: dict[int, dict[str, Any]] = {}
         valid_indices = {item["_policy_index"] for item in items}
-        for row in raw:
+        for row in raw_rows:
             try:
                 index = int(row.get("candidate_id"))
             except (TypeError, ValueError):
@@ -182,7 +226,7 @@ class EiuGatePolicy:
                 "reason": str(row.get("reason") or "LLM 基于全文上下文判定"),
                 "evaluation_profiles": profiles,
             }
-        return decisions if len(decisions) == len(items) else {}
+        return decisions
 
     def _default_profiles(self, item: dict[str, Any], *, priority: str | None = None) -> list[str]:
         level = priority or str(item.get("content_priority") or "P1")

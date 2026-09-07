@@ -17,7 +17,7 @@ from modules.m02_eiu_coverage.services.eiu_extractor import (
     deterministic_extract,
 )
 from modules.m02_eiu_coverage.services.eiu_quality import EiuQualityEvaluator
-from modules.m02_eiu_coverage.services.llm_client import LLMClient
+from modules.m02_eiu_coverage.services.llm_client import LLMClient, LLMError
 
 
 class M02HardeningTests(unittest.TestCase):
@@ -64,7 +64,7 @@ class M02HardeningTests(unittest.TestCase):
         self.assertEqual(items[0]["predicate"], "\u63a5\u53d7")
         self.assertIn("\u4ed6\u884c", items[0]["object"])
 
-    def test_green_route_requires_subject_and_single_predicate(self) -> None:
+    def test_green_route_uses_quality_gate_not_surface_subject_presence(self) -> None:
         service = EiuExtractorService()
         service.llm.use_offline = True
         direct = {"block_id": 1, "block_text": "\u672c\u89c4\u7a0b\u81ea\u5370\u53d1\u4e4b\u65e5\u8d77\u65bd\u884c\u3002", "block_type": "paragraph", "section_path": "\u603b\u5219"}
@@ -72,8 +72,8 @@ class M02HardeningTests(unittest.TestCase):
         self.assertEqual(direct_items[0]["route_color"], "green")
         missing_subject = {"block_id": 2, "block_text": "\u5e94\u5f53\u63d0\u4f9b\u5b58\u5355\u539f\u4ef6\u3002", "block_type": "paragraph", "section_path": "\u603b\u5219"}
         pending_items = service._extract_block(missing_subject, {"file_name": "x.docx"}, {"prev": "", "next": ""})
-        self.assertEqual(pending_items[0]["route_color"], "red")
-        self.assertIn("\u663e\u5f0f\u4e3b\u4f53", "".join(pending_items[0]["route_reasons"]))
+        self.assertEqual(pending_items[0]["route_color"], "green")
+        self.assertTrue(pending_items[0]["route_reasons"])
 
     def test_parser_preserves_article_and_list_lead_relationship(self) -> None:
         blocks = DocumentParser()._assign_hierarchy([
@@ -123,7 +123,7 @@ class M02HardeningTests(unittest.TestCase):
             [{"statement": "\u7533\u8bf7\u4eba\u5e94\u5f53\u6309\u7b2c\u5341\u516b\u6761\u63d0\u4f9b\u6750\u6599", "review_action": "complete_context", "evidence_block_ids": [1, 2]}],
         ])
         blocks = [
-            {"block_id": 1, "block_text": "\u7533\u8bf7\u4eba\u5e94\u5f53\u6309\u7b2c\u5341\u516b\u6761\u63d0\u4f9b\u6750\u6599\u3002", "block_type": "paragraph", "section_path": "\u6388\u4fe1", "metadata_json": {}},
+            {"block_id": 1, "block_text": "\u4e0a\u8ff0\u6750\u6599\u5e94\u5f53\u6309\u7b2c\u5341\u516b\u6761\u8981\u6c42\u63d0\u4f9b\u3002", "block_type": "paragraph", "section_path": "\u6388\u4fe1", "metadata_json": {}},
             {"block_id": 2, "block_text": "\u7b2c\u5341\u516b\u6761 \u6750\u6599\u5e94\u5305\u62ec\u5b58\u5355\u539f\u4ef6\u3002", "block_type": "paragraph", "section_path": "\u6388\u4fe1", "metadata_json": {"article_no": "\u7b2c\u5341\u516b\u6761"}},
         ]
         context = ContextBundleBuilder(blocks).build_all()[1]
@@ -152,14 +152,14 @@ class M02HardeningTests(unittest.TestCase):
         blocks = [
             {
                 "block_id": 1,
-                "block_text": "\u7533\u8bf7\u4eba\u5e94\u5f53\u6309\u7b2c\u5341\u516b\u6761\u63d0\u4f9b\u5b58\u5355\u539f\u4ef6\u3002",
+                "block_text": "\u4e0a\u8ff0\u6750\u6599\u5e94\u5f53\u6309\u7b2c\u5341\u516b\u6761\u8981\u6c42\u63d0\u4f9b\u3002",
                 "block_type": "paragraph",
                 "section_path": "\u6388\u4fe1",
                 "metadata_json": {"article_no": "\u7b2c\u5341\u516b\u6761"},
             },
             {
                 "block_id": 2,
-                "block_text": "\u7533\u8bf7\u4eba\u4e0d\u5f97\u6309\u7b2c\u5341\u516b\u6761\u63a5\u53d7\u4ed6\u884c\u5b58\u5355\u8d28\u62bc\u3002",
+                "block_text": "\u4e0a\u8ff0\u6750\u6599\u4e0d\u5f97\u6309\u7b2c\u5341\u516b\u6761\u7528\u4e8e\u4ed6\u884c\u5b58\u5355\u8d28\u62bc\u3002",
                 "block_type": "paragraph",
                 "section_path": "\u6388\u4fe1",
                 "metadata_json": {"article_no": "\u7b2c\u5341\u516b\u6761"},
@@ -194,7 +194,7 @@ class M02HardeningTests(unittest.TestCase):
             }],
         ])
         blocks = [
-            {"block_id": 1, "block_text": "\u7533\u8bf7\u4eba\u5e94\u5f53\u6309\u7b2c\u5341\u516b\u6761\u63d0\u4f9b\u6750\u6599\u3002", "block_type": "paragraph", "section_path": "\u6388\u4fe1", "metadata_json": {}},
+            {"block_id": 1, "block_text": "\u4e0a\u8ff0\u6750\u6599\u5e94\u5f53\u6309\u7b2c\u5341\u516b\u6761\u8981\u6c42\u63d0\u4f9b\u3002", "block_type": "paragraph", "section_path": "\u6388\u4fe1", "metadata_json": {}},
             {"block_id": 2, "block_text": "\u7b2c\u5341\u516b\u6761 \u6750\u6599\u5e94\u5305\u62ec\u5b58\u5355\u539f\u4ef6\u3002", "block_type": "paragraph", "section_path": "\u6388\u4fe1", "metadata_json": {"article_no": "\u7b2c\u5341\u516b\u6761"}},
         ]
         items = service._extract_block(
@@ -214,6 +214,45 @@ class M02HardeningTests(unittest.TestCase):
             LLMClient._repair_json('[{"statement": "x"}]'),
             [{"statement": "x"}],
         )
+
+    def test_llm_retries_only_once_for_transient_failure(self) -> None:
+        service = LLMClient()
+        service.use_offline = False
+        service.max_attempts = 2
+        response = Mock()
+        response.choices = [Mock(message=Mock(content='{"items": []}'))]
+        create = Mock(side_effect=[TimeoutError("slow upstream"), response])
+        service._client = Mock(chat=Mock(completions=Mock(create=create)))
+
+        with patch("modules.m02_eiu_coverage.services.llm_client.time.sleep") as sleep:
+            result = service.chat([{"role": "user", "content": "x"}])
+
+        self.assertEqual(result, '{"items": []}')
+        self.assertEqual(create.call_count, 2)
+        sleep.assert_called_once_with(1)
+
+    def test_review_circuit_breaker_stops_waiting_and_never_turns_green(self) -> None:
+        service = EiuExtractorService()
+        service.llm.use_offline = False
+        service.llm.extract_json = Mock(side_effect=LLMError("timeout"))
+        results = []
+        for block_id in range(1, 5):
+            block = {
+                "block_id": block_id,
+                "block_type": "paragraph",
+                "block_text": "上述材料应当真实有效。",
+                "section_path": "授信",
+            }
+            results.extend(service._extract_block(
+                block,
+                {"document_id": 1, "file_name": "授信规则.docx"},
+                {"prev": "", "next": ""},
+            ))
+
+        self.assertEqual(service.llm.extract_json.call_count, 3)
+        self.assertTrue(service._review_circuit_open)
+        self.assertTrue(all(item["route_color"] != "green" for item in results))
+        self.assertIn("停止继续等待", "".join(results[-1]["route_reasons"]))
 
     def test_constraints_size_is_limited(self) -> None:
         with self.assertRaises(ValueError):
@@ -239,7 +278,27 @@ class M02HardeningTests(unittest.TestCase):
         self.assertEqual(item["complexity_factors"]["numeric_count"], 1)
         self.assertIn("reasons", item["complexity_factors"])
 
-    def test_yellow_rule_candidates_are_sent_to_llm_for_consolidation(self) -> None:
+    def test_forced_review_cannot_still_display_three_passed_checks(self) -> None:
+        block = {
+            "block_id": 1,
+            "block_text": "申请人应当提供存单原件。",
+            "section_path": "授信",
+            "block_type": "paragraph",
+        }
+        item = EiuQualityEvaluator([block]).annotate(
+            {
+                "statement": "申请人应当提供存单原件",
+                "is_questionable": True,
+                "force_needs_review": True,
+            },
+            block,
+        )
+
+        self.assertEqual(item["quality_status"], "needs_review")
+        self.assertEqual(item["quality_checks"]["completeness"]["status"], "warning")
+        self.assertIn("一致性审查", item["quality_checks"]["completeness"]["reasons"][0])
+
+    def test_independent_rule_candidates_do_not_require_llm_consolidation(self) -> None:
         service = EiuExtractorService()
         service.llm.use_offline = False
         service.llm.extract_json = Mock(return_value=[
@@ -260,15 +319,10 @@ class M02HardeningTests(unittest.TestCase):
 
         items = service._extract_block(block, {"file_name": "质押授信.docx"}, {"prev": "", "next": ""})
 
-        service.llm.extract_json.assert_called_once()
-        self.assertEqual(len(items), 1)
-        self.assertEqual(items[0]["extraction_model"], "hybrid-llm")
-        self.assertEqual(items[0]["eiu_type"], "rule")
-        self.assertEqual(items[0]["route_color"], "yellow")
-        self.assertEqual(items[0]["review_action"], "merge")
-        self.assertEqual(items[0]["evidence_blocks"], [1])
-        self.assertEqual(len(items[0]["source_candidate_ids"]), 2)
-        self.assertIn("检测到 2 个业务谓词，需判断拆分或合并", items[0]["route_reasons"])
+        service.llm.extract_json.assert_not_called()
+        self.assertEqual(len(items), 2)
+        self.assertTrue(all(item["extraction_model"] == "hybrid-rule" for item in items))
+        self.assertTrue(all(item["route_color"] == "green" for item in items))
 
     def test_model_item_without_block_id_is_bound_to_current_block(self) -> None:
         service = EiuExtractorService()
@@ -285,7 +339,7 @@ class M02HardeningTests(unittest.TestCase):
                 "block_id": 1,
                 "document_id": 1,
                 "block_type": "paragraph",
-                "block_text": "第十八条 申请人应当按第十八条提供材料。",
+                "block_text": "第十八条 上述材料应当按第十八条要求提供。",
                 "section_path": "授信",
                 "metadata_json": {"article_no": "第十八条"},
             },
@@ -306,6 +360,31 @@ class M02HardeningTests(unittest.TestCase):
         self.assertEqual(items[0]["block_id"], 1)
         self.assertEqual(items[0]["evidence_blocks"], [1])
 
+    def test_semantic_only_candidate_does_not_map_rule_type_to_p0(self) -> None:
+        service = EiuExtractorService()
+        service.llm.use_offline = False
+        service.llm.extract_json = Mock(return_value=[{
+            "statement": "申请人不得使用信贷资金开立质押存单",
+            "review_action": "pass",
+            "evidence_block_ids": [1],
+        }])
+        block = {
+            "block_id": 1,
+            "block_type": "paragraph",
+            "block_text": "本段说明质押存单的资金来源边界。",
+            "section_path": "质押授信",
+        }
+
+        items = service._extract_block(
+            block,
+            {"file_name": "授信规则.docx"},
+            {"prev": "", "next": ""},
+            rule_items_override=[],
+        )
+
+        self.assertEqual(items[0]["content_priority"], "P1")
+        self.assertIn("不按规则类型升级", items[0]["importance_reason"])
+
     def test_unexpected_llm_review_error_falls_back_to_red_rule_candidate(self) -> None:
         service = EiuExtractorService()
         service.llm.use_offline = False
@@ -313,7 +392,7 @@ class M02HardeningTests(unittest.TestCase):
         block = {
             "block_id": 1,
             "block_type": "paragraph",
-            "block_text": "应当提供存单原件。",
+            "block_text": "上述材料应当真实有效。",
             "section_path": "授信",
         }
 

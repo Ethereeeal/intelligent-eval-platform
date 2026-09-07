@@ -1,4 +1,5 @@
 import unittest
+import json
 
 from modules.m02_eiu_coverage.services.eiu_gate_policy import EiuGatePolicy
 
@@ -36,6 +37,23 @@ class _ImportanceLLM:
             "reason": "根据全文目录和核心结论判定",
             "evaluation_profiles": ["developer_smoke", "test_full", "business"],
         }]
+
+
+class _BatchImportanceLLM:
+    use_offline = False
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def extract_json(self, _system: str, user: str) -> list[dict]:
+        self.calls += 1
+        payload = json.loads(user)
+        return [{
+            "candidate_id": row["candidate_id"],
+            "importance_level": "P2",
+            "reason": "批量全文判定",
+            "evaluation_profiles": ["test_full"],
+        } for row in payload["candidates"]]
 
 
 class EiuGatePolicyTests(unittest.TestCase):
@@ -78,3 +96,17 @@ class EiuGatePolicyTests(unittest.TestCase):
         self.assertEqual(sum(item["auto_disposition"] == "green" for item in items), 1)
         self.assertEqual(sum(item["auto_disposition"] == "red" for item in items), 1)
         self.assertEqual(items[0]["canonical_intent_key"], items[1]["canonical_intent_key"])
+
+    def test_importance_is_batched_before_final_disposition(self) -> None:
+        llm = _BatchImportanceLLM()
+        candidates = [_item(f"规则 {index}", block_id=index + 1) for index in range(21)]
+
+        classified = EiuGatePolicy(llm).classify_document(
+            document=self.document,
+            items=candidates,
+            blocks=self.blocks,
+        )
+
+        self.assertEqual(llm.calls, 2)
+        self.assertTrue(all(item["content_priority"] == "P2" for item in classified))
+        self.assertTrue(all("auto_disposition" not in item for item in classified))

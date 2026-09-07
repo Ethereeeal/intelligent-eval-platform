@@ -60,6 +60,10 @@ class Settings(BaseModel):
     llm_model: str = os.getenv("LLM_MODEL", "gpt-4o-mini")
     llm_temperature: float = float(os.getenv("LLM_TEMPERATURE", "0.1"))  # 抽取任务需低温
     llm_max_tokens: int = int(os.getenv("LLM_MAX_TOKENS", "4096"))
+    # EIU 外部模型调用必须快速失败，避免单个黄色 Block 阻塞整篇文档数分钟。
+    eiu_llm_timeout_seconds: float = float(os.getenv("EIU_LLM_TIMEOUT_SECONDS", "30"))
+    eiu_llm_max_attempts: int = max(1, min(3, int(os.getenv("EIU_LLM_MAX_ATTEMPTS", "2"))))
+    eiu_llm_concurrency: int = max(1, min(6, int(os.getenv("EIU_LLM_CONCURRENCY", "3"))))
     minio_bucket: str = os.getenv("MINIO_BUCKET", "evalforge")
     storage_root: Path = Path(os.getenv("STORAGE_ROOT", "storage"))
     state_file: Path = Path(os.getenv("STATE_FILE", "storage/demo_state.json"))
