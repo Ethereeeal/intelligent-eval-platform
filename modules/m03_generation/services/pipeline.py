@@ -38,6 +38,21 @@ def _is_generation_ready(eiu: dict, *, allow_manual_override: bool = False) -> b
     )
 
 
+def _default_angles_for_eiu(eiu: dict[str, Any]) -> list[str]:
+    """原子性警告不阻断出题，但默认增加角度以覆盖复合陈述中的独立事实。"""
+    checks = eiu.get("quality_checks") or eiu.get("quality_checks_json") or {}
+    atomicity = checks.get("atomicity") or {}
+    if atomicity.get("status") != "warning":
+        return ["primary"]
+    factors = eiu.get("complexity_factors") or eiu.get("complexity_factors_json") or {}
+    try:
+        predicate_count = int(factors.get("predicate_count") or 0)
+    except (TypeError, ValueError):
+        predicate_count = 0
+    count = max(2, min(3, predicate_count or 2))
+    return ["primary", "condition", "exception"][:count]
+
+
 class PipelineService:
     def __init__(self) -> None:
         self.database = DatabaseService()
@@ -122,6 +137,7 @@ class PipelineService:
                     result = self._generate_for_eiu_with_angles(
                         eiu,
                         angles=angles,
+                        expand_atomicity=True,
                         include_variations=include_variations,
                         variation_count=variation_count,
                     )
@@ -215,6 +231,7 @@ class PipelineService:
                     result = self._generate_for_eiu_with_angles(
                         eiu,
                         angles=angles,
+                        expand_atomicity=True,
                         include_variations=include_variations,
                         variation_count=variation_count,
                     )
@@ -267,6 +284,7 @@ class PipelineService:
         result = self._generate_for_eiu_with_angles(
             eiu,
             angles=[angle],
+            expand_atomicity=False,
             include_variations=include_variations,
             variation_count=variation_count,
         )
@@ -531,6 +549,7 @@ class PipelineService:
         eiu: dict[str, Any],
         *,
         angles: list[str] | None,
+        expand_atomicity: bool = True,
         include_variations: bool,
         variation_count: int,
     ) -> dict[str, Any]:
@@ -543,7 +562,11 @@ class PipelineService:
             "variation_case_ids": [],
             "error": None,
         }
-        angle_list = angles or ["primary"]
+        angle_list = angles if angles else _default_angles_for_eiu(eiu)
+        # 现有前端默认显式发送 ["primary"]。批量生成时仍将原子性告警
+        # 扩展为多个单事实角度；单 EIU 手动指定角度则保持用户意图不变。
+        if expand_atomicity and angle_list == ["primary"]:
+            angle_list = _default_angles_for_eiu(eiu)
         for angle in angle_list:
             try:
                 case = self.generator.generate_for_eiu(eiu, angle=angle)

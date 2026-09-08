@@ -57,7 +57,7 @@ _GATE_FIELDS = {
 
 
 def _recheck_document_gate(*, document_id: int, edited_eiu_id: int) -> dict:
-    """人工编辑后重跑三项 EIU 门禁与全文相对重要性，绝不直接转绿。"""
+    """人工编辑后重跑两项 EIU 硬门禁与全文相对重要性，绝不直接改色。"""
     document = database.get_document(document_id)
     if document is None:
         raise HTTPException(status_code=404, detail="document not found")
@@ -332,7 +332,7 @@ def update_eiu(eiu_id: int, payload: EiuUpdate) -> EiuOut:
     if payload.extraction_confidence is not None:
         updates["extraction_confidence"] = payload.extraction_confidence
     if payload.quality_status is not None:
-        raise HTTPException(status_code=422, detail="质量状态由三项自动门禁重新计算，不能人工直接修改")
+        raise HTTPException(status_code=422, detail="质量状态由两项硬门禁重新计算，不能人工直接修改")
 
     database.update_eiu(eiu_id, **updates)
     item = _recheck_document_gate(document_id=int(current["document_id"]), edited_eiu_id=eiu_id)

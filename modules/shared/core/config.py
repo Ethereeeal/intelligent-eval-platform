@@ -64,6 +64,13 @@ class Settings(BaseModel):
     eiu_llm_timeout_seconds: float = float(os.getenv("EIU_LLM_TIMEOUT_SECONDS", "30"))
     eiu_llm_max_attempts: int = max(1, min(3, int(os.getenv("EIU_LLM_MAX_ATTEMPTS", "2"))))
     eiu_llm_concurrency: int = max(1, min(6, int(os.getenv("EIU_LLM_CONCURRENCY", "3"))))
+    # 文档处理轨迹仅用于近期排障：自动按时间和每文档处理任务数滚动清理。
+    document_trace_retention_days: int = max(
+        1, min(30, int(os.getenv("DOCUMENT_TRACE_RETENTION_DAYS", "7")))
+    )
+    document_trace_max_jobs_per_document: int = max(
+        1, min(20, int(os.getenv("DOCUMENT_TRACE_MAX_JOBS_PER_DOCUMENT", "10")))
+    )
     minio_bucket: str = os.getenv("MINIO_BUCKET", "evalforge")
     storage_root: Path = Path(os.getenv("STORAGE_ROOT", "storage"))
     state_file: Path = Path(os.getenv("STATE_FILE", "storage/demo_state.json"))

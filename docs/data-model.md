@@ -42,6 +42,17 @@
 - metadata_json
 - embedding_id
 
+### document_process_trace（当前实现）
+- trace_id (PK)
+- job_id（可空，关联 EIU 抽取/重传任务）
+- document_id
+- block_id / eiu_id（可空，定位到具体文段或知识点）
+- stage / event / status
+- detail（JSON；候选摘要、规则路径、质检和最终处置，不保存完整原文或模型提示词）
+- created_at
+
+> 此表为临时排障数据：默认仅保留最近 7 天，且单文档只保留最近 10 次带 job 的处理轨迹。
+
 ### task_job
 - job_id (PK)
 - job_type

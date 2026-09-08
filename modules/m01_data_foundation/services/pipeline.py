@@ -84,6 +84,13 @@ class PipelineService:
                 raise
             return {"document_id": existing, "duplicate": True, "blocks": 0}
         try:
+            self._record_trace(
+                document_id=document_id,
+                stage="upload",
+                event="accepted",
+                detail={"file_name": file_name, "file_type": suffix, "file_size": len(content)},
+            )
+            self._record_trace(document_id=document_id, stage="parse", event="started")
             parse_path = Path(minio_path)
             if not parse_path.exists():
                 # 兜底：minio_path 解析不到时按 raw_dir 重建绝对路径
@@ -91,12 +98,35 @@ class PipelineService:
                 if candidate.exists():
                     parse_path = candidate
             blocks = self.parser.parse_document(parse_path, suffix)
+            self._record_trace(
+                document_id=document_id,
+                stage="parse",
+                event="completed",
+                detail={"parsed_block_count": len(blocks)},
+            )
             indexed = self.embed_blocks(blocks)
             block_ids = self.database.save_blocks(document_id=document_id, blocks=indexed)
+            type_counts: dict[str, int] = {}
+            for block in indexed:
+                block_type = str(block.get("block_type") or "paragraph")
+                type_counts[block_type] = type_counts.get(block_type, 0) + 1
+            self._record_trace(
+                document_id=document_id,
+                stage="chunk",
+                event="persisted",
+                detail={"block_count": len(block_ids), "block_types": type_counts},
+            )
             # P0：块不再构建 FAISS 索引，块向量已废弃，仅保留块作定位分片
             self.database.update_document(document_id, parse_status="completed")
             return {"document_id": document_id, "duplicate": False, "blocks": len(block_ids)}
         except Exception as exc:  # 解析/入库失败：整体回滚，不在库里留下残句，避免重新上传误判
+            self._record_trace(
+                document_id=document_id,
+                stage="parse",
+                event="failed",
+                status="error",
+                detail={"error_type": type(exc).__name__, "message": str(exc)[:160]},
+            )
             logger.warning("文档 %s 接入失败，执行回滚清理: %s", document_id, exc)
             try:
                 self.database.delete_document(document_id)
@@ -237,3 +267,10 @@ class PipelineService:
     def _ensure_storage(self) -> None:
         for directory in (settings.raw_dir, settings.parsed_dir):
             directory.mkdir(parents=True, exist_ok=True)
+
+    def _record_trace(self, **kwargs: object) -> None:
+        """轨迹记录失败不能掩盖上传/解析真实结果，但必须写应用日志。"""
+        try:
+            self.database.record_processing_trace(**kwargs)
+        except Exception:  # noqa: BLE001 — 可观测性故障不得阻断文档接入
+            logger.exception("document processing trace write failed", extra=kwargs)

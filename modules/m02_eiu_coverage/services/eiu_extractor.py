@@ -581,6 +581,16 @@ class EiuExtractorService:
         self._review_failure_count = 0
         self._review_circuit_open = False
 
+    def _record_trace(self, **kwargs: Any) -> None:
+        """记录可排查轨迹；轨迹库故障不能改变 EIU 的抽取结论。"""
+        recorder = getattr(self.database, "record_processing_trace", None)
+        if not callable(recorder):
+            return
+        try:
+            recorder(**kwargs)
+        except Exception:  # noqa: BLE001 — 可观测性故障不得阻断抽取
+            logger.exception("EIU processing trace write failed", extra=kwargs)
+
     @staticmethod
     def _load_prompt() -> str:
         try:
@@ -621,6 +631,14 @@ class EiuExtractorService:
                 phase="eiu_extract",
                 message=f"EIU 抽取失败: {type(exc).__name__}: {str(exc)[:160]}",
                 finished=True,
+            )
+            self._record_trace(
+                document_id=document_id,
+                job_id=job_id,
+                stage="eiu_extract",
+                event="failed",
+                status="error",
+                detail={"error_type": type(exc).__name__, "message": str(exc)[:160]},
             )
             return {"job_id": job_id, "status": "failed", "message": str(exc)}
 
@@ -701,6 +719,14 @@ class EiuExtractorService:
         substantive = [block for block in all_blocks if block["block_type"] != "title"]
         total = len(substantive)
         if total == 0:
+            for document in documents:
+                self._record_trace(
+                    document_id=document["document_id"],
+                    job_id=job_id,
+                    stage="eiu_extract",
+                    event="skipped",
+                    detail={"reason": "无可处理的非标题 Block"},
+                )
             if finalize_job:
                 self.database.update_job(
                     job_id, status="completed", phase="done", progress=progress_end,
@@ -714,6 +740,17 @@ class EiuExtractorService:
             job_id, status="running", phase="eiu_extract", progress=progress_start,
             message=f"开始 EIU 抽取，共 {total} 个段落 Block",
         )
+        for document, blocks in zip(documents, document_blocks, strict=True):
+            self._record_trace(
+                document_id=document["document_id"],
+                job_id=job_id,
+                stage="eiu_extract",
+                event="started",
+                detail={
+                    "block_count": sum(1 for block in blocks if block["block_type"] != "title"),
+                    "policy_version": QUALITY_POLICY_VERSION,
+                },
+            )
         # 单文档模式：仅清空该文档旧 EIU；全库模式：清空全部旧 EIU
         if document_id is not None:
             self.database.delete_eius_by_document(document_id=document_id)
@@ -749,10 +786,33 @@ class EiuExtractorService:
                 items=preliminary,
                 blocks=blocks,
             )
+            document_planned: dict[int, list[dict]] = {}
             for item in classified:
                 item_block_id = _coerce_block_id(item.get("block_id"))
                 if item_block_id is not None:
                     planned_by_block.setdefault(item_block_id, []).append(item)
+                    document_planned.setdefault(item_block_id, []).append(item)
+            for block_id, candidates in document_planned.items():
+                self._record_trace(
+                    document_id=document["document_id"],
+                    job_id=job_id,
+                    block_id=block_id,
+                    stage="eiu_plan",
+                    event="rule_candidates_classified",
+                    detail={
+                        "candidate_count": len(candidates),
+                        "candidates": [
+                            {
+                                "candidate_id": item.get("candidate_id"),
+                                "eiu_type": item.get("eiu_type"),
+                                "quality_status": item.get("quality_status"),
+                                "content_priority": item.get("content_priority"),
+                                "importance_reason": item.get("importance_reason"),
+                            }
+                            for item in candidates
+                        ],
+                    },
+                )
 
         inserted = 0
         excluded = 0
@@ -812,7 +872,28 @@ class EiuExtractorService:
                         stmt = (it.get("statement") or "").strip()
                         if stmt and it.get("embedding_vector") is None:
                             it["embedding_vector"] = _encode_one(stmt)
-                inserted += len(self.database.save_eius(items=items))
+                saved_eiu_ids = self.database.save_eius(items=items)
+                inserted += len(saved_eiu_ids)
+                for item, eiu_id in zip(items, saved_eiu_ids, strict=True):
+                    self._record_trace(
+                        document_id=block["document_id"],
+                        job_id=job_id,
+                        block_id=block_id,
+                        eiu_id=eiu_id,
+                        stage="eiu_extract",
+                        event="candidate_persisted",
+                        detail={
+                            "eiu_type": item.get("eiu_type"),
+                            "is_questionable": item.get("is_questionable"),
+                            "route_color": item.get("route_color"),
+                            "route_reasons": item.get("route_reasons") or [],
+                            "review_action": item.get("review_action"),
+                            "review_attempts": item.get("review_attempts", 0),
+                            "evidence_blocks": item.get("evidence_blocks") or [],
+                            "quality_status": item.get("quality_status"),
+                            "quality_checks": item.get("quality_checks") or {},
+                        },
+                    )
                 # 记录已插入可出题 EIU 的归一化 statement 向量，供后续块比对（精确层）
                 for it in items:
                     if it.get("is_questionable"):
@@ -833,6 +914,18 @@ class EiuExtractorService:
                     items=[exclusion],
                 )
                 excluded += 1
+                self._record_trace(
+                    document_id=block["document_id"],
+                    job_id=job_id,
+                    block_id=block_id,
+                    stage="eiu_extract",
+                    event="block_excluded",
+                    status="warning" if block_error else "info",
+                    detail={
+                        "reason": reason,
+                        "quality_checks": exclusion.get("quality_checks") or {},
+                    },
+                )
             # 为文档级重要性与最终门禁预留最后 10%；逐 Block 更新，避免界面假卡死。
             block_progress_end = progress_start + int((progress_end - progress_start) * 0.9)
             progress = progress_start + int(index / total * (block_progress_end - progress_start))
@@ -867,6 +960,24 @@ class EiuExtractorService:
             for item in updated_items:
                 updates = {field: item[field] for field in gate_fields if field in item}
                 self.database.update_eiu(int(item["eiu_id"]), **updates)
+                self._record_trace(
+                    document_id=document["document_id"],
+                    job_id=job_id,
+                    block_id=item.get("block_id"),
+                    eiu_id=int(item["eiu_id"]),
+                    stage="quality_gate",
+                    event="final_disposition",
+                    status="warning" if item.get("auto_disposition") in {"yellow", "red"} else "info",
+                    detail={
+                        "quality_status": item.get("quality_status"),
+                        "quality_checks": item.get("quality_checks") or {},
+                        "auto_disposition": item.get("auto_disposition"),
+                        "exclusion_reason": item.get("exclusion_reason"),
+                        "route_reasons": item.get("route_reasons") or [],
+                        "importance_reason": item.get("importance_reason"),
+                        "policy_version": item.get("quality_policy_version"),
+                    },
+                )
             self.database.replace_document_quality_findings(
                 document_id=document["document_id"],
                 findings=findings,
@@ -876,6 +987,22 @@ class EiuExtractorService:
             # 失效，避免旧题继续被误认为覆盖了新策略下的绿色知识点。
             invalidated_cases += self.database.delete_generated_cases_by_document(
                 document_id=document["document_id"]
+            )
+            disposition_counts = {"green": 0, "yellow": 0, "red": 0}
+            for item in updated_items:
+                disposition = str(item.get("auto_disposition") or "yellow")
+                if disposition in disposition_counts:
+                    disposition_counts[disposition] += 1
+            self._record_trace(
+                document_id=document["document_id"],
+                job_id=job_id,
+                stage="quality_gate",
+                event="completed",
+                detail={
+                    "disposition_counts": disposition_counts,
+                    "quality_finding_count": len(findings),
+                    "invalidated_case_count": invalidated_cases,
+                },
             )
             gate_progress_start = progress_start + int((progress_end - progress_start) * 0.92)
             gate_progress = gate_progress_start + int(
@@ -986,6 +1113,7 @@ class EiuExtractorService:
         for candidate_index, item in enumerate(rule_items, start=1):
             item["block_id"] = block["block_id"]
             item["candidate_id"] = block["block_id"] * 1000 + candidate_index
+            item["section_path"] = block.get("section_path")
             item["extraction_model"] = "hybrid-rule"
             item["extraction_confidence"] = 0.9
         return rule_items
@@ -1068,7 +1196,7 @@ class EiuExtractorService:
             return rule_items
 
         # 路由信号只是“可能需要补齐”，不能直接等同于质量失败。先用同文档证据做
-        # 三项确定性门禁；全部通过时直接放行，避免为表述风格、候选数量等调用 LLM。
+        # 两项硬门禁；忠实性与完整性通过时直接放行，原子性只作为 QA 出题提示。
         if rule_items:
             resolver = context.get("_resolver")
             document_blocks = getattr(resolver, "blocks", None) or [block]
@@ -1077,7 +1205,7 @@ class EiuExtractorService:
             if all(item.get("quality_status") == "verified" for item in checked_items):
                 for item in checked_items:
                     item["route_color"] = "green"
-                    item["route_reasons"] = ["三项确定性质量门禁通过，无需调用 LLM"]
+                    item["route_reasons"] = ["两项硬门禁通过，原子性提示交由 QA 出题处理"]
                     item["review_action"] = "pass"
                 return checked_items
 

@@ -26,6 +26,8 @@ EVALUATION_PROFILES = {"developer_smoke", "test_full", "business"}
 _SPACE_RE = re.compile(r"[\s，。；：、“”‘’（）()《》]+")
 _EXAMPLE_RE = re.compile(r"例如|示例|举例|备注|说明")
 _RISK_SIGNAL_RE = re.compile(r"不得|禁止|仅|除外|例外|风险|责任|处罚|审批|授权|条件|范围")
+_CORE_SECTION_RE = re.compile(r"业务要求|受理范围|授信条件|审批|关键流程|风险控制|责任要求|管理要求")
+_BOUNDARY_SIGNAL_RE = re.compile(r"仅接受|不接受|不得|禁止|严禁|仅限|除外|不可|必须")
 
 
 def _normalize(value: str) -> str:
@@ -149,10 +151,19 @@ class EiuGatePolicy:
             if item["_policy_index"] in decisions:
                 continue
             statement = str(item.get("statement") or "")
-            priority = "P2" if _EXAMPLE_RE.search(statement) else "P1"
+            section_path = str(item.get("section_path") or "")
+            # 模型不可用时不能让核心业务边界因默认 P1 被红色归档。只有当
+            # “相对文档目的”的章节语义与边界信号同时成立，才保守升级 P0；
+            # 不按单个“不得/必须”词直接写死优先级。
+            if _CORE_SECTION_RE.search(section_path) and _BOUNDARY_SIGNAL_RE.search(statement):
+                priority = "P0"
+                reason = "LLM 不可用；候选位于文档核心业务章节且包含边界条件，保守保留为核心内容"
+            else:
+                priority = "P2" if _EXAMPLE_RE.search(statement) else "P1"
+                reason = "LLM 不可用，采用不将规则类型等同于文档重要性的保守降级判定"
             decisions[item["_policy_index"]] = {
                 "importance_level": priority,
-                "reason": "LLM 不可用，采用不将规则类型等同于文档重要性的保守降级判定",
+                "reason": reason,
                 "evaluation_profiles": self._default_profiles(item, priority=priority),
             }
         return decisions
@@ -320,7 +331,19 @@ class EiuGatePolicy:
         findings = list(duplicates)
         for item in items:
             reasons = _quality_reasons(item)
-            if item.get("auto_disposition") == "yellow":
+            checks = item.get("quality_checks") or {}
+            atomicity = checks.get("atomicity") or {}
+            if item.get("auto_disposition") == "green" and atomicity.get("status") == "warning":
+                findings.append({
+                    "code": "atomicity_qa_hint",
+                    "severity": "hint",
+                    "message": "知识点含多个可能独立判断的事实，QA 生成将按多个角度分别提问",
+                    "block_ids": [item.get("block_id")],
+                    "eiu_ids": [item.get("eiu_id")] if item.get("eiu_id") else [],
+                    "system_action": "原子性不作为 EIU 硬门禁；生成 QA 时拆成多个单事实问题",
+                    "details": list((atomicity.get("reasons") or [])),
+                })
+            elif item.get("auto_disposition") == "yellow":
                 findings.append({
                     "code": "p0_unresolved",
                     "severity": "risk",

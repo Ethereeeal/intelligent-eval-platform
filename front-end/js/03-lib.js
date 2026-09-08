@@ -47,6 +47,7 @@
         <div class="ver-list">${d.versions.map(v => `<div class="ver"><span class="ver-tag">${v.tag}</span><span>${v.note}</span><span class="mut">${v.time}</span></div>`).join("")}</div>
         <div class="sec-h mt kp-sec-h">知识点 · ${d.kp.length} 条<button class="btn ghost sm kp-export-btn" id="dlEIUKp"><i data-lucide="download"></i>导出</button><button class="btn ghost icon-only sm kp-zoom-btn" id="kpFullscreenBtn" title="放大查看"><i data-lucide="maximize"></i></button></div>
         <div data-document-quality="${escapeHTML(docId)}" class="document-quality" aria-live="polite">正在读取文档质量反馈…</div>
+        <div data-processing-trace="${escapeHTML(docId)}" class="document-quality" aria-live="polite">正在读取处理轨迹…</div>
         ${kpTableHTML(d.kp || [])}
       </div>`;
   }
@@ -169,6 +170,7 @@
       bindKpColFilters($("#docContent"));
       bindKpTableInteractions($("#docContent"), DOCS[docId].kp);
       void loadDocumentQuality(docId);
+      void loadProcessingTrace(docId);
       bindKpColResize($("#docContent .kp-table"));
       setupPager($("#docContent"), "#docContent .kp-tr", 15, "kpPager", "kpPage");
       enableHScrollDrag($("#docContent .kp-table"));
@@ -1241,6 +1243,48 @@
       if (!current()) return;
       target.innerHTML = '文档质量反馈暂时不可用。<button type="button" class="btn ghost sm">重试</button>';
       target.querySelector("button").onclick = () => { void loadDocumentQuality(docId); };
+    }
+  }
+
+  function processingTraceSummary(item) {
+    const detail = item.detail || {};
+    if (item.event === "accepted") return `已接收 ${detail.file_name || "文档"}（${detail.file_size || 0} 字节）`;
+    if (item.event === "completed" && item.stage === "parse") return `解析完成，得到 ${detail.parsed_block_count || 0} 个原始块`;
+    if (item.event === "persisted" && item.stage === "chunk") return `分块已入库：${detail.block_count || 0} 个 Block`;
+    if (item.event === "rule_candidates_classified") return `规则候选 ${detail.candidate_count || 0} 条，已完成重要性规划`;
+    if (item.event === "candidate_persisted") return "候选 EIU 已入库，可从知识点列表查看陈述和证据";
+    if (item.event === "block_excluded") return `Block 未产出 EIU：${detail.reason || "未提供原因"}`;
+    if (item.event === "final_disposition") {
+      const state = { green: "可自动出题", yellow: "待复核", red: "已排除" }[detail.auto_disposition] || "待判定";
+      return `最终处置：${state}${detail.exclusion_reason ? `；${detail.exclusion_reason}` : ""}`;
+    }
+    if (item.event === "completed" && item.stage === "quality_gate") {
+      const counts = detail.disposition_counts || {};
+      return `门禁完成：绿色 ${counts.green || 0}、待复核 ${counts.yellow || 0}、已排除 ${counts.red || 0}`;
+    }
+    if (item.event === "failed") return `处理失败：${detail.message || detail.error_type || "未知错误"}`;
+    if (item.event === "skipped") return detail.reason || "本阶段已跳过";
+    return item.event || "处理事件";
+  }
+
+  async function loadProcessingTrace(docId) {
+    const target = document.querySelector("#docContent [data-processing-trace]");
+    if (!target || target.dataset.processingTrace !== docId) return;
+    const current = () => target.isConnected && target.dataset.processingTrace === docId;
+    const documentId = Number(String(docId).replace(/^doc/, ""));
+    try {
+      const trace = await apiGet(`/api/documents/${documentId}/processing-trace`);
+      if (!current()) return;
+      if (!trace.length) {
+        target.textContent = "处理轨迹：该文档为历史数据；请重新上传或重新抽取后查看。";
+        return;
+      }
+      const warnings = trace.filter(item => item.status === "warning" || item.status === "error").length;
+      target.innerHTML = `<details><summary>处理轨迹 · ${trace.length} 条${warnings ? ` · ${warnings} 个需关注事件` : ""}</summary><p class="muted">记录解析、分块、候选抽取、补证/复核路径及最终门禁处置；不保存完整原文和模型提示词。</p>${trace.map(item => `<div class="document-quality-finding"><b>${escapeHTML(item.stage || "处理")} · ${escapeHTML(processingTraceSummary(item))}</b><p class="muted">${escapeHTML(item.created_at || "")} ${item.block_id ? `· Block #${escapeHTML(String(item.block_id))}` : ""}${item.eiu_id ? ` · EIU #${escapeHTML(String(item.eiu_id))}` : ""}</p>${item.detail && Object.keys(item.detail).length ? `<details><summary>查看决策详情</summary><pre class="document-quality-source">${escapeHTML(JSON.stringify(item.detail, null, 2))}</pre></details>` : ""}</div>`).join("")}</details>`;
+    } catch (error) {
+      if (!current()) return;
+      target.innerHTML = '处理轨迹暂时不可用。<button type="button" class="btn ghost sm">重试</button>';
+      target.querySelector("button").onclick = () => { void loadProcessingTrace(docId); };
     }
   }
 

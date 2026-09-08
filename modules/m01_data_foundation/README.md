@@ -266,6 +266,7 @@ Demo 阶段不实现完整的 FR-CORPUS-003，仅做：
 | GET | `/api/documents` | 文档列表 |
 | GET | `/api/documents/{document_id}` | 文档详情 |
 | GET | `/api/documents/{document_id}/blocks` | Block 列表（含章节树） |
+| GET | `/api/documents/{document_id}/processing-trace` | 临时处理轨迹：上传、解析、分块、EIU 候选/处置（默认保留 7 天且每文档 10 个任务） |
 | PATCH | `/api/documents/{document_id}/move` | 移动文档到目标目录（重写 folder_path / purpose） |
 | PATCH | `/api/documents/{document_id}/rename` | 重命名文档（仅显示名，不影响落盘文件与问答对） |
 | POST | `/api/documents/{document_id}/reupload` | 上传同文档新版本（content_hash 变化则触发更新） |
@@ -281,6 +282,7 @@ Demo 阶段不实现完整的 FR-CORPUS-003，仅做：
 - [x] `block` 表 + 解析器（TXT/MD/PDF/DOCX/XLSX/CSV）
 - [x] 层级文段构建（标题推断 + parent_block_id + section_path）
 - [x] 解析状态管理 + 错误记录
+- [x] `document_process_trace` 处理轨迹（上传/解析/分块 + EIU 候选、补证路径、排除与门禁处置）
 - [x] EIU 向量化 + FAISS 索引（`EiuFaissIndex`，EIU 为核心向量化对象；Block 向量已废弃，仅作定位分片）
 - [x] 文件类型白名单 + 大小限制
 - [x] 文档重传闭环（content_hash 变化 → 覆盖式全量重算：重解析 + EIU 重抽 + 版本重建 + 删旧文档，无版本）

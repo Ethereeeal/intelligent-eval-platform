@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import (
     JSON,
@@ -16,6 +16,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     create_engine,
+    func,
     or_,
     text,
 )
@@ -187,6 +188,23 @@ class AuditLogRow(Base):
     actor: Mapped[str | None] = mapped_column(String(128), nullable=True)
     detail: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class DocumentProcessTraceRow(Base):
+    """文档自动处理轨迹：保留上传至 EIU 门禁的可排查决策。"""
+
+    __tablename__ = "document_process_trace"
+
+    trace_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    job_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    document_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    block_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    eiu_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    stage: Mapped[str] = mapped_column(String(32), nullable=False)
+    event: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="info")
+    detail: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
 
 class BlockRow(Base):
@@ -1209,6 +1227,98 @@ class DatabaseService:
                 )
             )
             session.commit()
+
+    # ------------------------------------------------------------------
+    # document processing trace — 上传/解析/分块/EIU 自动处理可观测性
+    # ------------------------------------------------------------------
+    def record_processing_trace(
+        self,
+        *,
+        document_id: int,
+        stage: str,
+        event: str,
+        status: str = "info",
+        job_id: int | None = None,
+        block_id: int | None = None,
+        eiu_id: int | None = None,
+        detail: dict | None = None,
+    ) -> None:
+        """持久化自动流水线的结构化决策，不写原始文件、完整 Prompt 或密钥。"""
+        with SessionLocal() as session:
+            session.add(
+                DocumentProcessTraceRow(
+                    job_id=job_id,
+                    document_id=document_id,
+                    block_id=block_id,
+                    eiu_id=eiu_id,
+                    stage=stage[:32],
+                    event=event[:64],
+                    status=status[:16],
+                    detail=detail,
+                )
+            )
+            session.commit()
+        # 只在一次上传或 EIU 任务启动时清理，避免对每个 Block/EIU 事件重复扫描。
+        if event in {"accepted", "started"}:
+            self.prune_processing_trace(document_id=document_id)
+
+    def prune_processing_trace(self, *, document_id: int) -> None:
+        """滚动清理排障轨迹：全库仅保留近期数据，单文档仅保留最近若干任务。"""
+        cutoff = datetime.utcnow() - timedelta(days=settings.document_trace_retention_days)
+        with SessionLocal() as session:
+            session.query(DocumentProcessTraceRow).filter(
+                DocumentProcessTraceRow.created_at < cutoff
+            ).delete(synchronize_session=False)
+            recent_job_ids = [
+                row[0]
+                for row in (
+                    session.query(DocumentProcessTraceRow.job_id)
+                    .filter(
+                        DocumentProcessTraceRow.document_id == document_id,
+                        DocumentProcessTraceRow.job_id.is_not(None),
+                    )
+                    .group_by(DocumentProcessTraceRow.job_id)
+                    .order_by(func.max(DocumentProcessTraceRow.created_at).desc())
+                    .limit(settings.document_trace_max_jobs_per_document)
+                    .all()
+                )
+            ]
+            if recent_job_ids:
+                session.query(DocumentProcessTraceRow).filter(
+                    DocumentProcessTraceRow.document_id == document_id,
+                    DocumentProcessTraceRow.job_id.is_not(None),
+                    ~DocumentProcessTraceRow.job_id.in_(recent_job_ids),
+                ).delete(synchronize_session=False)
+            session.commit()
+
+    def list_processing_trace(self, *, document_id: int, limit: int = 1000) -> list[dict]:
+        """按时间顺序返回一个文档的处理轨迹；上限避免异常文档撑爆接口。"""
+        with SessionLocal() as session:
+            rows = (
+                session.query(DocumentProcessTraceRow)
+                .filter(DocumentProcessTraceRow.document_id == document_id)
+                .order_by(
+                    DocumentProcessTraceRow.created_at.asc(),
+                    DocumentProcessTraceRow.trace_id.asc(),
+                )
+                .limit(max(1, min(limit, 2000)))
+                .all()
+            )
+            return [
+                {
+                    "trace_id": row.trace_id,
+                    "job_id": row.job_id,
+                    "document_id": row.document_id,
+                    "block_id": row.block_id,
+                    "eiu_id": row.eiu_id,
+                    "stage": row.stage,
+                    "event": row.event,
+                    "status": row.status,
+                    "detail": row.detail or {},
+                    "created_at": row.created_at.isoformat() if row.created_at else None,
+                }
+                for row in rows
+            ]
 
     # ------------------------------------------------------------------
     # eiu（M02 — EIU 抽取与覆盖规划）

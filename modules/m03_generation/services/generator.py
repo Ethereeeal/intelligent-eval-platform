@@ -76,6 +76,7 @@ class CaseGenerator:
             section_path=block.get("section_path", "未分类"),
             page_no=block.get("page_no"),
             constraints=eiu.get("constraints_json"),
+            quality_checks=eiu.get("quality_checks") or eiu.get("quality_checks_json"),
         )
         raw = self._call_and_parse(prompt)
         raw = self._validate_generation_output(

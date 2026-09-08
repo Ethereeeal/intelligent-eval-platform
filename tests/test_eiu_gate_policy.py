@@ -110,3 +110,32 @@ class EiuGatePolicyTests(unittest.TestCase):
         self.assertEqual(llm.calls, 2)
         self.assertTrue(all(item["content_priority"] == "P2" for item in classified))
         self.assertTrue(all("auto_disposition" not in item for item in classified))
+
+    def test_unavailable_llm_keeps_core_boundary_as_conservative_p0(self) -> None:
+        item = _item("仅接受我行开具的单位定期存单质押", quality_status="needs_review")
+        item["section_path"] = "第二章 业务要求 / 第五条 单位定期存单受理范围"
+
+        classified = EiuGatePolicy().classify_document(
+            document=self.document,
+            items=[item],
+            blocks=[{**self.blocks[0], "section_path": item["section_path"]}],
+        )
+
+        self.assertEqual(classified[0]["content_priority"], "P0")
+        self.assertIn("核心业务章节", classified[0]["importance_reason"])
+
+    def test_atomicity_warning_stays_green_and_creates_qa_hint(self) -> None:
+        item = _item("仅接受我行存单且资金必须为自有资金")
+        item["quality_checks"]["atomicity"] = {
+            "status": "warning",
+            "score": 0.5,
+            "reasons": ["检测到 2 个规范谓词"],
+        }
+        items, findings = EiuGatePolicy().apply_document(
+            document=self.document,
+            items=[item],
+            blocks=self.blocks,
+        )
+
+        self.assertEqual(items[0]["auto_disposition"], "green")
+        self.assertTrue(any(finding["code"] == "atomicity_qa_hint" for finding in findings))

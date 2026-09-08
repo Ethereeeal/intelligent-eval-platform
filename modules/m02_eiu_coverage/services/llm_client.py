@@ -12,6 +12,7 @@ import json
 import logging
 import re
 import time
+from uuid import uuid4
 
 from modules.shared.core.config import settings
 
@@ -72,8 +73,11 @@ class LLMClient:
             raise LLMError("LLM 客户端未初始化")
 
         last_exc: Exception | None = None
+        call_id = uuid4().hex[:16]
+        input_chars = sum(len(str(message.get("content") or "")) for message in messages)
         started = time.monotonic()
         for attempt in range(self.max_attempts):
+            attempt_started = time.monotonic()
             try:
                 kwargs: dict = {
                     "model": self.model,
@@ -85,16 +89,39 @@ class LLMClient:
                     kwargs["response_format"] = response_format
                 response = self._client.chat.completions.create(**kwargs)
                 content = response.choices[0].message.content or ""
+                finish_reason = getattr(response.choices[0], "finish_reason", None)
+                if finish_reason not in {"stop", "length", "tool_calls", "content_filter", "function_call"}:
+                    finish_reason = "unknown"
+                usage = getattr(response, "usage", None)
+                tokens = {
+                    key: value if type(value) is int else None
+                    for key in ("prompt_tokens", "completion_tokens", "total_tokens")
+                    for value in [getattr(usage, key, None)]
+                }
                 logger.info(
-                    "EIU LLM call completed",
+                    "EIU LLM call completed call_id=%s attempt=%s attempt_ms=%s total_ms=%s "
+                    "input_chars=%s output_chars=%s finish_reason=%s tokens=%s",
+                    call_id, attempt + 1, int((time.monotonic() - attempt_started) * 1000),
+                    int((time.monotonic() - started) * 1000), input_chars, len(content),
+                    finish_reason, tokens,
                     extra={"model": self.model, "attempt": attempt + 1, "elapsed_ms": int((time.monotonic() - started) * 1000)},
                 )
                 return content
             except Exception as exc:  # noqa: BLE001 — 网络 / 超时 / 上游错误统一重试
                 last_exc = exc
                 retryable = self._is_retryable(exc)
+                status_code = getattr(exc, "status_code", None)
+                if type(status_code) is not int:
+                    status_code = None
                 logger.warning(
-                    "EIU LLM call failed",
+                    "EIU LLM call failed call_id=%s attempt=%s/%s attempt_ms=%s total_ms=%s "
+                    "timeout_seconds=%s input_chars=%s max_tokens=%s error_type=%s "
+                    "status_code=%s retryable=%s will_retry=%s",
+                    call_id, attempt + 1, self.max_attempts,
+                    int((time.monotonic() - attempt_started) * 1000),
+                    int((time.monotonic() - started) * 1000), self.timeout_seconds,
+                    input_chars, self.max_tokens, type(exc).__name__, status_code,
+                    retryable, retryable and attempt + 1 < self.max_attempts,
                     extra={
                         "model": self.model,
                         "attempt": attempt + 1,
@@ -129,7 +156,11 @@ class LLMClient:
             ],
             response_format={"type": "json_object"},
         )
-        return self._repair_json(content)
+        try:
+            return self._repair_json(content)
+        except LLMError:
+            logger.warning("EIU LLM JSON parsing failed output_chars=%s", len(content))
+            raise
 
     @staticmethod
     def _repair_json(raw: str) -> list[dict]:

@@ -224,12 +224,18 @@ class M02HardeningTests(unittest.TestCase):
         create = Mock(side_effect=[TimeoutError("slow upstream"), response])
         service._client = Mock(chat=Mock(completions=Mock(create=create)))
 
-        with patch("modules.m02_eiu_coverage.services.llm_client.time.sleep") as sleep:
+        with patch("modules.m02_eiu_coverage.services.llm_client.time.sleep") as sleep, self.assertLogs(
+            "modules.m02_eiu_coverage.services.llm_client", level="INFO"
+        ) as logs:
             result = service.chat([{"role": "user", "content": "x"}])
 
         self.assertEqual(result, '{"items": []}')
         self.assertEqual(create.call_count, 2)
         sleep.assert_called_once_with(1)
+        self.assertIn("error_type=TimeoutError", logs.output[0])
+        self.assertIn("will_retry=True", logs.output[0])
+        self.assertIn("attempt_ms=", logs.output[0])
+        self.assertNotIn("slow upstream", " ".join(logs.output))
 
     def test_review_circuit_breaker_stops_waiting_and_never_turns_green(self) -> None:
         service = EiuExtractorService()
@@ -278,7 +284,7 @@ class M02HardeningTests(unittest.TestCase):
         self.assertEqual(item["complexity_factors"]["numeric_count"], 1)
         self.assertIn("reasons", item["complexity_factors"])
 
-    def test_forced_review_cannot_still_display_three_passed_checks(self) -> None:
+    def test_forced_review_marker_does_not_override_two_hard_gates(self) -> None:
         block = {
             "block_id": 1,
             "block_text": "申请人应当提供存单原件。",
@@ -294,9 +300,8 @@ class M02HardeningTests(unittest.TestCase):
             block,
         )
 
-        self.assertEqual(item["quality_status"], "needs_review")
-        self.assertEqual(item["quality_checks"]["completeness"]["status"], "warning")
-        self.assertIn("一致性审查", item["quality_checks"]["completeness"]["reasons"][0])
+        self.assertEqual(item["quality_status"], "verified")
+        self.assertEqual(item["quality_checks"]["completeness"]["status"], "pass")
 
     def test_independent_rule_candidates_do_not_require_llm_consolidation(self) -> None:
         service = EiuExtractorService()
@@ -408,6 +413,7 @@ class M02HardeningTests(unittest.TestCase):
             def __init__(self) -> None:
                 self.saved = []
                 self.job_updates = []
+                self.traces = []
                 self.blocks = [
                     {
                         "block_id": 1,
@@ -438,6 +444,9 @@ class M02HardeningTests(unittest.TestCase):
 
             def update_job(self, job_id, **kwargs):
                 self.job_updates.append((job_id, kwargs))
+
+            def record_processing_trace(self, **kwargs):
+                self.traces.append(kwargs)
 
             def save_eius(self, *, items):
                 self.saved.extend(items)
@@ -485,3 +494,5 @@ class M02HardeningTests(unittest.TestCase):
         self.assertEqual(service.database.saved[0]["extraction_model"], "eiu-extract-error")
         self.assertEqual(service.database.saved[0]["block_id"], 1)
         self.assertIn("失败 1 个 Block", service.database.job_updates[-1][1]["message"])
+        self.assertTrue(any(trace["event"] == "block_excluded" for trace in service.database.traces))
+        self.assertTrue(any(trace["event"] == "final_disposition" for trace in service.database.traces))

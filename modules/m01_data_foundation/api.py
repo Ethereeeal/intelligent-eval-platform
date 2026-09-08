@@ -13,6 +13,7 @@ from modules.m02_eiu_coverage.services.eiu_extractor import EiuExtractorService
 from modules.m05_dataset_lifecycle.services.lifecycle import DatasetLifecycleService
 from modules.m01_data_foundation.schemas import (
     BlockOut,
+    DocumentProcessingTraceOut,
     DocumentOut,
     DocumentUploadResponse,
     JobOut,
@@ -263,6 +264,17 @@ def get_document_blocks(document_id: int):
     if pipeline_service.get_document(document_id) is None:
         raise HTTPException(status_code=404, detail="document not found")
     return pipeline_service.get_document_blocks(document_id)
+
+
+@documents_router.get(
+    "/{document_id}/processing-trace",
+    response_model=list[DocumentProcessingTraceOut],
+)
+def get_document_processing_trace(document_id: int):
+    """查询上传至 EIU 门禁的结构化处理轨迹，供问题排查而非业务审计使用。"""
+    if pipeline_service.get_document(document_id) is None:
+        raise HTTPException(status_code=404, detail="document not found")
+    return pipeline_service.database.list_processing_trace(document_id=document_id)
 
 
 @documents_router.post("/{document_id}/reupload", response_model=ReuploadResponse)

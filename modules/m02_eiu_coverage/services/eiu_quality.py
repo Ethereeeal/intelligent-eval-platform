@@ -5,7 +5,8 @@
 后续可再接入批量 LLM 复核，而不影响当前快速解析链路。
 
 EIU 是 QA 生成前的可追溯知识单元，不是题目。这里刻意只检查：
-忠实性与可追溯性、上下文完整性、原子性。题目是否可测由 M03/M04 的
+忠实性与可追溯性、上下文完整性、原子性提示。前两项是出题硬门禁；原子性
+只作为 M03 多角度出题提示，不单独阻断。题目是否可测由 M03/M04 的
 QA 生成与质量治理负责，不能把“缺少量化条件”误当作 EIU 不合格。
 """
 from __future__ import annotations
@@ -54,9 +55,8 @@ class EiuQualityEvaluator:
     def annotate(self, item: dict, source_block: dict) -> dict:
         """返回带证据链、三项质量检查和质量状态的新字典。"""
         result = dict(item)
-        # 黄色候选在 LLM 不可用或调用失败时不能被规则检查直接放行；
-        # 保留到人工/后续 LLM 队列，而不是伪装成“已验证”。
-        force_needs_review = bool(result.pop("force_needs_review", False))
+        # 旧路由可能带有该内部标记；质量状态不再由它覆盖，最终只看两项硬门禁。
+        result.pop("force_needs_review", None)
         direct_id = int(source_block["block_id"])
         evidence: list[tuple[int, str]] = [(direct_id, "direct")]
         source_text = str(source_block.get("block_text") or "")
@@ -99,13 +99,6 @@ class EiuQualityEvaluator:
         ]
 
         checks = self._evaluate(statement, source_text, deduped)
-        # 禁止出现“3/3 质量通过但状态被隐藏标记强制打回”的矛盾。若外部审查
-        # 确有阻断（例如二次审查不一致），它必须成为前端可见的完整性警告。
-        if force_needs_review and all(check["status"] == "pass" for check in checks.values()):
-            checks["completeness"] = _check(
-                "warning",
-                ["自动补证或一致性审查尚未形成可靠结论"],
-            )
         complexity = self._complexity(statement, deduped)
         result["quality_checks"] = checks
         result["quality_score"] = round(
@@ -116,9 +109,9 @@ class EiuQualityEvaluator:
         result["complexity_factors"] = complexity["factors"]
         if not result.get("is_questionable", True):
             result["quality_status"] = "rejected"
-        elif force_needs_review:
-            result["quality_status"] = "needs_review"
-        elif all(check["status"] == "pass" for check in checks.values()):
+        # 忠实性/完整性是 EIU 的硬门禁；原子性是给 QA 生成器的出题提示，
+        # 不能因为复合陈述尚未拆开就把有据可查的知识点直接排除。
+        elif all(checks[name]["status"] == "pass" for name in ("fidelity", "completeness")):
             result["quality_status"] = "verified"
         else:
             result["quality_status"] = "needs_review"

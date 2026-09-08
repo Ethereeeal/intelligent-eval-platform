@@ -72,3 +72,15 @@ class EiuQualityTests(unittest.TestCase):
         )
 
         self.assertEqual(result["quality_status"], "verified")
+
+    def test_atomicity_warning_is_non_blocking(self) -> None:
+        text = "仅接受我行开具的单位定期存单质押，且开立存单的资金应为存款人自有资金，不可为我行/他行信贷资金"
+        block = _block(1, text, "第二章/业务要求/受理范围")
+        result = EiuQualityEvaluator([block]).annotate(
+            {"statement": text, "is_questionable": True}, block
+        )
+
+        self.assertEqual(result["quality_status"], "verified")
+        self.assertEqual(result["quality_checks"]["fidelity"]["status"], "pass")
+        self.assertEqual(result["quality_checks"]["completeness"]["status"], "pass")
+        self.assertEqual(result["quality_checks"]["atomicity"]["status"], "warning")
