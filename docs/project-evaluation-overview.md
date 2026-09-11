@@ -142,8 +142,8 @@ M03 只对同时满足 `is_questionable=true` 且“已验证”的知识点生�
 |---|---|---|
 | 问题 | `question` | 发送给目标智能体的输入 |
 | 金标准 | `gold_answer` | 用于运行评分的参考答案 |
-| 必须命中要点 | `must_have_points` | 质量检查和证据绑定使用的答案事实点；当前运行评分尚未逐点计分 |
-| 可接受答案 | `acceptable_answers` | 可接受的同义表达；当前运行评分尚未直接使用 |
+| 必须命中要点 | `must_have_points` | 质量检查、证据绑定和 M08 规则评测使用的答案事实点 |
+| 可接受答案 | `acceptable_answers` | M08 规则评测使用的可接受完整答案列表 |
 | 证据 | `evidence` | 必答要点到原文 Block、章节、页码、原文片段和偏移的绑定 |
 | 题型 | `question_type` | 如 definition、rule、threshold、process、exception 等 |
 | 难度 | `difficulty` | 题目求解复杂度，L1/L2/L3，前端映射简单/中等/难 |
@@ -178,7 +178,7 @@ M03 只对同时满足 `is_questionable=true` 且“已验证”的知识点生�
 
 ## 6. 目标智能体评测：当前实际指标（M08）
 
-单题评分逻辑：金标准长度不超过 30 字时使用规范化精确匹配；超过 30 字时使用 BGE 语义相似度，模型不可用则退回精确匹配。`score >= 0.5` 判为通过。调用报错为 `error`，无金标准等无法计分为 `unscored`。
+单题评分逻辑：金标准长度不超过 30 字时使用规范化精确匹配；超过 30 字时使用 BGE 语义相似度，模型不可用则退回精确匹配。评测集存在 `must_have_points` 或 `acceptable_answers` 时，额外执行不调用模型的确定性规则评测，结果写入 `scores.rule` 并单独汇总，不覆盖主评分。运行还可以选择自定义提示词的 LLM-as-a-Judge：固定传入问题、标准答案和智能体实际回答，历史/中间节点/检索结果按开关追加，结构化结果写入 `scores.judge` 并独立汇总，不与主评分合并。`score >= 0.5` 判为主评分通过。调用报错为 `error`，无金标准等无法进行主评分为 `unscored`。
 
 **多轮最小评测口径**：评测运行先选择已有的多轮标准答案评测集，再由 m08 按顺序调用目标智能体。最终轮的实际回复仍先复用上述精确/语义评分做错误初筛；对失败或不确定样本，再结合本次请求实际发送的前置对话判断记忆失败、矛盾、约束违反或普通答案错误。`key_turn`、`turn_type`、`depends_on_turns` 是可选的高级标注，不是最小流程的前置条件。当前结果已经保存 `input_turns`、`turn_trace` 和人工 `context_analysis`；但逐轮 memory/coherence 正式分数仍未纳入汇总指标。
 
@@ -195,7 +195,9 @@ M03 只对同时满足 `is_questionable=true` 且“已验证”的知识点生�
 | `total_tokens` / `total_cost` | 所有样本上报 Token / 成本之和；适配器未上报时为 0 |
 | `diagnosis_distribution` | 诊断码计数 |
 
-当前默认仍是黑盒诊断：答错只记为 `E2E`（端到端失败，不能推断具体根因）；调用异常记为 `D9`。评测运行可以额外启用中间节点评测并选择 `rewrite`、`intent`、`rag` 节点，指标集合固定。`rewrite` 计算语义相似度和有标注时的约束 Precision/Recall/F1；`intent` 只计算意图分类准确率、Macro-F1、分类明细和混淆矩阵；`rag` 使用 RAGAS Context Precision、Context Recall、Faithfulness、Answer Relevancy。外部智能体通过 HTTP 响应路径提供检索文本和节点输出，不绑定平台内部 Block/EIU；未返回所选节点数据时标记 `data_missing`，不计为 0 分。
+Judge 汇总另有 `judge_enabled`、`judge_scored`、`judge_passed`、`judge_passed_rate`。只有 Judge 成功返回结构化结果的题目进入 Judge 分母；模型未配置、输入缺失和调用/解析异常不按 0 分计。Judge 的逐题 `reason` 和 `criteria` 可在结果详情及导出的 Excel 中查看。
+
+当前默认仍是黑盒诊断：答错只记为 `E2E`（端到端失败，不能推断具体根因）；调用异常记为 `D9`。评测运行可以额外启用中间节点评测并选择 `rewrite`、`intent`、`rag` 节点，指标集合固定，也可以独立启用 LLM-as-a-Judge 并填写评测规则提示词。`rewrite` 计算语义相似度和有标注时的约束 Precision/Recall/F1；`intent` 只计算意图分类准确率、Macro-F1、分类明细和混淆矩阵；`rag` 使用 RAGAS Context Precision、Context Recall、Faithfulness、Answer Relevancy。外部智能体通过 HTTP 响应路径提供检索文本和节点输出，不绑定平台内部 Block/EIU；未返回所选节点数据时标记 `data_missing`，不计为 0 分。
 
 ## 7. 当前未实现或不能作为正式质量结论的指标
 

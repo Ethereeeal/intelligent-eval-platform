@@ -470,9 +470,11 @@ class DatabaseService:
                     conn.execute(text("ALTER TABLE evaluation_case_result ADD COLUMN intermediate_reference JSON NULL"))
         if "evaluation_run" in inspector.get_table_names():
             run_cols = {c["name"] for c in inspector.get_columns("evaluation_run")}
-            if "intermediate_eval" not in run_cols:
-                with engine.begin() as conn:
+            with engine.begin() as conn:
+                if "intermediate_eval" not in run_cols:
                     conn.execute(text("ALTER TABLE evaluation_run ADD COLUMN intermediate_eval JSON NULL"))
+                if "judge_eval" not in run_cols:
+                    conn.execute(text("ALTER TABLE evaluation_run ADD COLUMN judge_eval JSON NULL"))
         if "error_book_item" in inspector.get_table_names():
             error_cols = {c["name"] for c in inspector.get_columns("error_book_item")}
             with engine.begin() as conn:
@@ -2616,6 +2618,7 @@ class DatabaseService:
         adapter: str,
         adapter_config: dict | None = None,
         intermediate_eval: dict | None = None,
+        judge_eval: dict | None = None,
     ) -> int:
         with SessionLocal() as session:
             row = EvaluationRunRow(
@@ -2624,6 +2627,7 @@ class DatabaseService:
                 adapter=adapter,
                 adapter_config=adapter_config,
                 intermediate_eval=intermediate_eval,
+                judge_eval=judge_eval,
             )
             session.add(row)
             session.commit()
@@ -2812,6 +2816,7 @@ class DatabaseService:
             "adapter": row.adapter,
             "adapter_config": adapter_config,
             "intermediate_eval": row.intermediate_eval or {"enabled": False, "nodes": []},
+            "judge_eval": row.judge_eval or {"enabled": False, "prompt": "", "include_history": False, "include_intermediate": False, "include_retrieved": False},
             "status": row.status,
             "progress": row.progress,
             "total": row.total,
@@ -3031,6 +3036,7 @@ class EvaluationRunRow(Base):
     adapter: Mapped[str] = mapped_column(String(64), nullable=False)
     adapter_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     intermediate_eval: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    judge_eval: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     progress: Mapped[int] = mapped_column(Integer, default=0)
     total: Mapped[int] = mapped_column(Integer, default=0)

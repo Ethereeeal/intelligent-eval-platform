@@ -41,6 +41,8 @@ class M08IntermediateMetricTests(unittest.TestCase):
             )
         rewrite = result["nodes"]["rewrite"]
         self.assertEqual(rewrite["semantic_similarity"], 0.9)
+        self.assertEqual(rewrite["reference"], "请查询余额")
+        self.assertEqual(rewrite["actual"], "请查询余额")
         self.assertIsNone(rewrite["constraint_f1"])
 
     def test_intent_aggregate_returns_accuracy_and_macro_f1(self):

@@ -39,6 +39,7 @@ from modules.m08_auto_evaluation.services.adapter import (
     get_adapter,
 )
 from modules.m08_auto_evaluation.services.intermediate_metrics import normalize_intermediate_config
+from modules.m08_auto_evaluation.services.judge import normalize_judge_config
 from modules.m08_auto_evaluation.services.metrics import aggregate
 from modules.m08_auto_evaluation.services.optimization import cluster_error_book
 from modules.m08_auto_evaluation.services.runner import start_case_retry_async, start_run_async
@@ -70,6 +71,7 @@ def create_evaluation_run(payload: EvaluationRunRequest):
         samples = resolve_composition(_db, payload.composition_id)
         adapter = get_adapter(payload.adapter, payload.adapter_config)
         intermediate_config = normalize_intermediate_config(payload.intermediate_eval.model_dump())
+        judge_config = normalize_judge_config(payload.judge_eval.model_dump())
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except AdapterError as exc:
@@ -82,12 +84,14 @@ def create_evaluation_run(payload: EvaluationRunRequest):
         adapter=payload.adapter,
         adapter_config=_sanitize_adapter_config(payload.adapter_config),
         intermediate_eval=intermediate_config,
+        judge_eval=judge_config,
     )
     start_run_async(
         run_id=run_id,
         samples=samples,
         adapter=adapter,
         intermediate_config=intermediate_config,
+        judge_config=judge_config,
     )
     try:
         _db.save_audit(
@@ -100,6 +104,7 @@ def create_evaluation_run(payload: EvaluationRunRequest):
                 "adapter": payload.adapter,
                 "total": len(samples),
                 "intermediate_eval": intermediate_config,
+                "judge_eval": judge_config,
             },
         )
     except Exception:  # noqa: BLE001 — 审计失败不阻断
@@ -156,7 +161,7 @@ def _get_run_or_404(run_id: int) -> dict:
 def get_evaluation_run(run_id: int):
     run = _get_run_or_404(run_id)
     results = _db.list_evaluation_results(run_id)
-    return {"run": run, "summary": aggregate(results, run.get("intermediate_eval"))}
+    return {"run": run, "summary": aggregate(results, run.get("intermediate_eval"), run.get("judge_eval"))}
 
 
 @evaluation_router.get("/evaluation-runs/{run_id}/results")
@@ -171,7 +176,7 @@ def evaluation_run_results(run_id: int):
             by_case.setdefault(issue["case_uid"], issue)
     for item in results:
         item["error_book"] = by_result.get(item["result_id"]) or by_case.get(item.get("case_uid"))
-    return {"results": results, "summary": aggregate(results, run.get("intermediate_eval"))}
+    return {"results": results, "summary": aggregate(results, run.get("intermediate_eval"), run.get("judge_eval"))}
 
 
 @evaluation_router.get("/evaluation-results/{result_id}/attempts")
@@ -232,6 +237,7 @@ def retry_evaluation_result(result_id: int, payload: EvaluationCaseRetryRequest)
         adapter=adapter,
         analysis_threshold=payload.analysis_threshold,
         intermediate_config=run.get("intermediate_eval"),
+        judge_config=run.get("judge_eval"),
     )
     return {"result_id": result_id, "attempt_result_id": attempt_id, "status": "pending"}
 
@@ -242,7 +248,7 @@ def _build_evaluation_workbook(run: dict, results: list[dict]) -> bytes:
     sheet = workbook.active
     sheet.title = "原始评测报告"
     headers = [
-        "序号", "问题", "标准答案", "智能体回答", "得分", "状态", "耗时(ms)",
+        "序号", "问题", "标准答案", "智能体回答", "得分", "规则评测", "LLM Judge评分", "LLM Judge理由", "状态", "耗时(ms)",
         "维度", "难度", "来源", "归因", "错误信息", "用例ID",
     ]
     sheet.append(headers)
@@ -260,6 +266,9 @@ def _build_evaluation_workbook(run: dict, results: list[dict]) -> bytes:
             item.get("gold_answer") or "",
             item.get("answer") or "",
             scores.get("score"),
+            (scores.get("rule") or {}).get("score"),
+            (scores.get("judge") or {}).get("score"),
+            (scores.get("judge") or {}).get("reason"),
             item.get("status") or "",
             scores.get("latency_ms"),
             item.get("dimension") or "",
@@ -272,7 +281,7 @@ def _build_evaluation_workbook(run: dict, results: list[dict]) -> bytes:
     for row in sheet.iter_rows(min_row=2):
         for cell in row:
             cell.alignment = Alignment(vertical="top", wrap_text=True)
-    widths = [8, 42, 42, 42, 10, 12, 12, 16, 12, 16, 16, 32, 24]
+    widths = [8, 42, 42, 42, 10, 12, 14, 36, 12, 12, 16, 16, 32, 24]
     for index, width in enumerate(widths, start=1):
         sheet.column_dimensions[get_column_letter(index)].width = width
     sheet.freeze_panes = "A2"
@@ -349,12 +358,14 @@ def retry_evaluation_run(run_id: int):
         adapter=run["adapter"],
         adapter_config=_sanitize_adapter_config(run.get("adapter_config")),
         intermediate_eval=run.get("intermediate_eval"),
+        judge_eval=run.get("judge_eval"),
     )
     start_run_async(
         run_id=new_run_id,
         samples=samples,
         adapter=adapter,
         intermediate_config=run.get("intermediate_eval"),
+        judge_config=run.get("judge_eval"),
     )
     return {"run_id": new_run_id, "status": "running", "total": len(samples)}
 

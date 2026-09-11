@@ -19,6 +19,7 @@ def _evaluate_case(
     sample: dict,
     adapter: BaseAdapter,
     intermediate_config: dict | None = None,
+    judge_config: dict | None = None,
 ) -> dict:
     turns = sample.get("turns") or sample.get("input_turns")
     if turns:
@@ -31,7 +32,7 @@ def _evaluate_case(
             gold_answer=sample.get("gold_answer"),
             extra=sample,
         )
-    scores = score_case(sample, result)
+    scores = score_case(sample, result, judge_config)
     normalized_intermediate = normalize_intermediate_config(intermediate_config)
     if normalized_intermediate["enabled"]:
         scores["intermediate"] = score_intermediate(
@@ -95,6 +96,7 @@ def start_run_async(
     samples: list[dict],
     adapter: BaseAdapter,
     intermediate_config: dict | None = None,
+    judge_config: dict | None = None,
 ) -> None:
     """逐题运行；取消在当前请求结束后生效，整轮异常会收敛为 failed。"""
 
@@ -118,7 +120,7 @@ def start_run_async(
                     )
                     return
                 try:
-                    evaluated = _evaluate_case(sample, adapter, intermediate_config)
+                    evaluated = _evaluate_case(sample, adapter, intermediate_config, judge_config)
                 except Exception as exc:  # noqa: BLE001 — 单题异常不中断整轮
                     evaluated = {
                         "status": "error",
@@ -165,6 +167,7 @@ def start_case_retry_async(
     adapter: BaseAdapter,
     analysis_threshold: float = 0.5,
     intermediate_config: dict | None = None,
+    judge_config: dict | None = None,
 ) -> int:
     """创建一条不可覆盖原结果的单题复测记录，并在后台执行。"""
     db = DatabaseService()
@@ -181,7 +184,7 @@ def start_case_retry_async(
     def _retry() -> None:
         retry_db = DatabaseService()
         try:
-            evaluated = _evaluate_case(source_result, adapter, intermediate_config)
+            evaluated = _evaluate_case(source_result, adapter, intermediate_config, judge_config)
         except Exception as exc:  # noqa: BLE001
             evaluated = {
                 "status": "error",

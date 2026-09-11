@@ -13,6 +13,16 @@ class IntermediateEvalConfig(BaseModel):
     nodes: list[Literal["rewrite", "intent", "rag"]] = Field(default_factory=list)
 
 
+class JudgeEvalConfig(BaseModel):
+    """运行级可选 LLM-as-a-Judge 配置。"""
+
+    enabled: bool = False
+    prompt: str | None = Field(default=None, max_length=10000)
+    include_history: bool = False
+    include_intermediate: bool = False
+    include_retrieved: bool = False
+
+
 class EvaluationRunRequest(BaseModel):
     """发起一次批量评测运行（组合作为输入）。"""
 
@@ -21,6 +31,7 @@ class EvaluationRunRequest(BaseModel):
     adapter: str = "mock"
     adapter_config: dict | None = None
     intermediate_eval: IntermediateEvalConfig = Field(default_factory=IntermediateEvalConfig)
+    judge_eval: JudgeEvalConfig = Field(default_factory=JudgeEvalConfig)
 
 
 class EvaluationExportRequest(BaseModel):

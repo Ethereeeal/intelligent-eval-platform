@@ -11,7 +11,7 @@ from modules.m08_auto_evaluation.schemas import AdapterTestRequest, ErrorBookUpd
 from modules.m08_auto_evaluation.services import runner
 from modules.m08_auto_evaluation.services.adapter import MockAdapter, OpenAiCompatibleAdapter
 from modules.m08_auto_evaluation.services.diagnosis import diagnose
-from modules.m08_auto_evaluation.services.metrics import aggregate
+from modules.m08_auto_evaluation.services.metrics import aggregate, score_case
 from modules.m08_auto_evaluation.services.optimization import build_optimization
 
 
@@ -24,6 +24,54 @@ class _MeasuredAdapter(OpenAiCompatibleAdapter):
 
 
 class M08DemoTests(unittest.TestCase):
+    def test_rule_score_uses_required_points_and_acceptable_answers(self):
+        sample = {
+            "gold_answer": "贷款期限为3年，起始日期为2025-01-01",
+            "must_have_points": ["3年", "2025-01-01"],
+            "acceptable_answers": [
+                "贷款期限为3年，起始日期为2025-01-01",
+                "期限3年，自2025-01-01日起",
+            ],
+        }
+        scores = score_case(sample, {"answer": "期限3年，自2025-01-01日起", "usage": {}})
+        self.assertEqual(scores["rule"]["method"], "rules")
+        self.assertTrue(scores["rule"]["passed"])
+        self.assertEqual(scores["rule"]["acceptable_answers"]["matched_indexes"], [1])
+        self.assertEqual(scores["rule"]["must_have_points"]["recall"], 1.0)
+
+    def test_rule_score_reports_missing_required_points(self):
+        scores = score_case(
+            {
+                "gold_answer": "3年",
+                "must_have_points": '["3年", "2025-01-01"]',
+            },
+            {"answer": "期限为3年", "usage": {}},
+        )
+        self.assertFalse(scores["rule"]["passed"])
+        self.assertEqual(scores["rule"]["must_have_points"]["missing"], ["2025-01-01"])
+        self.assertEqual(scores["rule"]["must_have_points"]["recall"], 0.5)
+
+    def test_rule_score_is_skipped_without_constraints(self):
+        scores = score_case({"gold_answer": "正确答案"}, {"answer": "正确答案", "usage": {}})
+        self.assertIsNone(scores["rule"])
+
+    def test_rule_score_is_not_counted_when_agent_call_errors(self):
+        scores = score_case(
+            {"must_have_points": ["必须回答"], "gold_answer": "标准答案"},
+            {"answer": "", "error": "timeout", "usage": {}},
+        )
+        self.assertIsNone(scores["rule"])
+
+    def test_aggregate_reports_rule_results_separately(self):
+        summary = aggregate([
+            {"status": "passed", "scores": {"score": 1.0, "rule": {"score": 1.0}}},
+            {"status": "failed", "scores": {"score": 0.0, "rule": {"score": 0.0}}},
+            {"status": "unscored", "scores": {"score": None, "rule": None}},
+        ])
+        self.assertEqual(summary["rule_scored"], 2)
+        self.assertEqual(summary["rule_passed"], 1)
+        self.assertEqual(summary["rule_passed_rate"], 0.5)
+
     def test_aggregate_handles_error_results_without_scores(self):
         summary = aggregate(
             [{
@@ -56,7 +104,7 @@ class M08DemoTests(unittest.TestCase):
                 "question": "如何查询余额？",
                 "gold_answer": "登录后查询",
                 "answer": "请登录手机银行查询",
-                "scores": {"score": 0.9, "latency_ms": 120},
+                "scores": {"score": 0.9, "rule": {"score": 1.0}, "judge": {"score": 0.85, "reason": "覆盖标准答案"}, "latency_ms": 120},
                 "status": "passed",
                 "dimension": "准确性",
                 "difficulty": "easy",
@@ -69,6 +117,9 @@ class M08DemoTests(unittest.TestCase):
         report = workbook["原始评测报告"]
         self.assertEqual(report["B2"].value, "如何查询余额？")
         self.assertEqual(report["E2"].value, 0.9)
+        self.assertEqual(report["F2"].value, 1.0)
+        self.assertEqual(report["G2"].value, 0.85)
+        self.assertEqual(report["H2"].value, "覆盖标准答案")
         self.assertEqual(workbook["运行摘要"]["B3"].value, "#5")
 
     def test_multi_turn_usage_accumulates_model_calls(self):

@@ -147,7 +147,12 @@ def _rewrite_score(sample: dict, result: dict) -> dict:
     output = _outputs(result).get("rewrite")
     actual = _text(output)
     if not reference or not actual:
-        return {"status": "data_missing", "semantic_similarity": None}
+        return {
+            "status": "data_missing",
+            "reference": reference or None,
+            "actual": actual or None,
+            "semantic_similarity": None,
+        }
     semantic = score_answer(actual, reference, use_semantic=True)
     expected_constraints = _constraints(
         _first(contract, "constraints", "reference_constraints", "rewrite_constraints")
@@ -158,6 +163,8 @@ def _rewrite_score(sample: dict, result: dict) -> dict:
     )
     payload: dict[str, Any] = {
         "status": "scored",
+        "reference": reference,
+        "actual": actual,
         "semantic_similarity": semantic.get("score"),
         "constraint_precision": None,
         "constraint_recall": None,

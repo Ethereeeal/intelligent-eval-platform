@@ -1,7 +1,7 @@
 # 08 — Agent 评测与后评估
 
 > 覆盖 BRD：9. 自动运行与后评估（9.1 待测系统适配 / 9.2 指标体系 / 9.3 失败归因 / 9.4 失败记录与跨版本复测）
-> Demo 状态：必做（mock + OpenAI 兼容 + 通用 HTTP 适配器、基础答案/运行指标、可选中间节点评测、端到端失败 `E2E` 与运行异常 `D9`、基础 ErrorBook）；平台只负责对冻结评测集上的不同智能体版本复测与比较，不负责调优智能体或在 m08 后修改评测集。
+> Demo 状态：必做（mock + OpenAI 兼容 + 通用 HTTP 适配器、基础答案/运行指标、可选中间节点评测、可选 LLM-as-a-Judge、端到端失败 `E2E` 与运行异常 `D9`、基础 ErrorBook）；平台只负责对冻结评测集上的不同智能体版本复测与比较，不负责调优智能体或在 m08 后修改评测集。
 >
 > 多轮第一版口径：先选择已有的标准答案评测集，再调用目标智能体；最终轮沿用现有精确/语义评分做错误初筛，只有失败或不确定样本才需要结合前置对话分析。这个最小闭环不依赖 Langfuse，也不要求 `key_turn`、`turn_type`、`depends_on_turns` 成为必填字段；完整逐轮 `memory/coherence` 评分仍属于后续能力。
 
@@ -14,7 +14,7 @@
 | FR-RUN-001 | 黑盒适配器：传入问题或多轮会话、待测智能体版本/配置标识；返回最终答案、耗时、Token、成本与错误信息 |
 | FR-METRIC-001 | 数据集自身质量指标（由 m02/m04 计算，本模块引用汇总） |
 | FR-METRIC-002 | 可选中间节点评测：改写、意图分类、RAG；节点内指标固定，不绑定平台内部 Block / EIU |
-| FR-METRIC-003 | 最终答案指标：规范化精确匹配 / 语义相似度 / 正确拒答率 |
+| FR-METRIC-003 | 最终答案指标：规范化精确匹配 / 语义相似度 / 评测集约束规则 / 可选 LLM-as-a-Judge / 正确拒答率 |
 | FR-METRIC-004 | 运行指标：P50/P95 耗时、Token、成本、错误率，按类型/难度/维度分组 |
 | FR-DIAG-001/002 | 黑盒失败记录：端到端失败 `E2E` 或运行异常 `D9`；不对 D1–D8 作伪精确归因 |
 | FR-OPT-001/002/003 | 失败记录、跨智能体版本复测与 ErrorBook 聚类；平台不负责智能体调优 |
@@ -30,7 +30,9 @@ modules/m08_auto_evaluation/
 └── services/
     ├── adapter.py          # mock / openai_compatible / http 标准适配器（FR-RUN-001）
     ├── runner.py           # 批量运行编排（异步线程，进度写 evaluation_run）
-    ├── metrics.py          # 分层指标：答案 / 分组汇总 / 耗时成本（FR-METRIC）
+    ├── metrics.py          # 分层指标：答案 / 规则 / 分组汇总 / 耗时成本（FR-METRIC）
+    ├── rules.py            # must_have_points / acceptable_answers 确定性规则评测
+    ├── judge.py            # 自定义提示词 LLM-as-a-Judge 与结构化结果解析
     ├── intermediate_metrics.py # rewrite / intent / RAG 固定中间节点指标
     ├── diagnosis.py        # E2E/D9 黑盒失败标记（FR-DIAG）
     └── optimization.py     # 黑盒失败说明 + ErrorBook 聚类（FR-OPT）
@@ -54,18 +56,48 @@ modules/m08_auto_evaluation/
 - HTTP 适配器可在响应中配置 `retrieved_path` 和 `node_outputs_path`；前者读取实际检索片段，后者读取 `rewrite` / `intent` / `rag` 节点输出。适配器只做字段路径映射，不假设不同智能体的节点返回格式相同。
 - **安全**：`adapter_config` 中的 `api_key` 不入库（持久化前剔除，接口回显掩码 `***`）；单题复测需重新提交敏感配置，前端复用模板也不保存 API Key 或 Header 值。运行时若需做上下文分析，只允许使用本次评测实际发送给目标智能体的对话内容。
 - **多轮记录边界**：运行结果保存 `input_turns`、待测系统生成的 `turn_outputs` 和逐轮 `turn_trace`（实际请求消息、响应、轮次索引及是否调用目标智能体）；失败或未评分样本可在结果详情中保存 `context_analysis`。不能用评测集中的标准答案替代目标智能体实际收到的上下文。
+- **LLM-as-a-Judge**：运行级可选；启用后每题固定传入评测集的 `question`、`gold_answer` 和目标智能体的 `actual_answer`，用户可分别勾选 `history`、`intermediate`、`retrieved` 三类附加数据。勾选的数据由适配器实际返回/运行轨迹提供，缺失时记为 `data_missing`，不伪造 0 分；关闭或未勾选时不会把对应字段拼入 Judge 提示词。
 
 ## 4. 运行与指标
 
 ```
-POST /api/evaluation-runs {composition_id, adapter, adapter_config, intermediate_eval?}
+POST /api/evaluation-runs {composition_id, adapter, adapter_config, intermediate_eval?, judge_eval?}
   → 组合解析为统一输入样本（m05 composition.resolve_composition；文档生成来源必须是 frozen 版本）
   → 异步线程逐题调用适配器
-  → score_case（FR-DS-SRC-003 评分口径：短答案精确匹配 / 长答案语义相似度）
+  → score_case（短答案精确匹配 / 长答案语义相似度，并独立执行评测集约束规则与可选 Judge）
   → 多轮失败/未评分样本保留前置对话，供人工上下文分析
   → diagnose（答错标记 E2E；调用异常标记 D9；不推断检索或生成根因）
   → 写 evaluation_case_result + error_book_item
   → 进度 0–100 写 evaluation_run
+```
+
+规则评测说明：
+
+- 规则评测不调用模型，也不从 `gold_answer` 自动猜测规则；仅消费评测集已有的 `must_have_points` 和 `acceptable_answers` 字段。
+- `must_have_points` 中的每个要点都必须在智能体回答中命中；当前使用规范化后的文本包含判断。
+- `acceptable_answers` 中只要有一个完整答案与智能体回答规范化后精确一致即可命中。
+- 两类字段为空时跳过对应检查；没有任何约束时，结果不生成 `scores.rule`。
+- 规则结果写入每条结果的 `scores.rule`，并在运行汇总中单独返回 `rule_scored`、`rule_passed`、`rule_passed_rate`，不覆盖既有 `scores.score` 和通过/失败状态。
+- 规则未通过时会保留缺失要点和命中答案下标，方便结果详情和 Excel 报告追溯；调用异常不会被算成规则失败。
+- 单题结果详情会展开显示已选中间节点的标准/参考值、实际输出和指标；`rewrite` 展示标准改写与实际改写，`intent` 展示标准意图与预测意图，`rag` 展示四项 RAGAS 指标及实际检索片段。规则评测另外展示每个必答要点的命中状态、缺失列表和要点 Recall。
+
+LLM-as-a-Judge 说明：
+
+- 前端启用 Judge 时必须填写一段自定义评测规则提示词。平台会在其后追加固定输出格式要求，要求模型返回 `score`（0–1）、`passed`、`reason` 和可选的 `criteria[]`，并解析为可追踪的结构化结果。
+- 评测数据以明确的 JSON 数据区块追加到用户提示词之后；数据区块只作为待评测内容，不作为指令执行。评测集问题、标准答案和智能体回答是固定输入，历史、中间节点结果、检索结果由三个独立开关控制。
+- Judge 结果写入 `scores.judge`，运行汇总单独返回 `judge_enabled`、`judge_scored`、`judge_passed`、`judge_passed_rate`，不与主 `scores.score` 或规则分数相加，也不改变原有 `passed/failed` 状态。模型未配置、返回非 JSON、调用异常分别记录为 `unavailable` / `error`，不计入 Judge 分母。
+- 运行保存 `judge_eval` 配置，重跑和单题复测沿用同一提示词与附加数据开关；`adapter_config` 的密钥仍按既有安全规则不落库，Judge 结果不保存模型原始响应。
+
+Judge 配置示例：
+
+```json
+{
+  "enabled": true,
+  "prompt": "判断智能体回答是否完整、准确地覆盖标准答案；不得补充标准答案之外的事实。请按事实正确性和完整性拆分 criteria。",
+  "include_history": true,
+  "include_intermediate": false,
+  "include_retrieved": false
+}
 ```
 
 中间评测配置示例：
@@ -92,7 +124,7 @@ POST /api/evaluation-runs {composition_id, adapter, adapter_config, intermediate
 
 输入字段通过评测样本的 `intermediate_reference` / `node_contract` 传递。外部评测集可以只提供它能提供的字段；缺少某个节点的标准数据、实际节点输出或实际检索文本时，该节点状态为 `data_missing`，指标保持 `null`，不参与均值计算。RAGAS 依赖未安装、评测模型未配置或调用失败时分别返回 `unavailable` / `error`，不伪造 0 分。
 
-- **Demo 指标**：短答案规范化精确匹配；长答案尝试 BGE 余弦相似度（不可用时回退精确匹配）；按难度/维度/归因汇总通过率，并累计耗时、Token、成本和错误率。
+- **Demo 指标**：短答案规范化精确匹配；长答案尝试 BGE 余弦相似度（不可用时回退精确匹配）；评测集有约束时额外执行 `must_have_points` / `acceptable_answers` 规则评测；按难度/维度/归因汇总通过率，并累计耗时、Token、成本和错误率。
 - **Demo 失败记录**：答错统一标记 `E2E`（端到端失败、原因不可定位）；调用异常标记 `D9`。待测智能体不返回可与内部 Block/EIU 比对的检索轨迹，因此 D1–D8 不属于本平台的自动归因范围。
 - **复测与对比**：单题复测通过 `POST /api/evaluation-results/{id}/retry` 创建关联尝试，不覆盖原结果；只有达到发起复测时的分析阈值才自动把异常项置为 `verified`。运行对比固定同一评测集版本，展示新增失败、已修复和持续失败。平台不执行智能体调优，m08 运行结果不驱动评测集修订。
 - **可观察说明**：后端保留 `E2E` / `D9` 诊断代码用于审计，前端默认显示“答案未通过”或“调用异常”，避免把内部编码直接暴露给测试人员。
@@ -144,6 +176,8 @@ POST /api/evaluation-runs {composition_id, adapter, adapter_config, intermediate
 - [x] 通用 HTTP 适配器支持 `retrieved_path` / `node_outputs_path`，将外部响应映射到统一中间节点输入
 - [x] （多轮第一版）保存目标智能体实际收到的逐轮请求上下文，并在失败/不确定结果中可回看前置对话
 - [x] （多轮第一版）在基线精确/语义评分之后增加上下文错误分析入口；分析结果不覆盖原始评分
+- [x] 评测集约束规则评测：基于 `must_have_points` 和 `acceptable_answers` 独立输出规则分数、逐项命中结果与运行级规则通过率
+- [x] 可选 LLM-as-a-Judge：自定义规则提示词、固定三项评测输入、可选多轮历史/中间节点/检索结果、结构化逐题理由与运行级独立通过率
 - [ ] （后续版本）按轮次计算 memory/coherence，并支持更细的人工抽查与 Judge 校准
 - [ ] （生产版本）标准黑盒适配器的智能体版本标识、会话控制和完整多轮会话持久化
 - [ ] （生产版本）完整答案与运行指标：数据集质量汇总、F1/数值容差/要点召回/忠实性/引用/拒答、P50/P95 与更多分组
