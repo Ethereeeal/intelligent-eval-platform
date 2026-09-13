@@ -1,6 +1,7 @@
 """M02 — EIU 抽取核心逻辑（SPEC §5.3 / §5.4 / §8）。
 
-逐 Block 调用 LLM 抽取可评测信息单元，复用 M01 的 doc_update_job 反馈进度；每完成 10 个 Block 更新一次，最后一个 Block 收口：
+规则先抽取可评测信息单元，仅将确有上下文或原子性风险的 Block 交给 LLM；
+复用 M01 的 doc_update_job 按 Block 和处理阶段反馈进度：
   progress = 已处理段落 Block 数 / 总段落 Block 数 × 100
 无实质内容的 Block 写入排除记录（is_questionable=false + exclusion_reason），
 保证"实质 Block 对账率"可达 100%（SPEC §6.4 / §6.3）。
@@ -18,6 +19,10 @@ from typing import Any
 
 from modules.m01_data_foundation.services.eiu_indexer import EiuFaissIndex
 from modules.m02_eiu_coverage.services.context_bundle import ContextBundleBuilder
+from modules.m02_eiu_coverage.services.eiu_gate_policy import (
+    QUALITY_POLICY_VERSION,
+    EiuGatePolicy,
+)
 from modules.m02_eiu_coverage.services.eiu_quality import EiuQualityEvaluator
 from modules.m02_eiu_coverage.services.llm_client import LLMClient, LLMError
 from modules.shared.services.database import EIU_TYPES, PRIORITY_WEIGHT, DatabaseService
@@ -192,21 +197,25 @@ def _split_sentences(text: str) -> list[str]:
 
 
 def _classify(sentence: str) -> tuple[str, str] | None:
-    """按优先级判定句子属于哪类 EIU（type, priority）。无实质内容返回 None。"""
+    """判定 EIU 类型并给出临时优先级占位。
+
+    第二个返回值仅为兼容落库前的数据契约，固定为 P1；最终 P0/P1/P2 必须在
+    全文候选齐备后由 :class:`EiuGatePolicy` 依据相对文档目的批量判定。
+    """
     if not sentence or len(sentence) < 4:
         return None
 
-    # prohibition（禁止事项，P0）
+    # prohibition（禁止事项）
     if re.match(r"^(?:禁止|严禁|不准|不允许|不得)", sentence) or (
         "禁止" in sentence or "严禁" in sentence
     ):
-        return "prohibition", "P0"
+        return "prohibition", "P1"
 
-    # exception（例外 / 放宽，P0/P1）
+    # exception（例外 / 放宽）
     if re.search(r"除非|除外|例外|可放宽|可不(?:受|适用|按|计)|但(?:是)?.{0,6}(?:可以|允许|不受)", sentence):
-        return "exception", "P0"
+        return "exception", "P1"
 
-    # threshold（数值 / 百分比 / 上下限，P0）
+    # threshold（数值 / 百分比 / 上下限）
     # 兼容两种语序："不得超过70%"（限定词在前）与 "70%以上"（数值在前）
     if re.search(
         r"(?:不超过|不得超过|不得低于|不得高于|不得少于|不低于|不高于|上限|下限|控制在|最高|最低)"
@@ -215,7 +224,7 @@ def _classify(sentence: str) -> tuple[str, str] | None:
         r"\s*(?:以上|以下|不超过|不得超过|不得低于|不得高于|不得少于|不低于|不高于)",
         sentence,
     ):
-        return "threshold", "P0"
+        return "threshold", "P1"
 
     # date（时效，P1）
     if re.search(r"(?:\d{4}年\d{1,2}月\d{1,2}日|\d{1,2}月\d{1,2}日).{0,10}(?:施行|生效|执行|实施|截止)|(?:自|从).{0,12}(?:起施行|起生效|起实施)", sentence):
@@ -237,19 +246,19 @@ def _classify(sentence: str) -> tuple[str, str] | None:
     if re.search(r"流程|步骤|依次|顺序|先后|先.{0,8}(?:再|然后).{0,8}(?:后|最终)|办理程序|操作流程|审批流程", sentence):
         return "process", "P1"
 
-    # metric（指标值，P2）
+    # metric（指标值）
     if re.search(r"\d[\d,]*(?:\.\d+)?\s*(?:万元|亿元|元|户|笔|人|%)", sentence) and re.search(
         r"(?:达到|为|计|累计|总额|余额|金额|人数|户数|增长率|净利润|营业收入)", sentence
     ):
-        return "metric", "P2"
+        return "metric", "P1"
 
     # change（变更 / 新旧更替，P1）
     if re.search(r"调整(?:为|至|到)?|修订|改版|新版|旧版|由.{0,10}(?:改为|调整为|变更为|提高|降低|提高到|降低至)|较.{0,4}(?:版|年度)", sentence):
         return "change", "P1"
 
-    # 兜底：一般说明（P2），避免有效业务信息被漏抽
+    # 兜底：一般说明，避免有效业务信息被漏抽
     if len(sentence) >= 8:
-        return "rule", "P2"
+        return "rule", "P1"
     return None
 
 
@@ -356,22 +365,18 @@ def _yellow_route_reasons(block: dict, rule_items: list[dict]) -> list[str]:
     text = str(block.get("block_text") or "")
     block_type = str(block.get("block_type") or "")
     reasons: list[str] = []
-    if len(rule_items) != 1:
-        reasons.append("一个 Block 对应多个或零个候选，不能确定性放行")
+    if not rule_items:
+        reasons.append("规则未抽到候选，需要语义抽取")
     if len(rule_items) == 1:
         candidate = rule_items[0]
         constraints = candidate.get("constraints") or {}
-        if not constraints.get("主体"):
-            reasons.append("未识别到显式主体，需补全或确认")
-        if not candidate.get("predicate"):
-            reasons.append("未识别到单一可判定谓词，需复核")
         if len(_CLAIM_PREDICATE_RE.findall(str(candidate.get("statement") or ""))) > 1:
             reasons.append("候选包含多个并列动作，需判断是否拆分")
         has_numeric_limit = bool(re.search(r"\d[\d,.]*\s*(?:%|％|万元|亿元|元|倍|户|笔|天|个月)", text))
         if has_numeric_limit and not constraints.get("单位"):
             reasons.append("存在量化值但未提取单位，需补全量化条件")
     predicate_count = len(_REVIEW_PREDICATE_RE.findall(text))
-    if predicate_count > 1:
+    if len(rule_items) == 1 and predicate_count > 1:
         reasons.append(f"检测到 {predicate_count} 个业务谓词，需判断拆分或合并")
     if _REFERENCE_RE.search(text):
         reasons.append("包含指代或显式条款引用，需补全上下文")
@@ -383,12 +388,6 @@ def _yellow_route_reasons(block: dict, rule_items: list[dict]) -> list[str]:
         reasons.append(f"Block 长度 {len(text)} 超过 {_YELLOW_BLOCK_LENGTH} 字")
     if block_type.startswith(("table", "excel")):
         reasons.append("表格类 Block 需要校验表头和单元格上下文")
-    # rule/P2 是确定性抽取的兜底分类，类型/优先级并不可靠，交由 LLM 校正。
-    if any(item.get("eiu_type") == "rule" and item.get("content_priority") == "P2" for item in rule_items):
-        reasons.append("规则兜底分类 rule/P2，类型或优先级需复核")
-    # P0 对证据完整度要求更高，默认送局部审查而非直接放行。
-    if any(item.get("content_priority") == "P0" for item in rule_items):
-        reasons.append("P0 候选需要全量证据复核")
     return reasons
 
 
@@ -503,7 +502,11 @@ def _dedup_semantic(
                 break
         # 语义层：FAISS 检索（或线性）余弦 ≥ 阈值
         if not dup:
-            vec = _encode_one(stmt)
+            vec = it.get("embedding_vector")
+            if vec is None:
+                vec = _encode_one(stmt)
+                if vec is not None:
+                    it["embedding_vector"] = vec
             if vec is not None:
                 if faiss_idx is not None and faiss_idx.search_by_vector:
                     hits = faiss_idx.search_by_vector(vec, top_k=1)
@@ -575,6 +578,18 @@ class EiuExtractorService:
         self.system_prompt = self._load_prompt()
         # 同一条款的首次黄色审查结果按 Block 暂存，仅在当前抽取运行内复用。
         self._article_review_cache: dict[tuple[str, int], list[dict]] = {}
+        self._review_failure_count = 0
+        self._review_circuit_open = False
+
+    def _record_trace(self, **kwargs: Any) -> None:
+        """记录可排查轨迹；轨迹库故障不能改变 EIU 的抽取结论。"""
+        recorder = getattr(self.database, "record_processing_trace", None)
+        if not callable(recorder):
+            return
+        try:
+            recorder(**kwargs)
+        except Exception:  # noqa: BLE001 — 可观测性故障不得阻断抽取
+            logger.exception("EIU processing trace write failed", extra=kwargs)
 
     @staticmethod
     def _load_prompt() -> str:
@@ -616,6 +631,14 @@ class EiuExtractorService:
                 phase="eiu_extract",
                 message=f"EIU 抽取失败: {type(exc).__name__}: {str(exc)[:160]}",
                 finished=True,
+            )
+            self._record_trace(
+                document_id=document_id,
+                job_id=job_id,
+                stage="eiu_extract",
+                event="failed",
+                status="error",
+                detail={"error_type": type(exc).__name__, "message": str(exc)[:160]},
             )
             return {"job_id": job_id, "status": "failed", "message": str(exc)}
 
@@ -683,6 +706,8 @@ class EiuExtractorService:
         progress_end: int = 100,
     ) -> dict:
         self._article_review_cache.clear()
+        self._review_failure_count = 0
+        self._review_circuit_open = False
         documents = self.database.list_documents()
         if document_id is not None:
             documents = [d for d in documents if d["document_id"] == document_id]
@@ -694,6 +719,14 @@ class EiuExtractorService:
         substantive = [block for block in all_blocks if block["block_type"] != "title"]
         total = len(substantive)
         if total == 0:
+            for document in documents:
+                self._record_trace(
+                    document_id=document["document_id"],
+                    job_id=job_id,
+                    stage="eiu_extract",
+                    event="skipped",
+                    detail={"reason": "无可处理的非标题 Block"},
+                )
             if finalize_job:
                 self.database.update_job(
                     job_id, status="completed", phase="done", progress=progress_end,
@@ -707,6 +740,17 @@ class EiuExtractorService:
             job_id, status="running", phase="eiu_extract", progress=progress_start,
             message=f"开始 EIU 抽取，共 {total} 个段落 Block",
         )
+        for document, blocks in zip(documents, document_blocks, strict=True):
+            self._record_trace(
+                document_id=document["document_id"],
+                job_id=job_id,
+                stage="eiu_extract",
+                event="started",
+                detail={
+                    "block_count": sum(1 for block in blocks if block["block_type"] != "title"),
+                    "policy_version": QUALITY_POLICY_VERSION,
+                },
+            )
         # 单文档模式：仅清空该文档旧 EIU；全库模式：清空全部旧 EIU
         if document_id is not None:
             self.database.delete_eius_by_document(document_id=document_id)
@@ -720,9 +764,60 @@ class EiuExtractorService:
             for document, blocks in zip(documents, document_blocks, strict=True)
         }
 
+        # 先完成整篇文档的规则候选与重要性规划，再决定哪些失败候选值得调用 LLM。
+        # 这使 P2 低价值候选首轮失败后直接归档，P0/P1 才进入自动补证/重审。
+        planning_policy = EiuGatePolicy(None if self._review_circuit_open else self.llm)
+        planned_by_block: dict[int, list[dict]] = {}
+        self.database.update_job(
+            job_id,
+            progress=progress_start,
+            message="正在生成全文规则候选并规划重要性",
+        )
+        for document, blocks in zip(documents, document_blocks, strict=True):
+            evaluator = quality_evaluators[document["document_id"]]
+            preliminary: list[dict] = []
+            for block in blocks:
+                if block.get("block_type") == "title":
+                    continue
+                candidates = self._rule_candidates(block)
+                preliminary.extend(evaluator.annotate(item, block) for item in candidates)
+            classified = planning_policy.classify_document(
+                document=document,
+                items=preliminary,
+                blocks=blocks,
+            )
+            document_planned: dict[int, list[dict]] = {}
+            for item in classified:
+                item_block_id = _coerce_block_id(item.get("block_id"))
+                if item_block_id is not None:
+                    planned_by_block.setdefault(item_block_id, []).append(item)
+                    document_planned.setdefault(item_block_id, []).append(item)
+            for block_id, candidates in document_planned.items():
+                self._record_trace(
+                    document_id=document["document_id"],
+                    job_id=job_id,
+                    block_id=block_id,
+                    stage="eiu_plan",
+                    event="rule_candidates_classified",
+                    detail={
+                        "candidate_count": len(candidates),
+                        "candidates": [
+                            {
+                                "candidate_id": item.get("candidate_id"),
+                                "eiu_type": item.get("eiu_type"),
+                                "quality_status": item.get("quality_status"),
+                                "content_priority": item.get("content_priority"),
+                                "importance_reason": item.get("importance_reason"),
+                            }
+                            for item in candidates
+                        ],
+                    },
+                )
+
         inserted = 0
         excluded = 0
         failed_blocks = 0
+        invalidated_cases = 0
         _sem_vecs: list[tuple[str, list[float]]] = []  # 已插入 EIU 的 (归一化statement, 向量)
         # P1：EIU 向量 FAISS 索引，语义去重用（与 _sem_vecs 精确层互补）
         _faiss_idx = EiuFaissIndex()
@@ -733,11 +828,22 @@ class EiuExtractorService:
             evaluator = quality_evaluators[block["document_id"]]
             block_error = None
             try:
-                items = self._extract_block(
-                    block,
-                    document_map[block["document_id"]],
-                    neighbors[block_id],
+                planned_items = [dict(item) for item in planned_by_block.get(block_id, [])]
+                needs_llm_repair = any(
+                    item.get("quality_status") != "verified"
+                    and item.get("content_priority") in {"P0", "P1"}
+                    for item in planned_items
                 )
+                if planned_items and not needs_llm_repair:
+                    items = planned_items
+                else:
+                    items = self._extract_block(
+                        block,
+                        document_map[block["document_id"]],
+                        neighbors[block_id],
+                        rule_items_override=planned_items or None,
+                    )
+                    items = self._inherit_importance(items, planned_items)
                 # 模型结果最终仍绑定当前 Block，避免异常响应在落库层触发 KeyError。
                 items = [
                     bound
@@ -764,15 +870,36 @@ class EiuExtractorService:
                 for it in items:
                     if it.get("is_questionable"):
                         stmt = (it.get("statement") or "").strip()
-                        if stmt:
+                        if stmt and it.get("embedding_vector") is None:
                             it["embedding_vector"] = _encode_one(stmt)
-                inserted += len(self.database.save_eius(items=items))
+                saved_eiu_ids = self.database.save_eius(items=items)
+                inserted += len(saved_eiu_ids)
+                for item, eiu_id in zip(items, saved_eiu_ids, strict=True):
+                    self._record_trace(
+                        document_id=block["document_id"],
+                        job_id=job_id,
+                        block_id=block_id,
+                        eiu_id=eiu_id,
+                        stage="eiu_extract",
+                        event="candidate_persisted",
+                        detail={
+                            "eiu_type": item.get("eiu_type"),
+                            "is_questionable": item.get("is_questionable"),
+                            "route_color": item.get("route_color"),
+                            "route_reasons": item.get("route_reasons") or [],
+                            "review_action": item.get("review_action"),
+                            "review_attempts": item.get("review_attempts", 0),
+                            "evidence_blocks": item.get("evidence_blocks") or [],
+                            "quality_status": item.get("quality_status"),
+                            "quality_checks": item.get("quality_checks") or {},
+                        },
+                    )
                 # 记录已插入可出题 EIU 的归一化 statement 向量，供后续块比对（精确层）
                 for it in items:
                     if it.get("is_questionable"):
                         stmt = (it.get("statement") or "").strip()
                         if stmt:
-                            _sem_vecs.append((_norm(stmt), _encode_one(stmt)))
+                            _sem_vecs.append((_norm(stmt), it.get("embedding_vector")))
                 # 增量加入 FAISS 索引（语义层）
                 _faiss_idx.add_items([it for it in items if it.get("embedding_vector")])
             else:
@@ -787,17 +914,108 @@ class EiuExtractorService:
                     items=[exclusion],
                 )
                 excluded += 1
-            # 进度按每完成 10 个 Block 推进一步，避免单个知识点抽取完成就频繁抖动；
-            # 最后一个 Block 无论是否凑满 10 个都推进到本阶段末点。
-            if index % 10 == 0 or index == total:
-                progress = progress_start + int(index / total * (progress_end - progress_start))
-                self.database.update_job(job_id, progress=progress)
+                self._record_trace(
+                    document_id=block["document_id"],
+                    job_id=job_id,
+                    block_id=block_id,
+                    stage="eiu_extract",
+                    event="block_excluded",
+                    status="warning" if block_error else "info",
+                    detail={
+                        "reason": reason,
+                        "quality_checks": exclusion.get("quality_checks") or {},
+                    },
+                )
+            # 为文档级重要性与最终门禁预留最后 10%；逐 Block 更新，避免界面假卡死。
+            block_progress_end = progress_start + int((progress_end - progress_start) * 0.9)
+            progress = progress_start + int(index / total * (block_progress_end - progress_start))
+            self.database.update_job(
+                job_id,
+                progress=progress,
+                message=f"规则抽取与重点补齐：{index}/{total} 个 Block",
+            )
+
+        # 重要性已在补齐前按全文候选批量判定；此处只做三色处置、去重与文档反馈，
+        # 不再调用 LLM，避免一篇文档产生两轮重复的重要性请求。
+        self.database.update_job(
+            job_id,
+            progress=progress_start + int((progress_end - progress_start) * 0.92),
+            message="正在进行文档级重要性判断与质量收口",
+        )
+        gate_policy = EiuGatePolicy(None)
+        gate_fields = {
+            "content_priority", "is_questionable", "exclusion_reason", "quality_status",
+            "route_color", "route_reasons", "review_action", "importance_signals",
+            "importance_reason", "canonical_intent_key", "auto_disposition",
+            "quality_policy_version", "evaluation_profiles",
+        }
+        for document_index, (document, blocks) in enumerate(
+            zip(documents, document_blocks, strict=True), start=1
+        ):
+            persisted = self.database.list_eius(document_id=document["document_id"])
+            updated_items, findings = gate_policy.finalize_document(
+                document=document,
+                items=persisted,
+            )
+            for item in updated_items:
+                updates = {field: item[field] for field in gate_fields if field in item}
+                self.database.update_eiu(int(item["eiu_id"]), **updates)
+                self._record_trace(
+                    document_id=document["document_id"],
+                    job_id=job_id,
+                    block_id=item.get("block_id"),
+                    eiu_id=int(item["eiu_id"]),
+                    stage="quality_gate",
+                    event="final_disposition",
+                    status="warning" if item.get("auto_disposition") in {"yellow", "red"} else "info",
+                    detail={
+                        "quality_status": item.get("quality_status"),
+                        "quality_checks": item.get("quality_checks") or {},
+                        "auto_disposition": item.get("auto_disposition"),
+                        "exclusion_reason": item.get("exclusion_reason"),
+                        "route_reasons": item.get("route_reasons") or [],
+                        "importance_reason": item.get("importance_reason"),
+                        "policy_version": item.get("quality_policy_version"),
+                    },
+                )
+            self.database.replace_document_quality_findings(
+                document_id=document["document_id"],
+                findings=findings,
+                policy_version=QUALITY_POLICY_VERSION,
+            )
+            # 旧 QA 绑定的是重抽前 EIU id；保留已冻结版本快照，但当前生成库必须
+            # 失效，避免旧题继续被误认为覆盖了新策略下的绿色知识点。
+            invalidated_cases += self.database.delete_generated_cases_by_document(
+                document_id=document["document_id"]
+            )
+            disposition_counts = {"green": 0, "yellow": 0, "red": 0}
+            for item in updated_items:
+                disposition = str(item.get("auto_disposition") or "yellow")
+                if disposition in disposition_counts:
+                    disposition_counts[disposition] += 1
+            self._record_trace(
+                document_id=document["document_id"],
+                job_id=job_id,
+                stage="quality_gate",
+                event="completed",
+                detail={
+                    "disposition_counts": disposition_counts,
+                    "quality_finding_count": len(findings),
+                    "invalidated_case_count": invalidated_cases,
+                },
+            )
+            gate_progress_start = progress_start + int((progress_end - progress_start) * 0.92)
+            gate_progress = gate_progress_start + int(
+                document_index / len(documents) * (progress_end - gate_progress_start)
+            )
+            self.database.update_job(job_id, progress=gate_progress)
 
         if finalize_job:
             self.database.update_job(
                 job_id, status="completed", phase="done", progress=progress_end,
                 message=(
                     f"EIU 抽取完成，共 {inserted} 条（排除 {excluded} 个段落）"
+                    + (f"，已失效 {invalidated_cases} 条旧问答对" if invalidated_cases else "")
                     + (f"，失败 {failed_blocks} 个 Block" if failed_blocks else "")
                 ),
                 finished=True,
@@ -809,6 +1027,7 @@ class EiuExtractorService:
             "status": "completed",
             "message": (
                 f"EIU 抽取完成，共 {inserted} 条"
+                + (f"，已失效 {invalidated_cases} 条旧问答对" if invalidated_cases else "")
                 + (f"，失败 {failed_blocks} 个 Block" if failed_blocks else "")
             ),
             "count": inserted,
@@ -880,12 +1099,57 @@ class EiuExtractorService:
             ))
         return frozenset(signature)
 
-    def _extract_block(self, block: dict, document: dict, context: dict[str, str]) -> list[dict]:
+    @staticmethod
+    def _rule_candidates(block: dict) -> list[dict]:
+        """生成可复用的确定性规则候选；重要性规划与实际抽取使用同一结果。"""
+        meta = block.get("metadata_json") or {}
+        if block.get("block_type") == "excel_row" and (meta.get("question") or "").strip():
+            text = str(meta.get("question")).strip()
+        else:
+            text = str(block.get("block_text") or "")
+        if is_skippable(text):
+            return []
+        rule_items = deterministic_extract(text)
+        for candidate_index, item in enumerate(rule_items, start=1):
+            item["block_id"] = block["block_id"]
+            item["candidate_id"] = block["block_id"] * 1000 + candidate_index
+            item["section_path"] = block.get("section_path")
+            item["extraction_model"] = "hybrid-rule"
+            item["extraction_confidence"] = 0.9
+        return rule_items
+
+    @staticmethod
+    def _inherit_importance(items: list[dict], source_items: list[dict]) -> list[dict]:
+        """让 LLM 拆合结果继承补齐前的重要性；缺少映射时取本 Block 最重要级别。"""
+        if not source_items:
+            return items
+        rank = {"P0": 0, "P1": 1, "P2": 2}
+        source_by_id = {item.get("candidate_id"): item for item in source_items}
+        for item in items:
+            referenced = [
+                source_by_id.get(candidate_id)
+                for candidate_id in (item.get("source_candidate_ids") or [])
+                if source_by_id.get(candidate_id) is not None
+            ]
+            candidates = referenced or source_items
+            source = min(candidates, key=lambda value: rank.get(value.get("content_priority"), 1))
+            for field in ("content_priority", "importance_reason", "evaluation_profiles", "importance_signals"):
+                if field in source:
+                    item[field] = source[field]
+        return items
+
+    def _extract_block(
+        self,
+        block: dict,
+        document: dict,
+        context: dict[str, str],
+        *,
+        rule_items_override: list[dict] | None = None,
+    ) -> list[dict]:
         """单 Block 抽取（三色路由：绿色规则直通，黄色局部 LLM 审查）。
 
         写死项（不再让 LLM 自由裁量）：
           - #2 EIU 类型判定：由 _classify 规则映射
-          - #3 优先级 P0/P1/P2：由 _classify 类型→优先级映射
           - #5 constraints：由 _constraints_for 正则预抽
           - #4 粗筛：is_skippable 前置拦截，减少送 LLM 的 Block 数
         保留 LLM 项：
@@ -898,7 +1162,8 @@ class EiuExtractorService:
             一次 LLM 调用对当前 Block 候选做拆分、合并、补全和证据判断；
           - 红色：LLM 离线/失败或仍有质量疑点时进入 needs_review，不自动出题。
 
-        LLM 产出的每条 EIU 仍用规则重算 type/priority/constraints，保证字段口径稳定。
+        LLM 产出的每条 EIU 仍用规则重算 type/constraints；重要性在同文档批量门禁
+        中统一判定，不能由规则类型直接决定。
 
         表格类文件（excel/csv）不做特殊化：与普通文档走同一套抽取流程，
         一行内可抽 0..n 条 EIU（规则逐句分类先抽，规则无法归类时交 LLM）。
@@ -915,13 +1180,12 @@ class EiuExtractorService:
         if is_skippable(text):                       # #4 粗筛写死，前置拦截
             return []
 
-        # 1) 规则先抽（#2/#3/#5 写死在此完成）
-        rule_items = deterministic_extract(text)
-        for candidate_index, item in enumerate(rule_items, start=1):
-            item["block_id"] = block["block_id"]
-            item["candidate_id"] = block["block_id"] * 1000 + candidate_index
-            item["extraction_model"] = "hybrid-rule"
-            item["extraction_confidence"] = 0.9
+        # 1) 规则先抽（#2/#5 写死在此完成；priority 仅为临时占位）
+        rule_items = (
+            [dict(item) for item in rule_items_override]
+            if rule_items_override is not None
+            else self._rule_candidates(block)
+        )
 
         yellow_reasons = _yellow_route_reasons(block, rule_items)
         if rule_items and not yellow_reasons:
@@ -931,13 +1195,31 @@ class EiuExtractorService:
                 item["review_action"] = "pass"
             return rule_items
 
-        if rule_items and self.llm.use_offline:
+        # 路由信号只是“可能需要补齐”，不能直接等同于质量失败。先用同文档证据做
+        # 两项硬门禁；忠实性与完整性通过时直接放行，原子性只作为 QA 出题提示。
+        if rule_items:
+            resolver = context.get("_resolver")
+            document_blocks = getattr(resolver, "blocks", None) or [block]
+            precheck = EiuQualityEvaluator(document_blocks)
+            checked_items = [precheck.annotate(dict(item), block) for item in rule_items]
+            if all(item.get("quality_status") == "verified" for item in checked_items):
+                for item in checked_items:
+                    item["route_color"] = "green"
+                    item["route_reasons"] = ["两项硬门禁通过，原子性提示交由 QA 出题处理"]
+                    item["review_action"] = "pass"
+                return checked_items
+
+        if rule_items and (self.llm.use_offline or self._review_circuit_open):
             # 黄色候选不能因本地离线降级而变成绿色；后续 annotate 会强制 needs_review。
             for item in rule_items:
                 item["force_needs_review"] = True
                 item["extraction_model"] = "hybrid-rule-yellow-pending"
                 item["route_color"] = "red"
-                item["route_reasons"] = yellow_reasons + ["LLM 当前不可用，转人工复核"]
+                unavailable = (
+                    "LLM 连续失败，本次任务已停止继续等待"
+                    if self._review_circuit_open else "LLM 当前不可用"
+                )
+                item["route_reasons"] = yellow_reasons + [f"{unavailable}，转人工复核"]
                 item["review_action"] = "human_review"
             return rule_items
 
@@ -959,6 +1241,7 @@ class EiuExtractorService:
                     context,
                     self.llm.extract_json(self.system_prompt, user_prompt),
                 )
+                self._review_failure_count = 0
             initial_signature = self._review_signature(raw_items)
             requests = _context_requests(raw_items)
             resolver = context.get("_resolver")
@@ -989,13 +1272,23 @@ class EiuExtractorService:
                         candidate["review_action"] = "human_review"
                         candidate["route_reasons"] = yellow_reasons + ["文档上下文映射未找到 LLM 请求的补充证据"]
                     return rule_items
-        except LLMError:
+        except LLMError as exc:
+            self._review_failure_count += 1
+            if self._review_failure_count >= 3:
+                self._review_circuit_open = True
+                logger.warning(
+                    "EIU LLM review circuit opened",
+                    extra={
+                        "document_id": document.get("document_id"),
+                        "failure_count": self._review_failure_count,
+                    },
+                )
             if rule_items:
                 for item in rule_items:
                     item["force_needs_review"] = True
                     item["extraction_model"] = "hybrid-rule-yellow-pending"
                     item["route_color"] = "red"
-                    item["route_reasons"] = yellow_reasons + ["LLM 审查调用失败，转人工复核"]
+                    item["route_reasons"] = yellow_reasons + [f"LLM 审查调用失败（{exc}），转人工复核"]
                     item["review_action"] = "human_review"
                 return rule_items
             return []
@@ -1029,12 +1322,13 @@ class EiuExtractorService:
             if not statement or statement in seen:
                 continue
             seen.add(statement)
-            # #2/#3/#5 写死：用规则对 LLM 拆分出的语句重新归类，覆盖 LLM 自由裁量
+            # #2/#5 写死：用规则对 LLM 拆分出的语句重新归类，覆盖 LLM 自由裁量。
+            # P0/P1/P2 由抽取完成后的全文门禁统一判定。
             classification = _classify(statement)
             if classification is None:
                 # 连规则都无法归类 → 视为 LLM 过度拆分，跳过该条（不杜撰类型）
                 continue
-            eiu_type, priority = classification
+            eiu_type, _rule_priority = classification
             evidence_blocks, evidence_details = _review_evidence(
                 context, item.get("evidence_block_ids"), block["block_id"]
             )
@@ -1049,7 +1343,12 @@ class EiuExtractorService:
                 "block_id": block["block_id"],
                 "statement": _truncate_statement(statement),
                 "eiu_type": eiu_type,
-                "content_priority": priority,
+                # 规则类型优先级不能充当相对文档目的的重要性。规则候选会在下游
+                # 继承全文规划结果；纯语义新增候选保守按 P1 收口，不能因“不得”
+                # 等字样被写死为 P0。
+                "content_priority": "P1",
+                "importance_reason": "规则未形成可继承候选，采用不按规则类型升级的保守 P1 判定",
+                "evaluation_profiles": ["test_full", "business"],
                 "constraints": _constraints_for(statement),
                 "evidence_blocks": evidence_blocks,
                 "evidence_details": evidence_details,

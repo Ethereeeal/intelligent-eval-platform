@@ -122,13 +122,13 @@
 原设计在调用 LLM 前做两级复用（精确 + 语义 0.92），命中即跳过 LLM、复用历史问答对（`review_status=reused`），以省 LLM 调用成本。**已取消**，原因：
 
 - **同文档重复已由 EIU 抽取去重（m02）兜底**——同一文档内相同知识点只有一条 EIU，天然只出一题，无需生成时再复用。
-- **跨文档本就不复用**——各文档独立出题（每文档保留完整），评测合并时才去重（m05 freeze `dedup_exact_cases`）。
+- **跨文档本就不复用**——各文档独立出题（每文档保留完整），评测冻结时也不再按问题去重；相同题面来自不同文档、来源或批次时仍保留为独立评测样本。
 - **复用与质检脱节**：复用题（`reused`）直接落库未再走 m04 质检，有质量风险；且复用省下的 LLM 成本在现规模下意义有限，而误复用风险更高。
 
 因此 `generator.py` 已删除 `_try_reuse` / `_case_from_reused` / `SEMANTIC_REUSE_THRESHOLD`，每次生成都直接调用 LLM。
 
 - `database.find_similar_cases`（语义复用）与 `find_cases_by_statement`（精确查复用/上传处理）方法保留于 database 层，`find_similar_cases` 已无调用方，属预留/弃用状态；`find_cases_by_statement` 仍被上传问答对处理（`pipeline.py`）使用。
-- 问答对"去重"统一由 **m05 freeze 合并去重**（归一化 question 哈希，`dedup_exact_cases`）承担，不再由生成复用处理。
+- 评测问题不做自动删除或合并；上传质量可继续统计重复问题比例用于提示，但不作为冻结门禁，也不改变落库题数。
 
 ### 2.5 证据绑定（FR-QG-003）
 

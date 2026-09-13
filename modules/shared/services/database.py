@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import (
     JSON,
@@ -15,6 +15,7 @@ from sqlalchemy import (
     String,
     Text,
     create_engine,
+    func,
     or_,
     text,
 )
@@ -183,6 +184,23 @@ class AuditLogRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class DocumentProcessTraceRow(Base):
+    """文档自动处理轨迹：保留上传至 EIU 门禁的可排查决策。"""
+
+    __tablename__ = "document_process_trace"
+
+    trace_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    job_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    document_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    block_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    eiu_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    stage: Mapped[str] = mapped_column(String(32), nullable=False)
+    event: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="info")
+    detail: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
 class BlockRow(Base):
     __tablename__ = "document_block"
 
@@ -242,8 +260,35 @@ class EiuRow(Base):
     review_prompt_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     source_candidate_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
     source_eiu_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # V1.4：内部重要性、自动门禁处置与规范意图关系（P0/P1/P2 不直接展示给前端用户）
+    importance_signals: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    importance_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    canonical_intent_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    auto_disposition: Mapped[str | None] = mapped_column(String(16), nullable=True, index=True)
+    quality_policy_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    evaluation_profiles: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    manual_include: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    manual_include_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     # EIU 级向量（P0：EIU 为核心实体；用于语义去重/复用/未来跨块检索）
     embedding_vector: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class DocumentQualityFindingRow(Base):
+    """由 EIU 抽取并行产生的文档质量反馈；只反馈，不作为人工门禁。"""
+
+    __tablename__ = "document_quality_finding"
+
+    finding_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    document_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    severity: Mapped[str] = mapped_column(String(16), nullable=False)  # hint / risk
+    code: Mapped[str] = mapped_column(String(64), nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    details: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    block_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    eiu_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    system_action: Mapped[str | None] = mapped_column(Text, nullable=True)
+    policy_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -468,6 +513,8 @@ class DatabaseService:
                     conn.execute(text("ALTER TABLE evaluation_case_result ADD COLUMN context_analysis JSON NULL"))
                 if "intermediate_reference" not in result_cols:
                     conn.execute(text("ALTER TABLE evaluation_case_result ADD COLUMN intermediate_reference JSON NULL"))
+                if "agent_observations" not in result_cols:
+                    conn.execute(text("ALTER TABLE evaluation_case_result ADD COLUMN agent_observations JSON NULL"))
         if "evaluation_run" in inspector.get_table_names():
             run_cols = {c["name"] for c in inspector.get_columns("evaluation_run")}
             with engine.begin() as conn:
@@ -533,6 +580,22 @@ class DatabaseService:
                     conn.execute(text("ALTER TABLE eiu ADD COLUMN source_candidate_ids JSON NULL"))
                 if "source_eiu_ids" not in eiu_cols:
                     conn.execute(text("ALTER TABLE eiu ADD COLUMN source_eiu_ids JSON NULL"))
+                if "importance_signals" not in eiu_cols:
+                    conn.execute(text("ALTER TABLE eiu ADD COLUMN importance_signals JSON NULL"))
+                if "importance_reason" not in eiu_cols:
+                    conn.execute(text("ALTER TABLE eiu ADD COLUMN importance_reason TEXT NULL"))
+                if "canonical_intent_key" not in eiu_cols:
+                    conn.execute(text("ALTER TABLE eiu ADD COLUMN canonical_intent_key VARCHAR(64) NULL"))
+                if "auto_disposition" not in eiu_cols:
+                    conn.execute(text("ALTER TABLE eiu ADD COLUMN auto_disposition VARCHAR(16) NULL"))
+                if "quality_policy_version" not in eiu_cols:
+                    conn.execute(text("ALTER TABLE eiu ADD COLUMN quality_policy_version VARCHAR(64) NULL"))
+                if "evaluation_profiles" not in eiu_cols:
+                    conn.execute(text("ALTER TABLE eiu ADD COLUMN evaluation_profiles JSON NULL"))
+                if "manual_include" not in eiu_cols:
+                    conn.execute(text("ALTER TABLE eiu ADD COLUMN manual_include BOOLEAN NOT NULL DEFAULT 0"))
+                if "manual_include_reason" not in eiu_cols:
+                    conn.execute(text("ALTER TABLE eiu ADD COLUMN manual_include_reason TEXT NULL"))
                 # 回填历史 EIU：经 block_id -> document_id 反查（仅更新尚未回填的）
                 # 使用跨数据库兼容的子查询写法（MySQL JOIN UPDATE 在 SQLite 下不支持）
                 conn.execute(
@@ -548,6 +611,15 @@ class DatabaseService:
                         conn.execute(text("ALTER TABLE eiu DROP COLUMN corpus_id"))
                     except Exception:
                         pass
+        if "generated_case" in inspector.get_table_names():
+            generated_case_cols = {c["name"] for c in inspector.get_columns("generated_case")}
+            with engine.begin() as conn:
+                if "evaluation_profiles" not in generated_case_cols:
+                    conn.execute(text("ALTER TABLE generated_case ADD COLUMN evaluation_profiles JSON NULL"))
+                if "canonical_intent_key" not in generated_case_cols:
+                    conn.execute(text("ALTER TABLE generated_case ADD COLUMN canonical_intent_key VARCHAR(64) NULL"))
+                if "manual_inclusion" not in generated_case_cols:
+                    conn.execute(text("ALTER TABLE generated_case ADD COLUMN manual_inclusion BOOLEAN NOT NULL DEFAULT 0"))
         # 删除 corpus 表及其在各表中的 corpus_id 列（彻底去 corpus 概念）
         if "corpus" in inspector.get_table_names():
             try:
@@ -1175,6 +1247,98 @@ class DatabaseService:
             session.commit()
 
     # ------------------------------------------------------------------
+    # document processing trace — 上传/解析/分块/EIU 自动处理可观测性
+    # ------------------------------------------------------------------
+    def record_processing_trace(
+        self,
+        *,
+        document_id: int,
+        stage: str,
+        event: str,
+        status: str = "info",
+        job_id: int | None = None,
+        block_id: int | None = None,
+        eiu_id: int | None = None,
+        detail: dict | None = None,
+    ) -> None:
+        """持久化自动流水线的结构化决策，不写原始文件、完整 Prompt 或密钥。"""
+        with SessionLocal() as session:
+            session.add(
+                DocumentProcessTraceRow(
+                    job_id=job_id,
+                    document_id=document_id,
+                    block_id=block_id,
+                    eiu_id=eiu_id,
+                    stage=stage[:32],
+                    event=event[:64],
+                    status=status[:16],
+                    detail=detail,
+                )
+            )
+            session.commit()
+        # 只在一次上传或 EIU 任务启动时清理，避免对每个 Block/EIU 事件重复扫描。
+        if event in {"accepted", "started"}:
+            self.prune_processing_trace(document_id=document_id)
+
+    def prune_processing_trace(self, *, document_id: int) -> None:
+        """滚动清理排障轨迹：全库仅保留近期数据，单文档仅保留最近若干任务。"""
+        cutoff = datetime.utcnow() - timedelta(days=settings.document_trace_retention_days)
+        with SessionLocal() as session:
+            session.query(DocumentProcessTraceRow).filter(
+                DocumentProcessTraceRow.created_at < cutoff
+            ).delete(synchronize_session=False)
+            recent_job_ids = [
+                row[0]
+                for row in (
+                    session.query(DocumentProcessTraceRow.job_id)
+                    .filter(
+                        DocumentProcessTraceRow.document_id == document_id,
+                        DocumentProcessTraceRow.job_id.is_not(None),
+                    )
+                    .group_by(DocumentProcessTraceRow.job_id)
+                    .order_by(func.max(DocumentProcessTraceRow.created_at).desc())
+                    .limit(settings.document_trace_max_jobs_per_document)
+                    .all()
+                )
+            ]
+            if recent_job_ids:
+                session.query(DocumentProcessTraceRow).filter(
+                    DocumentProcessTraceRow.document_id == document_id,
+                    DocumentProcessTraceRow.job_id.is_not(None),
+                    ~DocumentProcessTraceRow.job_id.in_(recent_job_ids),
+                ).delete(synchronize_session=False)
+            session.commit()
+
+    def list_processing_trace(self, *, document_id: int, limit: int = 1000) -> list[dict]:
+        """按时间顺序返回一个文档的处理轨迹；上限避免异常文档撑爆接口。"""
+        with SessionLocal() as session:
+            rows = (
+                session.query(DocumentProcessTraceRow)
+                .filter(DocumentProcessTraceRow.document_id == document_id)
+                .order_by(
+                    DocumentProcessTraceRow.created_at.asc(),
+                    DocumentProcessTraceRow.trace_id.asc(),
+                )
+                .limit(max(1, min(limit, 2000)))
+                .all()
+            )
+            return [
+                {
+                    "trace_id": row.trace_id,
+                    "job_id": row.job_id,
+                    "document_id": row.document_id,
+                    "block_id": row.block_id,
+                    "eiu_id": row.eiu_id,
+                    "stage": row.stage,
+                    "event": row.event,
+                    "status": row.status,
+                    "detail": row.detail or {},
+                    "created_at": row.created_at.isoformat() if row.created_at else None,
+                }
+                for row in rows
+            ]
+
+    # ------------------------------------------------------------------
     # eiu（M02 — EIU 抽取与覆盖规划）
     # ------------------------------------------------------------------
     @staticmethod
@@ -1216,6 +1380,14 @@ class DatabaseService:
             "review_prompt_version": eiu.review_prompt_version,
             "source_candidate_ids": eiu.source_candidate_ids,
             "source_eiu_ids": eiu.source_eiu_ids,
+            "importance_signals": eiu.importance_signals,
+            "importance_reason": eiu.importance_reason,
+            "canonical_intent_key": eiu.canonical_intent_key,
+            "auto_disposition": eiu.auto_disposition,
+            "quality_policy_version": eiu.quality_policy_version,
+            "evaluation_profiles": eiu.evaluation_profiles,
+            "manual_include": bool(eiu.manual_include),
+            "manual_include_reason": eiu.manual_include_reason,
             "embedding_vector": eiu.embedding_vector,
             "created_at": eiu.created_at.isoformat() if eiu.created_at else None,
         }
@@ -1285,6 +1457,14 @@ class DatabaseService:
                     review_prompt_version=item.get("review_prompt_version"),
                     source_candidate_ids=item.get("source_candidate_ids"),
                     source_eiu_ids=item.get("source_eiu_ids"),
+                    importance_signals=item.get("importance_signals"),
+                    importance_reason=item.get("importance_reason"),
+                    canonical_intent_key=item.get("canonical_intent_key"),
+                    auto_disposition=item.get("auto_disposition"),
+                    quality_policy_version=item.get("quality_policy_version"),
+                    evaluation_profiles=item.get("evaluation_profiles"),
+                    manual_include=bool(item.get("manual_include", False)),
+                    manual_include_reason=item.get("manual_include_reason"),
                     embedding_vector=item.get("embedding_vector"),
                 )
                 session.add(row)
@@ -1320,6 +1500,66 @@ class DatabaseService:
             session.commit()
             return int(result)
 
+    def replace_document_quality_findings(
+        self,
+        *,
+        document_id: int,
+        findings: list[dict],
+        policy_version: str | None = None,
+    ) -> None:
+        """覆盖写入本次抽取的文档质量反馈，避免历史问题残留造成误导。"""
+        with SessionLocal() as session:
+            session.query(DocumentQualityFindingRow).filter(
+                DocumentQualityFindingRow.document_id == document_id
+            ).delete(synchronize_session=False)
+            for finding in findings:
+                session.add(DocumentQualityFindingRow(
+                    document_id=document_id,
+                    severity=str(finding.get("severity") or "hint"),
+                    code=str(finding.get("code") or "unknown"),
+                    message=str(finding.get("message") or ""),
+                    details=finding.get("details"),
+                    block_ids=[value for value in (finding.get("block_ids") or []) if value is not None],
+                    eiu_ids=[value for value in (finding.get("eiu_ids") or []) if value is not None],
+                    system_action=finding.get("system_action"),
+                    policy_version=policy_version,
+                ))
+            session.commit()
+
+    def get_document_quality_feedback(self, *, document_id: int) -> dict:
+        """文档质量只给状态、问题数量和可追溯位置，不产出误导性的总分。"""
+        with SessionLocal() as session:
+            rows = (
+                session.query(DocumentQualityFindingRow)
+                .filter(DocumentQualityFindingRow.document_id == document_id)
+                .order_by(DocumentQualityFindingRow.finding_id.asc())
+                .all()
+            )
+            findings = [
+                {
+                    "finding_id": row.finding_id,
+                    "severity": row.severity,
+                    "code": row.code,
+                    "message": row.message,
+                    "details": row.details or [],
+                    "block_ids": row.block_ids or [],
+                    "eiu_ids": row.eiu_ids or [],
+                    "system_action": row.system_action,
+                    "policy_version": row.policy_version,
+                    "created_at": row.created_at.isoformat() if row.created_at else None,
+                }
+                for row in rows
+            ]
+        risk_count = sum(1 for finding in findings if finding["severity"] == "risk")
+        hint_count = sum(1 for finding in findings if finding["severity"] == "hint")
+        status = "存在阻断问题" if risk_count else "有待处理事项" if hint_count else "正常"
+        return {
+            "document_id": document_id,
+            "status": status,
+            "counts": {"risk": risk_count, "hint": hint_count, "total": len(findings)},
+            "findings": findings,
+        }
+
     def list_eius(
         self,
         *,
@@ -1328,6 +1568,7 @@ class DatabaseService:
         questionable: bool | None = None,
         section: str | None = None,
         document_id: int | None = None,
+        disposition: list[str] | None = None,
         include_blocked: bool = False,
     ) -> list[dict]:
         with SessionLocal() as session:
@@ -1348,6 +1589,8 @@ class DatabaseService:
                 query = query.filter(BlockRow.section_path.contains(section))
             if document_id is not None:
                 query = query.filter(EiuRow.document_id == document_id)
+            if disposition:
+                query = query.filter(EiuRow.auto_disposition.in_(disposition))
             rows = query.order_by(EiuRow.eiu_id.asc()).all()
             return [self._eiu_to_dict(eiu, block, document) for eiu, block, document in rows]
 
@@ -1527,6 +1770,24 @@ class DatabaseService:
                 return self._eiu_to_dict(row)
             eiu, block, document = joined
             return self._eiu_to_dict(eiu, block, document)
+
+    def archive_eiu(self, *, eiu_id: int, reason: str) -> dict | None:
+        """将待处理项逻辑归档到“已排除”，保留证据而不隐藏或物理删除。"""
+        with SessionLocal() as session:
+            row = session.get(EiuRow, eiu_id)
+            if not row:
+                return None
+            row.is_questionable = False
+            row.quality_status = "rejected"
+            row.auto_disposition = "red"
+            row.route_color = "red"
+            row.review_action = "archive"
+            row.exclusion_reason = reason[:128]
+            session.commit()
+            joined = self._get_eiu_joined(session, eiu_id)
+            if joined is None:
+                return self._eiu_to_dict(row)
+            return self._eiu_to_dict(*joined)
 
     # ------------------------------------------------------------------
     # m05 — dataset_version / eval_case
@@ -1868,6 +2129,9 @@ class DatabaseService:
         statement_norm: str | None = None,
         folder_path: str | None = None,
         purpose: str | None = None,
+        evaluation_profiles: list | None = None,
+        canonical_intent_key: str | None = None,
+        manual_inclusion: bool = False,
     ) -> dict:
         """保存一条 m03 生成的评测样本（按文档维度组织）。
 
@@ -1893,6 +2157,9 @@ class DatabaseService:
                 statement_norm=statement_norm,
                 folder_path=folder_path,
                 purpose=purpose,
+                evaluation_profiles=evaluation_profiles,
+                canonical_intent_key=canonical_intent_key,
+                manual_inclusion=manual_inclusion,
             )
             session.add(row)
             session.commit()
@@ -1984,31 +2251,30 @@ class DatabaseService:
         return [best] if best else []
 
     def dedup_exact_cases(self, cases: list[dict]) -> dict:
-        """精确查重：按归一化 question 哈希，去掉「一模一样」的问题。
+        """兼容旧调用的重复题诊断：统计相同题面，但不删除任何问题。
 
         与 find_similar_cases（语义）不同，本方法只抓"去除格式差异后完全相同"的
         问题（空格/全半角/尾部标点/大小写不同视为同一题），不误伤相似但不同的问题。
+        当前评测集冻结流程不会调用它；保留该方法只是为了兼容旧接口和提供提示统计。
 
         返回：
-          keep: 保留的 case（同 key 只留第一个）
-          duplicate: 被判定为重复的 case（含 reason）
+          keep: 原样返回的全部 case（包括重复题）
+          duplicate: 被判定为重复的 case（含 reason），仅用于诊断
         """
-        seen: dict[str, int] = {}  # norm_key -> 保留的 case index
-        keep: list[dict] = []
+        seen: set[str] = set()
+        keep = list(cases)
         duplicate: list[dict] = []
         for case in cases:
             q = (case.get("question") or "").strip()
             key = normalize_question(q) if q else ""
             if not key:
-                keep.append(case)
                 continue
             if key in seen:
                 dup = dict(case)
                 dup["duplicate_reason"] = "问题与已有评测项重复（归一化一致）"
                 duplicate.append(dup)
             else:
-                seen[key] = len(keep)
-                keep.append(case)
+                seen.add(key)
         return {"keep": keep, "duplicate": duplicate}
 
     def list_generated_cases(
@@ -2240,6 +2506,9 @@ class DatabaseService:
             "review_status": row.review_status,
             "review_tag": row.review_tag,
             "statement_norm": row.statement_norm,
+            "evaluation_profiles": row.evaluation_profiles,
+            "canonical_intent_key": row.canonical_intent_key,
+            "manual_inclusion": bool(row.manual_inclusion),
             "created_at": row.created_at.isoformat() if row.created_at else None,
             "updated_at": row.updated_at.isoformat() if row.updated_at else None,
         }
@@ -2844,6 +3113,7 @@ class DatabaseService:
             "context_analysis": row.context_analysis,
             "intermediate_reference": row.intermediate_reference,
             "retrieved": row.retrieved,
+            "agent_observations": row.agent_observations,
             "scores": row.scores,
             "diagnosis": row.diagnosis,
             "status": row.status,
@@ -2903,6 +3173,10 @@ class GeneratedCaseRow(Base):
     statement_norm: Mapped[str | None] = mapped_column(
         String(512), nullable=True, index=True
     )
+    # V1.4：同一绿色题库按用途选择，不复制 EIU 或 QA。
+    evaluation_profiles: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    canonical_intent_key: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    manual_inclusion: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, default=datetime.utcnow, onupdate=datetime.utcnow
@@ -3067,6 +3341,8 @@ class EvaluationCaseResultRow(Base):
     context_analysis: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     intermediate_reference: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     retrieved: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # 目标智能体返回的可观察字段（例如来源、工具调用、检索摘要或中间节点）。
+    agent_observations: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     scores: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     diagnosis: Mapped[str | None] = mapped_column(String(16), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")

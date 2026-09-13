@@ -5,21 +5,36 @@ This project is indexed by GitNexus as **intelligent-eval-platform** (3226 symbo
 
 > Index stale? Run `node .gitnexus/run.cjs analyze` from the project root — it auto-selects an available runner. No `.gitnexus/run.cjs` yet? `npx gitnexus analyze` (npm 11 crash → `npm i -g gitnexus`; #1939).
 
-## Always Do
+## Use GitNexus When Necessary
 
-- **MUST run impact analysis before editing any symbol.** Before modifying a function, class, or method, run `impact({target: "symbolName", direction: "upstream"})` and report the blast radius (direct callers, affected processes, risk level) to the user.
-- **MUST run `detect_changes()` before committing** to verify your changes only affect expected symbols and execution flows. For regression review, compare against the default branch: `detect_changes({scope: "compare", base_ref: "main"})`.
-- **MUST warn the user** if impact analysis returns HIGH or CRITICAL risk before proceeding with edits.
-- When exploring unfamiliar code, use `query({search_query: "concept"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
-- When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use `context({name: "symbolName"})`.
-- For security review, `explain({target: "fileOrSymbol"})` lists taint findings (source→sink flows; needs `analyze --pdg`).
+GitNexus is not required for every task. Use it selectively when the change involves
+unfamiliar architecture, a public API or data model, shared functions, cross-module
+control flow, refactoring, merge/PR risk, security, or data integrity. Prefer targeted
+queries for the specific symbol or flow under review; do not re-index or query the
+whole repository for a small isolated change.
+
+- For a non-trivial or shared symbol, run `impact({target: "symbolName", direction: "upstream"})`
+  before editing and report direct callers, affected processes, and risk level.
+- For a simple isolated implementation change, documentation/configuration change,
+  read-only investigation, or branch/status check, GitNexus may be skipped in favor
+  of focused `rg`, static checks, and ordinary call-site inspection.
+- Run `detect_changes({scope: "compare", base_ref: "main"})` once before committing
+  a code change when the change spans meaningful symbols or flows; it is not required
+  after every individual edit.
+- Warn the user before proceeding when a requested GitNexus analysis reports HIGH or
+  CRITICAL risk. If GitNexus is unavailable or its index is stale, document the issue
+  and perform a targeted manual call-chain/impact review instead.
+- When exploring unfamiliar code, use `query({search_query: "concept"})`; use
+  `context({name: "symbolName"})` for callers/callees and execution-flow context.
+- For security review, `explain({target: "fileOrSymbol"})` lists taint findings
+  (source→sink flows; needs `analyze --pdg`).
 
 ## Never Do
 
-- NEVER edit a function, class, or method without first running `impact` on it.
-- NEVER ignore HIGH or CRITICAL risk warnings from impact analysis.
+- NEVER ignore HIGH or CRITICAL risk warnings from an analysis that was run.
 - NEVER rename symbols with find-and-replace — use `rename` which understands the call graph.
-- NEVER commit changes without running `detect_changes()` to check affected scope.
+- NEVER claim a code change is complete without the mandatory second review described
+  in `review:start`, even when GitNexus was intentionally skipped.
 
 ## Resources
 
@@ -46,9 +61,10 @@ This project is indexed by GitNexus as **intelligent-eval-platform** (3226 symbo
 <!-- review:start -->
 ## 开发流程规范（收尾约束）
 
-### 1. 每次修改后必须二次审查
+### 1. 每次代码修改后必须二次审查
 
-任何代码 / 文档 / 配置改动在任务收尾前，必须执行一次完整自查（不得直接交付），至少覆盖：
+任何代码改动在任务收尾前，必须执行一次完整二次审查（不得直接交付）；文档/配置
+改动也应按适用项自查。二次审查至少覆盖：
 
 - **静态校验**：后端 Python 改动运行语法 / 静态检查，前端 JS 改动运行 `node --check`（或其他项目可用的校验手段）；
 - **逻辑复核**：对照需求与设计确认改动正确，重点检查边界条件、失败路径、并发与回滚是否遗漏；

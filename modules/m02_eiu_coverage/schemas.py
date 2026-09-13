@@ -53,6 +53,14 @@ class EiuOut(BaseModel):
     review_prompt_version: str | None = None
     source_candidate_ids: list[int] | None = None
     source_eiu_ids: list[int] | None = None
+    importance_signals: list[str] | None = None
+    importance_reason: str | None = None
+    canonical_intent_key: str | None = None
+    auto_disposition: str | None = None
+    quality_policy_version: str | None = None
+    evaluation_profiles: list[str] | None = None
+    manual_include: bool = False
+    manual_include_reason: str | None = None
     created_at: str | None = None
 
 
@@ -103,6 +111,12 @@ class EiuUpdate(BaseModel):
         if len(json.dumps(value, ensure_ascii=False).encode("utf-8")) > 16 * 1024:
             raise ValueError("qualifiers 不能超过 16KB")
         return value
+
+
+class EiuManualIncludeRequest(BaseModel):
+    """人工指定纳入仅是用途选择覆盖，不覆盖系统质量与重要性结论。"""
+
+    reason: str = Field(min_length=2, max_length=500)
 
 
 class EiuMergeRequest(BaseModel):

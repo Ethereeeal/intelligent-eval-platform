@@ -78,6 +78,9 @@ class VariationService:
                 evidence=seed_case.get("evidence") or [],
                 content_priority=seed_case["content_priority"],
                 review_status="candidate",
+                evaluation_profiles=seed_case.get("evaluation_profiles") or [],
+                canonical_intent_key=seed_case.get("canonical_intent_key"),
+                manual_inclusion=bool(seed_case.get("manual_inclusion")),
             )
             case_dict = self.database.save_generated_case(
                 intent_id=case.intent_id,
@@ -93,6 +96,9 @@ class VariationService:
                 evidence=case.evidence,
                 content_priority=case.content_priority,
                 review_status=case.review_status,
+                evaluation_profiles=case.evaluation_profiles,
+                canonical_intent_key=case.canonical_intent_key,
+                manual_inclusion=case.manual_inclusion,
             )
 
             # 泛化质检：复用 m04 check_case，hard 失败丢弃

@@ -270,6 +270,43 @@ function esShowGlobalUploadMenu(btn) {
   icons();
 }
 
+function esBindPurposePreview(target, documentId) {
+  const panel = document.createElement("details");
+  panel.className = "document-quality";
+  panel.innerHTML = `<summary>按用途预览选题</summary><p class="muted">从同一题库选择，不复制题目。当前仅预览用途匹配结果，不代表已通过 QA 质检或已冻结。</p><label>评测用途 <select data-purpose><option value="developer_smoke">开发自测</option><option value="test_full">测试全量测</option><option value="business">业务测</option></select></label> <label data-limit-label>题数上限 <input data-limit type="number" min="10" max="20" value="20" style="width:70px"></label> <button type="button" class="btn ghost sm" data-preview>预览选题</button><p data-policy class="muted">优先覆盖核心规则簇，上限默认 20 题。</p><div data-result aria-live="polite"></div>`;
+  target.querySelector(".qa-toolbar").before(panel);
+  const select = panel.querySelector("[data-purpose]");
+  const limit = panel.querySelector("[data-limit]");
+  const button = panel.querySelector("[data-preview]");
+  const result = panel.querySelector("[data-result]");
+  let requestId = 0;
+  select.onchange = () => {
+    requestId++;
+    button.disabled = false;
+    result.textContent = "用途已切换，请重新预览。";
+    panel.querySelector("[data-limit-label]").hidden = select.value !== "developer_smoke";
+    panel.querySelector("[data-policy]").textContent = ({developer_smoke:"优先覆盖核心规则簇，上限默认 20 题。", test_full:"预览所有匹配全量测试用途的题目，不设题数上限。", business:"预览匹配业务价值与业务使用场景的题目。"})[select.value];
+  };
+  limit.oninput = () => { requestId++; button.disabled = false; result.textContent = "上限已修改，请重新预览。"; };
+  button.onclick = async () => {
+    const max = Number(limit.value);
+    if (select.value === "developer_smoke" && (!Number.isInteger(max) || max < 10 || max > 20)) {
+      result.textContent = "开发自测题数上限请输入 10–20 的整数。"; return;
+    }
+    const token = ++requestId;
+    button.disabled = true;
+    result.textContent = "正在选择题目…";
+    try {
+      const response = await apiGet(`/api/cases/selection/${select.value}?document_id=${documentId}&max_cases=${select.value === "developer_smoke" ? max : 20}`);
+      if (!panel.isConnected || token !== requestId) return;
+      const cases = response.cases || [];
+      result.innerHTML = cases.length ? `<p>匹配 ${cases.length} 道题 · 只读预览</p>${cases.map(c => `<details><summary>#${escapeHTML(String(c.case_id))} ${escapeHTML(c.question || "未提供问题")}</summary><p>${escapeHTML(c.gold_answer || c.answer || "未提供答案")}</p></details>`).join("")}` : "暂无用途匹配题目。历史题目可能尚无用途标签；需按新策略重新生成后查看。";
+    } catch (error) {
+      if (panel.isConnected && token === requestId) result.textContent = "选题预览暂时不可用，请重试。";
+    } finally { if (token === requestId) button.disabled = false; }
+  };
+}
+
 function esRenderTemplateDetail(target, detail, options = {}) {
   if (!target) return;
   const { kind, id, name, rows, quality, editable } = detail;
@@ -282,6 +319,7 @@ function esRenderTemplateDetail(target, detail, options = {}) {
       <div class="qa-toolbar-right"><div class="qa-search"><i data-lucide="search"></i><input id="esCaseSearch" type="text" placeholder="搜索问题/答案/证据/来源…" /></div>${options.fullscreen ? "" : `<button class="btn ghost icon-only sm" id="esCaseFullscreen" title="放大查看"><i data-lucide="maximize"></i></button>`}</div>
     </div>
     <div class="card card-pad"><div class="sec-h">评测集</div><div class="qa-table es-template-table es-template-four"><div class="qa-col-head es-template-head"><div class="qa-cell qa-q-cell">${filterHead("问题", "q")}</div><div class="qa-cell qa-a-cell">${filterHead("标准答案", "a")}</div><div class="qa-cell qa-ev-cell">${filterHead("证据", "evidence")}</div><div class="qa-cell qa-src-cell">${filterHead("来源", "src")}</div>${editable ? "<div class=\"qa-cell qa-act-cell\">操作</div>" : ""}</div><div id="esTemplateRows">${rows.length ? rows.map(row => esTemplateRow(row, editable)).join("") : `<div class="es-template-empty">暂无可展示评测集</div>`}</div></div></div>`;
+  if (kind === "generate" && !options.fullscreen && /^doc\d+$/.test(String(id))) esBindPurposePreview(target, Number(String(id).slice(3)));
   const refreshRows = () => {
     const keyword = target.querySelector("#esCaseSearch")?.value.trim().toLowerCase() || "";
     target.querySelectorAll("#esTemplateRows .es-template-row").forEach(row => {

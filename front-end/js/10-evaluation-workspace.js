@@ -11,7 +11,6 @@
     runs: [],
     renderedRunId: null,
     renderedResultsSignature: null,
-    currentRun: null,
     pollTimer: null,
   };
   const $w = () => document.getElementById("evWorkspace");
@@ -67,7 +66,6 @@
   };
   const runStatusLabel = status => ({ pending: "等待中", running: "运行中", cancelling: "取消中", cancelled: "已取消", done: "已完成", failed: "失败" })[status] || status || "未知";
   const caseStatusLabel = status => ({ passed: "通过", failed: "未通过", error: "异常", unscored: "未评分", pending: "等待中" })[status] || status || "—";
-  const intermediateNodeLabel = node => ({ rewrite: "改写", intent: "意图分类", rag: "RAG" })[node] || node;
   const runStatusIcon = status => status === "done" ? "circle-check" : status === "failed" ? "circle-x" : status === "cancelled" ? "circle-stop" : ["running", "cancelling"].includes(status) ? "loader" : "clock";
   const runStatusBadge = run => run.status === "done" && run.pass_rate != null
     ? `<span class="tw-count" style="color:#2f7d5b;background:rgba(47,125,91,.12)">${Math.round(run.pass_rate * 100)}%</span>`
@@ -90,6 +88,11 @@
       state.compositionId = Number(window.__evSelectedCompositionId);
       state.selectedSource = { kind: "composition", compositionId: state.compositionId };
       window.__evSelectedCompositionId = null;
+    }
+    if (window.__evSelectedDatasetVersionId) {
+      state.compositionId = null;
+      state.selectedSource = { kind: "version", versionId: Number(window.__evSelectedDatasetVersionId) };
+      window.__evSelectedDatasetVersionId = null;
     }
     const representedVersionIds = new Set(
       compositions.flatMap(composition => (composition.items || [])
@@ -122,8 +125,6 @@
     shell(`<div class="card card-pad"><div class="ev-config-head"><div><div class="card-t">请求体设置</div><p>配置可保存为浏览器内的复用模板，密钥和 Header 值不会保存。</p></div><div class="ev-profile-actions"><select class="es-input" id="evProfile"><option value="">选择已保存配置</option>${profiles.map(item => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join("")}</select><button class="btn ghost" id="evSaveProfile"><i data-lucide="save"></i>保存配置</button><button class="btn ghost" id="evTestAdapter"><i data-lucide="plug-zap"></i>测试通路</button></div></div><div class="ev-call-types" id="evCallTypes"><button class="on" data-adapter="openai_compatible">OpenAI 兼容接口</button><button data-adapter="http">通用 HTTP</button><button data-adapter="mock">Mock 演示</button></div>
       <div id="evAdapterFields"></div></div>
       <div class="card card-pad ev-section"><div class="card-t">选择评测集</div><p class="es-gen-hint">评测库同时展示冻结版本和已创建的组合；冻结版本首次发起评测时会自动登记为可执行组合。</p><div class="ev-set-actions"><button class="btn ghost" id="evCreateSet"><i data-lucide="combine"></i>创建 / 合并评测集</button></div><div class="ev-compositions">${sourceRows || `<div class="es-gen-hint">暂无已冻结的评测集，请先生成并冻结评测集。</div>`}</div></div>
-      <div class="card card-pad ev-intermediate-card ev-section"><div class="ev-section-title"><div><div class="card-t">中间节点评测</div><p class="es-gen-hint">可选；勾选后按固定指标评测智能体的中间节点。</p></div><label class="ev-switch-label"><input type="checkbox" id="evIntermediateEnabled"/><span>启用</span></label></div><div class="ev-intermediate-options" id="evIntermediateOptions"><label><input type="checkbox" value="rewrite" disabled/><span>改写</span></label><label><input type="checkbox" value="intent" disabled/><span>意图分类</span></label><label><input type="checkbox" value="rag" disabled/><span>RAG</span></label></div></div>
-      <div class="card card-pad ev-section ev-judge-card"><div class="ev-section-title"><div><div class="card-t">LLM-as-a-Judge</div><p class="es-gen-hint">可选；使用自定义规则提示词，让外部模型对每道题给出独立分数、通过判断和理由。</p></div><label class="ev-switch-label"><input type="checkbox" id="evJudgeEnabled"/><span>启用</span></label></div><div id="evJudgeOptions"><label class="es-field">评测规则提示词<textarea class="es-input" id="evJudgePrompt" rows="5" maxlength="10000" placeholder="例如：判断智能体回答是否完整覆盖标准答案，不得补充标准答案之外的事实；请按事实正确性、完整性分别给出 criteria。"></textarea></label><div class="ev-intermediate-options"><label><input type="checkbox" id="evJudgeHistory" disabled/><span>附加多轮历史</span></label><label><input type="checkbox" id="evJudgeIntermediate" disabled/><span>附加中间节点结果</span></label><label><input type="checkbox" id="evJudgeRetrieved" disabled/><span>附加检索结果</span></label></div><p class="es-gen-hint">问题、标准答案、智能体实际回答固定传入；后三项只有勾选后才会附加，勾选但接口未返回时标记为数据缺失。</p></div></div>
       <div class="ev-run-foot"><label class="es-field">运行名称（可选）</label><input class="es-input" id="evRunName" placeholder="例如：客服智能体 v0.1 回归测试"/><button class="btn primary" id="evStart"><i data-lucide="play"></i>发起评测</button></div>`);
     // Demo 不提供 Mock 入口；评测集以可展开的“评测库”目录展示。
     document.querySelector('[data-adapter="mock"]').remove();
@@ -150,15 +151,6 @@
       }
       document.querySelectorAll(".ev-composition").forEach(x => x.classList.toggle("selected", x.querySelector("input").checked));
     });
-    const intermediateToggle = document.getElementById("evIntermediateEnabled");
-    const intermediateOptions = [...document.querySelectorAll("#evIntermediateOptions input")];
-    intermediateToggle.onchange = () => intermediateOptions.forEach(input => { input.disabled = !intermediateToggle.checked; });
-    const judgeToggle = document.getElementById("evJudgeEnabled");
-    const judgePrompt = document.getElementById("evJudgePrompt");
-    const judgeOptions = ["evJudgeHistory", "evJudgeIntermediate", "evJudgeRetrieved"].map(id => document.getElementById(id));
-    const syncJudgeControls = () => { judgePrompt.disabled = !judgeToggle.checked; judgeOptions.forEach(input => { input.disabled = !judgeToggle.checked; }); };
-    judgeToggle.onchange = syncJudgeControls;
-    syncJudgeControls();
     document.getElementById("evCreateSet").onclick = () => {
       try { state.draftConfig = adapterConfig(); state.draftAdapter = state.adapter; } catch (_) { /* 输入未完成时仍允许先创建评测集 */ }
       window.__evalSetReturn = "evaluation";
@@ -181,14 +173,18 @@
     document.querySelectorAll("#evCallTypes button").forEach(b => b.classList.toggle("on", b.dataset.adapter === kind));
     const fields = document.getElementById("evAdapterFields");
     if (kind === "openai_compatible") fields.innerHTML = `<div class="ev-field-grid"><label class="es-field">API Base<input class="es-input" id="evApiBase" placeholder="https://.../v1"/></label><label class="es-field">模型<input class="es-input" id="evModel" placeholder="gpt-4o-mini"/></label><label class="es-field">API Key<input class="es-input" id="evApiKey" type="password" placeholder="sk-..."/></label><label class="es-field">System Prompt<textarea class="es-input" id="evSystem" rows="2" placeholder="可选"></textarea></label></div>`;
-    else fields.innerHTML = `<div class="ev-field-grid"><label class="es-field">请求方法<select class="es-input" id="evHttpMethod"><option>POST</option><option>GET</option><option>PUT</option><option>PATCH</option><option>DELETE</option></select></label><label class="es-field">请求地址<input class="es-input" id="evHttpUrl" placeholder="https://agent.example.com/api/chat"/></label><label class="es-field ev-span">请求头（JSON）<textarea class="es-input ev-code" id="evHttpHeaders" rows="2" placeholder='{"Authorization":"Bearer ..."}'></textarea></label><label class="es-field ev-span">请求体（JSON，使用 {{question}}；多轮可使用 {{messages}}）<textarea class="es-input ev-code" id="evHttpBody" rows="4">{"question":"{{question}}"}</textarea></label><label class="es-field">回答字段路径<input class="es-input" id="evHttpPath" value="answer" placeholder="data.answer"/></label><label class="es-field">检索内容路径（可选）<input class="es-input" id="evHttpRetrievedPath" placeholder="retrieved_contexts"/></label><label class="es-field">节点输出路径（可选）<input class="es-input" id="evHttpNodeOutputsPath" placeholder="node_outputs"/></label><label class="es-field">超时（秒）<input class="es-input" id="evHttpTimeout" type="number" value="60" min="1" max="120"/></label></div><p class="es-gen-hint">请求由后端发起；多轮请求使用 <code>{{messages}}</code> 获取完整历史。节点输出和检索内容仅在启用中间评测时读取。</p>`;
+    else fields.innerHTML = `<div class="ev-field-grid"><label class="es-field">请求方法<select class="es-input" id="evHttpMethod"><option>POST</option><option>GET</option><option>PUT</option><option>PATCH</option><option>DELETE</option></select></label><label class="es-field">请求地址<input class="es-input" id="evHttpUrl" placeholder="https://agent.example.com/api/chat"/></label><label class="es-field ev-span">请求头（JSON）<textarea class="es-input ev-code" id="evHttpHeaders" rows="2" placeholder='{"Authorization":"Bearer ..."}'></textarea></label><label class="es-field ev-span">请求体（JSON，使用 {{question}} 注入题目）<textarea class="es-input ev-code" id="evHttpBody" rows="4">{"question":"{{question}}"}</textarea></label><label class="es-field">回答字段路径<input class="es-input" id="evHttpPath" value="answer" placeholder="data.answer"/></label><label class="es-field">超时（秒）<input class="es-input" id="evHttpTimeout" type="number" value="60" min="1" max="120"/></label></div><p class="es-gen-hint">请求由后端发起；Header 的值不会保存或在报告中回显。</p>`;
+    if (kind === "http") {
+      fields.querySelector(".ev-field-grid").insertAdjacentHTML("beforeend", `<label class="es-field ev-span">关键返回字段（JSON，可选）<textarea class="es-input ev-code" id="evHttpObservations" rows="2" placeholder='{"是否调用文档":"used_document_tool","来源":"sources"}'></textarea></label>`);
+    }
   }
 
   function adapterConfig() {
     if (state.adapter === "openai_compatible") return { api_base: document.getElementById("evApiBase").value.trim(), api_key: document.getElementById("evApiKey").value.trim(), model: document.getElementById("evModel").value.trim(), system_prompt: document.getElementById("evSystem").value.trim() || null };
     let headers; try { headers = JSON.parse(document.getElementById("evHttpHeaders").value || "{}"); } catch { throw new Error("请求头必须是合法 JSON"); }
+    let observationPaths; try { observationPaths = JSON.parse(document.getElementById("evHttpObservations").value || "{}"); } catch { throw new Error("关键返回字段必须是合法 JSON"); }
     try { JSON.parse(document.getElementById("evHttpBody").value || "{}"); } catch { throw new Error("请求体必须是合法 JSON"); }
-    return { method: document.getElementById("evHttpMethod").value, url: document.getElementById("evHttpUrl").value.trim(), headers, body_template: document.getElementById("evHttpBody").value, answer_path: document.getElementById("evHttpPath").value.trim(), retrieved_path: document.getElementById("evHttpRetrievedPath").value.trim(), node_outputs_path: document.getElementById("evHttpNodeOutputsPath").value.trim(), timeout_seconds: Number(document.getElementById("evHttpTimeout").value) };
+    return { method: document.getElementById("evHttpMethod").value, url: document.getElementById("evHttpUrl").value.trim(), headers, body_template: document.getElementById("evHttpBody").value, answer_path: document.getElementById("evHttpPath").value.trim(), observation_paths: observationPaths, timeout_seconds: Number(document.getElementById("evHttpTimeout").value) };
   }
 
   function applyAdapterConfig(kind, config) {
@@ -202,8 +198,7 @@
       document.getElementById("evHttpHeaders").value = JSON.stringify(config.headers || {}, null, 2);
       document.getElementById("evHttpBody").value = config.body_template || '{"question":"{{question}}"}';
       document.getElementById("evHttpPath").value = config.answer_path || "answer";
-      document.getElementById("evHttpRetrievedPath").value = config.retrieved_path || "";
-      document.getElementById("evHttpNodeOutputsPath").value = config.node_outputs_path || "";
+      document.getElementById("evHttpObservations").value = JSON.stringify(config.observation_paths || {}, null, 2);
       document.getElementById("evHttpTimeout").value = config.timeout_seconds || 60;
     }
   }
@@ -227,14 +222,15 @@
     button.disabled = true; button.innerHTML = '<span class="spinner"></span>测试中';
     try {
       const data = await post("/api/adapters/test", { adapter: state.adapter, adapter_config: adapterConfig(), question: question.trim() });
-      openMessageModal("通路测试成功", data.answer || "目标智能体返回了空回答", `耗时 ${Number(data.usage?.time_ms || 0)} ms`);
+      openMessageModal("通路测试成功", data.answer || "目标智能体返回了空回答", `耗时 ${Number(data.usage?.time_ms || 0)} ms`, data.agent_observations);
     } catch (error) { toast("通路测试失败：" + error.message); }
     finally { button.disabled = false; button.innerHTML = '<i data-lucide="plug-zap"></i>测试通路'; icons(); }
   }
 
-  function openMessageModal(title, message, meta = "") {
+  function openMessageModal(title, message, meta = "", observations = null) {
     const modal = document.createElement("div"); modal.className = "modal-mask";
-    modal.innerHTML = `<div class="modal ev-message-modal"><div class="modal-head"><span>${esc(title)}</span><button class="modal-x">×</button></div><div class="modal-body"><p class="ev-message-body">${esc(message)}</p>${meta ? `<small>${esc(meta)}</small>` : ""}</div><div class="modal-foot"><button class="btn primary modal-x2">知道了</button></div></div>`;
+    const observationPanel = observations && Object.keys(observations).length ? `<pre class="ev-observations">${esc(JSON.stringify(observations, null, 2))}</pre>` : "";
+    modal.innerHTML = `<div class="modal ev-message-modal"><div class="modal-head"><span>${esc(title)}</span><button class="modal-x">×</button></div><div class="modal-body"><p class="ev-message-body">${esc(message)}</p>${meta ? `<small>${esc(meta)}</small>` : ""}${observationPanel}</div><div class="modal-foot"><button class="btn primary modal-x2">知道了</button></div></div>`;
     document.body.appendChild(modal); const close = () => modal.remove(); modal.querySelector(".modal-x").onclick = close; modal.querySelector(".modal-x2").onclick = close;
   }
 
@@ -273,29 +269,11 @@
         composition = compositions.find(item => Number(item.composition_id) === Number(selectedSource.compositionId));
       }
       if (!composition) return toast("所选评测集版本不存在，请重新选择");
-      const intermediateEval = readIntermediateConfig();
-      if (intermediateEval.error) return toast(intermediateEval.error);
-      const judgeEval = readJudgeConfig();
-      if (judgeEval.error) return toast(judgeEval.error);
-      openRunConfirmation(composition, adapterConfig(), intermediateEval.value, judgeEval.value);
+      openRunConfirmation(composition, adapterConfig());
     } catch (e) { toast("发起失败：" + e.message); }
   }
 
-  function readIntermediateConfig() {
-    const enabled = Boolean(document.getElementById("evIntermediateEnabled")?.checked);
-    const nodes = [...document.querySelectorAll("#evIntermediateOptions input:checked")].map(input => input.value);
-    if (enabled && !nodes.length) return { error: "启用中间评测时至少选择一个节点" };
-    return { value: { enabled: enabled && nodes.length > 0, nodes } };
-  }
-
-  function readJudgeConfig() {
-    const enabled = Boolean(document.getElementById("evJudgeEnabled")?.checked);
-    const promptText = document.getElementById("evJudgePrompt")?.value.trim() || "";
-    if (enabled && !promptText) return { error: "启用 LLM-as-a-Judge 时必须填写评测规则提示词" };
-    return { value: { enabled: enabled && Boolean(promptText), prompt: promptText, include_history: Boolean(document.getElementById("evJudgeHistory")?.checked), include_intermediate: Boolean(document.getElementById("evJudgeIntermediate")?.checked), include_retrieved: Boolean(document.getElementById("evJudgeRetrieved")?.checked) } };
-  }
-
-  function openRunConfirmation(composition, config, intermediateEval, judgeEval) {
+  function openRunConfirmation(composition, config) {
     const modal = document.createElement("div");
     modal.className = "modal-mask";
     const adapterLabel = state.adapter === "http" ? "通用 HTTP" : "OpenAI 兼容接口";
@@ -305,6 +283,7 @@
       headers: maskHeaders(config.headers),
       body: (() => { try { return JSON.parse(config.body_template || "{}"); } catch { return config.body_template; } })(),
       answer_path: config.answer_path,
+      observation_paths: config.observation_paths,
       timeout_seconds: config.timeout_seconds,
     } : {
       api_base: config.api_base,
@@ -328,8 +307,6 @@
           <section class="ev-confirm-card"><div class="ev-confirm-label">请求配置</div><b>${esc(adapterLabel)}</b><pre>${esc(JSON.stringify(requestSummary, null, 2))}</pre></section>
           <section class="ev-confirm-card"><div class="ev-confirm-label">可执行评测集</div><b>${esc(composition.name || `评测集 #${composition.composition_id}`)}</b><dl><div><dt>版本</dt><dd>#${composition.composition_id}</dd></div><div><dt>来源数</dt><dd>${Array.isArray(composition.items) ? composition.items.length : 0}</dd></div><div><dt>创建时间</dt><dd>${esc(formatDateTime(composition.created_at))}</dd></div></dl></section>
         </div>
-        <div class="ev-confirm-intermediate"><span class="ev-confirm-label">中间节点评测</span><b>${intermediateEval.enabled ? intermediateEval.nodes.map(intermediateNodeLabel).join("、") : "未启用"}</b></div>
-        <div class="ev-confirm-intermediate"><span class="ev-confirm-label">LLM-as-a-Judge</span><b>${judgeEval.enabled ? `已启用 · ${[judgeEval.include_history ? "多轮历史" : "", judgeEval.include_intermediate ? "中间节点" : "", judgeEval.include_retrieved ? "检索结果" : ""].filter(Boolean).join("、") || "仅固定三项输入"}` : "未启用"}</b></div>
         <p class="ev-confirm-note"><i data-lucide="shield-check"></i>密钥及请求头敏感值仅以掩码展示，不会写入评测报告。</p>
       </div>
       <div class="modal-foot"><button class="btn ghost modal-cancel">返回修改</button><button class="btn primary" id="evConfirmStart"><i data-lucide="play"></i>确认发起</button></div>
@@ -347,7 +324,7 @@
       button.disabled = true;
       button.innerHTML = '<span class="spinner"></span>正在发起';
       try {
-        const run = await post("/api/evaluation-runs", { composition_id: state.compositionId, name, adapter: state.adapter, adapter_config: config, intermediate_eval: intermediateEval, judge_eval: judgeEval });
+        const run = await post("/api/evaluation-runs", { composition_id: state.compositionId, name, adapter: state.adapter, adapter_config: config });
         state.runId = run.run_id;
         state.tab = "results";
         close();
@@ -374,43 +351,15 @@
     return { total: rows.length, scored: scored.length, passed: passed.length, low: scored.length - passed.length, errors: errors.length, averageScore, p95 };
   }
 
-  function metrics(rows, run = state.currentRun) {
+  function metrics(rows) {
     const stat = analysisStats(rows);
-    const judgeScored = rows.filter(item => item.scores?.judge?.status === "scored" && item.scores.judge.score != null);
-    const judgePassed = judgeScored.filter(item => item.scores.judge.passed === true);
-    const judgeCard = run?.judge_eval?.enabled ? `<div><span class="ev-kpi-ic"><i data-lucide="scale"></i></span><small>LLM Judge通过率</small><b>${judgeScored.length ? Math.round(judgePassed.length / judgeScored.length * 100) : "—"}${judgeScored.length ? "%" : ""}</b><em>${judgePassed.length}/${judgeScored.length} 道已评分题</em></div>` : "";
-    return `<div id="evAnalysisMetrics" class="ev-kpis"><div><span class="ev-kpi-ic"><i data-lucide="badge-check"></i></span><small>分析通过率</small><b>${stat.scored ? Math.round(stat.passed / stat.scored * 100) : 0}%</b><em>${stat.passed}/${stat.scored} 道已评分题</em></div><div><span class="ev-kpi-ic"><i data-lucide="chart-spline"></i></span><small>平均得分</small><b>${stat.averageScore == null ? "—" : Math.round(stat.averageScore * 100)}</b><em>按当前分析阈值 ${state.threshold.toFixed(2)}</em></div><div><span class="ev-kpi-ic"><i data-lucide="circle-alert"></i></span><small>调用异常</small><b>${stat.errors}</b><em>${stat.low} 道答案未通过</em></div><div><span class="ev-kpi-ic"><i data-lucide="timer"></i></span><small>P95 耗时</small><b>${stat.p95 == null ? "—" : Math.round(stat.p95) + " ms"}</b><em>${stat.total} 道原始结果</em></div>${judgeCard}</div>`;
-  }
-
-  function intermediateMetrics(run, rows) {
-    const config = run?.intermediate_eval || {};
-    const nodes = Array.isArray(config.nodes) && config.enabled ? config.nodes : [];
-    if (!nodes.length) return "";
-    const number = value => value == null || Number.isNaN(Number(value)) ? "—" : `${Math.round(Number(value) * 100)}%`;
-    const average = (items, getter) => {
-      const values = items.map(getter).filter(value => value != null && Number.isFinite(Number(value))).map(Number);
-      return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : null;
-    };
-    const cards = nodes.map(node => {
-      const values = rows.map(row => row.scores?.intermediate?.nodes?.[node]).filter(Boolean);
-      if (node === "intent") {
-        const scored = values.filter(item => item.status === "scored");
-        const accuracy = scored.length ? scored.filter(item => item.correct).length / scored.length : null;
-        return `<div><span class="ev-kpi-ic"><i data-lucide="route"></i></span><small>${intermediateNodeLabel(node)} · 准确率</small><b>${number(accuracy)}</b><em>${scored.length} 道已评分题 · Macro-F1 ${number(average([run.summary?.intermediate?.nodes?.intent], item => item?.macro_f1))}</em></div>`;
-      }
-      if (node === "rewrite") {
-        return `<div><span class="ev-kpi-ic"><i data-lucide="text-cursor-input"></i></span><small>改写 · 语义相似度</small><b>${number(average(values, item => item.semantic_similarity))}</b><em>约束 F1 ${number(average(values, item => item.constraint_f1))}</em></div>`;
-      }
-      const rag = run.summary?.intermediate?.nodes?.rag || {};
-      return `<div><span class="ev-kpi-ic"><i data-lucide="database-zap"></i></span><small>RAG · Context Precision</small><b>${number(rag.context_precision)}</b><em>Recall ${number(rag.context_recall)} · Faithfulness ${number(rag.faithfulness)}</em></div>`;
-    }).join("");
-    return `<section class="ev-intermediate-metrics"><div class="ev-section-title"><div><div class="card-t">中间节点评测</div><p class="es-gen-hint">固定指标；未采集节点数据时不计为 0 分。</p></div><span class="es-tag">${nodes.map(intermediateNodeLabel).join("、")}</span></div><div class="ev-kpis ev-intermediate-kpis">${cards}</div></section>`;
+    return `<div id="evAnalysisMetrics" class="ev-kpis"><div><span class="ev-kpi-ic"><i data-lucide="badge-check"></i></span><small>分析通过率</small><b>${stat.scored ? Math.round(stat.passed / stat.scored * 100) : 0}%</b><em>${stat.passed}/${stat.scored} 道已评分题</em></div><div><span class="ev-kpi-ic"><i data-lucide="chart-spline"></i></span><small>平均得分</small><b>${stat.averageScore == null ? "—" : Math.round(stat.averageScore * 100)}</b><em>按当前分析阈值 ${state.threshold.toFixed(2)}</em></div><div><span class="ev-kpi-ic"><i data-lucide="circle-alert"></i></span><small>调用异常</small><b>${stat.errors}</b><em>${stat.low} 道答案未通过</em></div><div><span class="ev-kpi-ic"><i data-lucide="timer"></i></span><small>P95 耗时</small><b>${stat.p95 == null ? "—" : Math.round(stat.p95) + " ms"}</b><em>${stat.total} 道原始结果</em></div></div>`;
   }
 
   function refreshAnalysisMetrics() {
     const target = document.getElementById("evAnalysisMetrics");
     if (!target) return;
-    const holder = document.createElement("div"); holder.innerHTML = metrics(state.results, state.currentRun);
+    const holder = document.createElement("div"); holder.innerHTML = metrics(state.results);
     target.replaceWith(holder.firstElementChild); icons();
   }
 
@@ -457,7 +406,6 @@
   }
 
   function updateResultPage(run, runs) {
-    state.currentRun = run;
     const nextResultsSignature = JSON.stringify(state.results);
     const resultsChanged = state.renderedResultsSignature !== nextResultsSignature;
     const status = document.querySelector(".ev-result-title .es-tag");
@@ -490,8 +438,6 @@
     if (!state.runId && runs[0]) state.runId = runs[0].run_id;
     let data = { results: [], summary: {} }, run = null;
     if (state.runId) { data = await apiGet(`/api/evaluation-runs/${state.runId}/results`); run = runs.find(x => Number(x.run_id) === Number(state.runId)); }
-    if (run) run = { ...run, summary: data.summary || {} };
-    state.currentRun = run;
     state.results = data.results || [];
     const sameRunPage = run && state.renderedRunId != null && Number(state.renderedRunId) === Number(run.run_id) && document.querySelector(".ev-result-content") && document.getElementById("evReportRows");
     if (sameRunPage) {
@@ -517,7 +463,7 @@
       </div>`;
     }).join("")}</div>` : `<div class="es-library-tree ev-side-catalog"><div class="ev-empty-catalog"><i data-lucide="folder-search"></i><span>暂无评测结果</span></div></div>`;
     const progress = progressHTML(run);
-    const content = run ? `<div class="ev-result-title"><div><span class="es-tag">${esc(runStatusLabel(run.status))}</span><h2>${esc(run.name || `运行 #${run.run_id}`)}</h2><p>${esc(selectedComposition?.name || `评测集 #${run.composition_id}`)} · 版本 #${esc(run.composition_id)} · ${esc(formatDateTime(run.created_at))}</p></div><div class="ev-result-actions"><button class="btn ghost" id="evCompareRun"><i data-lucide="git-compare-arrows"></i>版本对比</button><label class="ev-threshold">分析阈值<input class="es-input" id="evThreshold" type="number" min="0" max="1" step=".05" value="${state.threshold}"/><small>仅影响当前页面分析</small></label></div></div>${progress}${metrics(state.results, run)}${intermediateMetrics(run, state.results)}<div class="card card-pad ev-report"><div class="ev-report-head"><div><div class="card-t">原始评测报告</div><p>原始结果不会因人工处置消失；点击任意行查看评分明细、处理记录和单题复测。</p></div><div class="ev-export-wrap"><button class="btn ghost" id="evExportToggle"><i data-lucide="download"></i>导出报告<i data-lucide="chevron-down"></i></button><div class="ev-export-popover" id="evExportPopover" hidden><label><input type="checkbox" id="evExportFiltered"/>仅导出当前筛选结果</label><small>默认导出当前运行的全部原始报告</small><button class="btn primary" id="evExportConfirm"><i data-lucide="file-spreadsheet"></i>导出 Excel</button></div></div></div><div class="ev-filters"><input class="es-input" id="evSearch" placeholder="搜索问题、标准答案或智能体回答"/><select class="es-input" id="evStatus"><option value="">全部结果</option><option value="meets">达到分析阈值</option><option value="below">答案未通过</option><option value="error">调用异常</option><option value="unscored">未评分</option><option value="open">待处理</option><option value="processed">已处理待复测</option><option value="verified">已验证</option><option value="ignored">已忽略</option></select></div><div class="ev-table-wrap"><table class="ev-table"><thead><tr><th>问题 / 标准答案</th><th>智能体回答 A'</th><th>得分</th><th>耗时</th><th>结果 / 处理状态</th></tr></thead><tbody id="evReportRows"></tbody></table></div></div>` : `<div class="ev-result-empty"><span><i data-lucide="chart-no-axes-combined"></i></span><h2>选择一次评测运行</h2><p>从左侧「评测结果目录」中展开并选择运行，即可查看指标和原始报告。</p><button class="btn primary" id="evConfigBtn">前往评测配置</button></div>`;
+    const content = run ? `<div class="ev-result-title"><div><span class="es-tag">${esc(runStatusLabel(run.status))}</span><h2>${esc(run.name || `运行 #${run.run_id}`)}</h2><p>${esc(selectedComposition?.name || `评测集 #${run.composition_id}`)} · 版本 #${esc(run.composition_id)} · ${esc(formatDateTime(run.created_at))}</p></div><div class="ev-result-actions"><button class="btn ghost" id="evCompareRun"><i data-lucide="git-compare-arrows"></i>版本对比</button><label class="ev-threshold">分析阈值<input class="es-input" id="evThreshold" type="number" min="0" max="1" step=".05" value="${state.threshold}"/><small>仅影响当前页面分析</small></label></div></div>${progress}${metrics(state.results)}<div class="card card-pad ev-report"><div class="ev-report-head"><div><div class="card-t">原始评测报告</div><p>原始结果不会因人工处置消失；点击任意行查看评分明细、处理记录和单题复测。</p></div><div class="ev-export-wrap"><button class="btn ghost" id="evExportToggle"><i data-lucide="download"></i>导出报告<i data-lucide="chevron-down"></i></button><div class="ev-export-popover" id="evExportPopover" hidden><label><input type="checkbox" id="evExportFiltered"/>仅导出当前筛选结果</label><small>默认导出当前运行的全部原始报告</small><button class="btn primary" id="evExportConfirm"><i data-lucide="file-spreadsheet"></i>导出 Excel</button></div></div></div><div class="ev-filters"><input class="es-input" id="evSearch" placeholder="搜索问题、标准答案或智能体回答"/><select class="es-input" id="evStatus"><option value="">全部结果</option><option value="meets">达到分析阈值</option><option value="below">答案未通过</option><option value="error">调用异常</option><option value="unscored">未评分</option><option value="open">待处理</option><option value="processed">已处理待复测</option><option value="verified">已验证</option><option value="ignored">已忽略</option></select></div><div class="ev-table-wrap"><table class="ev-table"><thead><tr><th>问题 / 标准答案</th><th>智能体回答 A'</th><th>得分</th><th>耗时</th><th>结果 / 处理状态</th></tr></thead><tbody id="evReportRows"></tbody></table></div></div>` : `<div class="ev-result-empty"><span><i data-lucide="chart-no-axes-combined"></i></span><h2>选择一次评测运行</h2><p>从左侧「评测结果目录」中展开并选择运行，即可查看指标和原始报告。</p><button class="btn primary" id="evConfigBtn">前往评测配置</button></div>`;
     shell(`<div class="ev-results-layout ev-results-single"><div class="ev-result-content">${content}</div></div>`, catalog);
     state.renderedRunId = run ? Number(run.run_id) : null;
     // 仿评测集库目录交互（事件委托到稳定的父容器，子节点重建也不丢监听）
@@ -594,65 +540,26 @@
 
   const treatmentLabel = value => ({ open: "待处理", processed: "已处理待复测", verified: "已验证", ignored: "已忽略" })[value] || "未进入处理队列";
   const categoryLabel = value => ({ agent_answer: "智能体回答问题", request_config: "请求配置问题", dataset: "评测集内容问题", scoring: "评分规则问题", platform: "平台运行问题", unknown: "待进一步确认" })[value] || value || "未分类";
-  const contextCategoryLabel = value => ({ memory_failure: "记忆失败", contradiction: "与前文矛盾", constraint_violation: "违反约束", answer_error: "普通答案错误", uncertain: "暂不确定" })[value] || value || "未分析";
 
   async function openResultDetail(result) {
     if (!result) return;
     document.querySelectorAll(".ev-detail-mask").forEach(item => item.remove());
     const scores = result.scores || {}, issue = result.error_book;
-    const turnTrace = Array.isArray(result.turn_trace) ? result.turn_trace : [];
-    const needsContextReview = turnTrace.length && ["failed", "error", "unscored"].includes(result.status);
-    const contextAnalysis = result.context_analysis || {};
-    const contextSection = turnTrace.length ? `<section class="ev-context-section"><div class="ev-section-title"><h4>多轮上下文</h4><span class="es-tag">${turnTrace.length} 轮</span></div><p class="ev-section-note">以下是本次运行实际发送给目标智能体的对话。标准答案只用于固定前置历史和最终轮评分，不替代目标智能体的实际上下文。</p><div class="ev-turn-trace">${turnTrace.map(turn => {
-      const messages = Array.isArray(turn.request_messages) ? turn.request_messages.map(message => `${String(message.role || "").toUpperCase()}: ${message.content || ""}`).join("\n\n") : "未记录请求消息";
-      return `<details class="ev-turn-item" ${turn.agent_called ? "open" : ""}><summary>第 ${Number(turn.turn_index || 0) + 1} 轮 · ${turn.agent_called ? "调用目标智能体" : "注入标准答案历史"}</summary><div class="ev-turn-body"><dl class="ev-detail-list"><div><dt>问题</dt><dd>${esc(turn.question || "—")}</dd></div><div><dt>目标回复</dt><dd>${esc(turn.actual_answer || "—")}</dd></div></dl><pre>${esc(messages)}</pre></div></details>`;
-    }).join("")}</div>${needsContextReview || contextAnalysis.category ? `<div class="ev-context-analysis"><h5>错误上下文分析</h5><label class="es-field">判定<select class="es-input" id="evContextCategory"><option value="">请选择</option>${[["memory_failure", "记忆失败"], ["contradiction", "与前文矛盾"], ["constraint_violation", "违反约束"], ["answer_error", "普通答案错误"], ["uncertain", "暂不确定"]].map(([value, label]) => `<option value="${value}" ${contextAnalysis.category === value ? "selected" : ""}>${label}</option>`).join("")}</select></label><label class="es-field">分析备注<textarea class="es-input" id="evContextNote" rows="3" maxlength="2000" placeholder="说明前文事实、目标回复与判定依据">${esc(contextAnalysis.note || "")}</textarea></label><button class="btn ghost" id="evContextSave"><i data-lucide="save"></i>保存上下文分析</button></div>` : ""}</section>` : "";
-    const intermediateNodes = scores.intermediate?.nodes && typeof scores.intermediate.nodes === "object" ? scores.intermediate.nodes : {};
-    const intermediateValue = value => value == null ? "—" : typeof value === "string" ? value : JSON.stringify(value, null, 2);
-    const intermediateMetrics = (node, item) => {
-      if (node === "rewrite") return [
-        ["语义相似度", item.semantic_similarity],
-        ["约束 Precision", item.constraint_precision],
-        ["约束 Recall", item.constraint_recall],
-        ["约束 F1", item.constraint_f1],
-        ["约束完整保持", item.full_constraint_preservation == null ? null : item.full_constraint_preservation ? "是" : "否"],
-      ];
-      if (node === "intent") return [["标准意图", item.reference], ["实际意图", item.predicted], ["分类正确", item.correct == null ? null : item.correct ? "是" : "否"]];
-      const rag = item.metrics || {};
-      return [["Context Precision", rag.context_precision], ["Context Recall", rag.context_recall], ["Faithfulness", rag.faithfulness], ["Answer Relevancy", rag.answer_relevancy]];
-    };
-    const intermediateSection = Object.keys(intermediateNodes).length ? `<section><div class="ev-section-title"><h4>中间任务结果</h4><span class="es-tag">${Object.keys(intermediateNodes).map(intermediateNodeLabel).join("、")}</span></div><p class="ev-section-note">展示本题实际收到的节点输出及对应指标；缺失数据不计为 0 分。</p><div class="ev-intermediate-detail">${Object.entries(intermediateNodes).map(([node, item]) => {
-      const metricRows = intermediateMetrics(node, item).map(([label, value]) => `<div class="ev-score-row"><span>${esc(label)}</span><b>${esc(typeof value === "number" ? `${Math.round(value * 100)}%` : value == null ? "—" : value)}</b></div>`).join("");
-      const output = node === "rewrite" ? item.actual : node === "intent" ? item.predicted : result.answer;
-      const reference = node === "rewrite" ? item.reference : node === "intent" ? item.reference : result.gold_answer;
-      const contexts = node === "rag" && Array.isArray(result.retrieved) ? `<details class="ev-turn-item"><summary>实际检索片段（${result.retrieved.length} 条）</summary><pre>${esc(intermediateValue(result.retrieved))}</pre></details>` : "";
-      return `<details class="ev-turn-item" ${item.status === "scored" ? "open" : ""}><summary>${esc(intermediateNodeLabel(node))} · ${esc(item.status || "—")}</summary><div class="ev-turn-body"><div class="ev-score-list">${metricRows}</div><dl class="ev-detail-list"><div><dt>标准/参考</dt><dd>${esc(intermediateValue(reference))}</dd></div><div><dt>实际输出</dt><dd>${esc(intermediateValue(output))}</dd></div></dl>${contexts}</div></details>`;
-    }).join("")}</div></section>` : "";
-    const ruleScore = scores.rule && typeof scores.rule === "object" ? scores.rule : null;
-    const ruleChecks = ruleScore ? [
-      ruleScore.must_have_points?.enabled ? `<div class="ev-score-row ${ruleScore.must_have_points.passed ? "" : "failed"}"><span>必答要点</span><b>${ruleScore.must_have_points.passed ? "全部命中" : `缺少 ${ruleScore.must_have_points.missing?.length || 0} 项`}</b><i data-lucide="${ruleScore.must_have_points.passed ? "circle-check" : "circle-x"}"></i></div>` : "",
-      ruleScore.acceptable_answers?.enabled ? `<div class="ev-score-row ${ruleScore.acceptable_answers.passed ? "" : "failed"}"><span>可接受答案</span><b>${ruleScore.acceptable_answers.passed ? "命中" : "未命中"}</b><i data-lucide="${ruleScore.acceptable_answers.passed ? "circle-check" : "circle-x"}"></i></div>` : "",
-    ].join("") : "";
-    const ruleSection = ruleScore ? `<section><div class="ev-section-title"><h4>规则评测</h4><span class="es-tag ${ruleScore.passed ? "ok" : "bad"}">${ruleScore.passed ? "通过" : "未通过"}</span></div><p class="ev-section-note">依据评测集中的必答要点和可接受答案执行确定性检查，不调用模型。</p><div class="ev-score-list">${ruleChecks}</div>${ruleScore.must_have_points?.missing?.length ? `<p class="ev-section-note">缺少要点：${esc(ruleScore.must_have_points.missing.join("、"))}</p>` : ""}</section>` : "";
-    const judgeScore = scores.judge && typeof scores.judge === "object" ? scores.judge : null;
-    const judgeStatusLabel = { scored: "已评分", data_missing: "数据缺失", unavailable: "模型不可用", error: "评测异常" };
-    const judgeStatusClass = judgeScore?.status === "scored" ? (judgeScore.passed ? "ok" : "bad") : "warn";
-    const judgeCriteria = Array.isArray(judgeScore?.criteria) ? judgeScore.criteria.map(item => `<div class="ev-score-row ${item.passed === false ? "failed" : ""}"><span>${esc(item.name || "未命名规则")}</span><b>${item.score == null ? (item.passed == null ? "—" : item.passed ? "通过" : "未通过") : `${Math.round(Number(item.score) * 100)}%`}</b>${item.reason ? `<small>${esc(item.reason)}</small>` : ""}</div>`).join("") : "";
-    const judgeSection = judgeScore ? `<section><div class="ev-section-title"><h4>LLM-as-a-Judge</h4><span class="es-tag ${judgeStatusClass}">${esc(judgeStatusLabel[judgeScore.status] || judgeScore.status || "未评测")}</span></div><p class="ev-section-note">使用本次运行配置的自定义评测规则；问题、标准答案和智能体回答固定传入，可选上下文按运行配置追加。</p><div class="ev-score-list"><div class="ev-score-row ${judgeScore.passed === false ? "failed" : ""}"><span>Judge 总分</span><b>${judgeScore.score == null ? "—" : `${Math.round(Number(judgeScore.score) * 100)}%`}</b></div><div class="ev-score-row ${judgeScore.passed === false ? "failed" : ""}"><span>Judge 判定</span><b>${judgeScore.passed == null ? "—" : judgeScore.passed ? "通过" : "未通过"}</b></div>${judgeCriteria}</div>${judgeScore.reason ? `<p class="ev-section-note">判定理由：${esc(judgeScore.reason)}</p>` : ""}${judgeScore.missing_fields?.length ? `<p class="ev-section-note">缺少输入：${esc(judgeScore.missing_fields.join("、"))}</p>` : ""}</section>` : "";
-    const scoreRows = Object.entries(scores).filter(([key, value]) => !["rule", "intermediate", "judge"].includes(key) && value != null && value !== "").map(([key, value]) => {
+    const scoreLabels = { score: "答案得分", em: "精确匹配", method: "评分方法", refusal_ok: "拒答判断", latency_ms: "调用耗时", tokens: "Token", cost: "成本", error: "调用错误" };
+    const scoreRows = Object.entries(scores).filter(([, value]) => value != null && value !== "").map(([key, value]) => {
       const failed = key === "score" && Number(value) < state.threshold || key === "error" && value || typeof value === "boolean" && value === false;
       const shown = typeof value === "boolean" ? (value ? "是" : "否") : key === "score" ? Math.round(Number(value) * 100) : key === "latency_ms" ? `${value} ms` : value;
       return `<div class="ev-score-row ${failed ? "failed" : ""}"><span>${esc(scoreLabels[key] || key)}</span><b>${esc(shown)}</b>${failed ? '<i data-lucide="circle-x"></i>' : '<i data-lucide="circle-check"></i>'}</div>`;
     }).join("") || '<p class="es-gen-hint">本题没有可用评分项。</p>';
     const observable = result.status === "error" ? "调用异常" : scores.score == null ? "未评分" : Number(scores.score) >= state.threshold ? "达到分析阈值" : "答案未通过";
+    const observationRows = result.agent_observations && Object.keys(result.agent_observations).length
+      ? Object.entries(result.agent_observations).map(([key, value]) => `<div><b>${esc(key)}</b><pre class="ev-observations">${esc(typeof value === "string" ? value : JSON.stringify(value, null, 2))}</pre></div>`).join("")
+      : '<p class="es-gen-hint">目标智能体未返回可分析的附加字段。</p>';
     const drawer = document.createElement("div"); drawer.className = "ev-detail-mask";
     drawer.innerHTML = `<aside class="ev-detail-drawer"><div class="ev-detail-head"><div><small>单题结果 #${result.result_id}</small><h3>${esc(observable)}</h3></div><button class="modal-x" aria-label="关闭">×</button></div><div class="ev-detail-body">
       <section><h4>评测样本</h4><dl class="ev-detail-list"><div><dt>问题</dt><dd>${esc(result.question)}</dd></div><div><dt>标准答案</dt><dd>${esc(result.gold_answer || "—")}</dd></div><div><dt>智能体回答</dt><dd>${esc(result.answer || result.error_message || "—")}</dd></div><div><dt>所属维度</dt><dd>${esc(result.dimension || "未标注")}</dd></div></dl></section>
-      ${contextSection}
-      ${intermediateSection}
+      <section><h4>目标智能体额外输出</h4><p class="ev-section-note">保留最终答案以外的响应字段，可用于分析工具调用、来源或中间节点。</p><div class="ev-observation-list">${observationRows}</div></section>
       <section><h4>评分明细</h4><p class="ev-section-note">仅展示后端实际返回的评分项；红色项表示未达到当前分析阈值。</p><div class="ev-score-list">${scoreRows}</div></section>
-      ${ruleSection}
-      ${judgeSection}
       <section><div class="ev-section-title"><h4>异常处理</h4><span class="es-tag ${issue?.status === "verified" ? "ok" : issue?.status === "open" ? "bad" : "warn"}">${esc(treatmentLabel(issue?.status))}</span></div>${issue ? `<label class="es-field">人工分类<select class="es-input" id="evIssueCategory"><option value="">请选择</option>${[["agent_answer","智能体回答问题"],["request_config","请求配置问题"],["dataset","评测集内容问题"],["scoring","评分规则问题"],["platform","平台运行问题"],["unknown","待进一步确认"]].map(([value,label]) => `<option value="${value}" ${issue.resolution_category === value ? "selected" : ""}>${label}</option>`).join("")}</select></label><label class="es-field">处理备注<textarea class="es-input" id="evIssueNote" rows="3" placeholder="记录判断依据、修改内容或忽略原因">${esc(issue.resolution_note || "")}</textarea></label><div class="ev-treatment-actions"><button class="btn ghost" id="evIgnoreIssue">忽略</button><button class="btn primary" id="evProcessIssue">标记已处理，等待复测</button></div>` : '<p class="es-gen-hint">本题未进入异常处理队列。</p>'}</section>
       <section><div class="ev-section-title"><h4>复测记录</h4>${["error", "failed"].includes(result.status) || Number(scores.score) < state.threshold ? '<button class="btn ghost" id="evRetryCase"><i data-lucide="rotate-cw"></i>单题复测</button>' : ""}</div><div id="evAttemptList" class="ev-attempt-list"><span class="spinner"></span></div></section>
     </div></aside>`;
@@ -662,21 +569,6 @@
       drawer.querySelector("#evProcessIssue").onclick = () => updateIssue(issue, "processed", drawer);
       drawer.querySelector("#evIgnoreIssue").onclick = () => updateIssue(issue, "ignored", drawer);
     }
-    const contextSave = drawer.querySelector("#evContextSave");
-    if (contextSave) contextSave.onclick = async () => {
-      const category = drawer.querySelector("#evContextCategory").value;
-      const note = drawer.querySelector("#evContextNote").value.trim();
-      if (!category) return toast("请选择上下文错误类型");
-      if (!note) return toast("请填写上下文分析备注");
-      contextSave.disabled = true;
-      try {
-        const updated = await patch(`/api/evaluation-results/${result.result_id}/context-analysis`, { category, note });
-        Object.assign(result, updated);
-        toast(`已保存：${contextCategoryLabel(category)}`);
-        drawer.remove();
-        openResultDetail(result);
-      } catch (error) { toast("保存上下文分析失败：" + error.message); contextSave.disabled = false; }
-    };
     if (drawer.querySelector("#evRetryCase")) drawer.querySelector("#evRetryCase").onclick = () => openCaseRetry(result, drawer);
     await renderAttempts(result.result_id, drawer.querySelector("#evAttemptList"));
   }

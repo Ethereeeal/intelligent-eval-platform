@@ -71,6 +71,7 @@ def build_qa_prompt(
     section_path: str,
     page_no: str | None,
     constraints: dict[str, Any] | None,
+    quality_checks: dict[str, Any] | None = None,
     difficulty_hint: str | None = None,
 ) -> str:
     """合并题目+答案的单一生成 Prompt（README §2.1 / §2.3）。
@@ -83,6 +84,16 @@ def build_qa_prompt(
     context_text = _render_context(context)
     constraints_text = json.dumps(constraints, ensure_ascii=False) if constraints else "无"
     angle_desc = _angle_description(angle, question_type)
+    atomicity = (quality_checks or {}).get("atomicity") or {}
+    atomicity_reasons = atomicity.get("reasons") or []
+    atomicity_instruction = ""
+    if atomicity.get("status") == "warning":
+        atomicity_instruction = (
+            "【原子性出题提示】该知识点包含多个可能独立判断的事实："
+            f"{'; '.join(str(reason) for reason in atomicity_reasons)}。"
+            "本题只覆盖其中一个事实，必须围绕当前出题角度提问，不要在同一问题中并列追问多个谓词；"
+            "其他事实由同一知识点的其他角度题覆盖。\n\n"
+        )
 
     return (
         "你是一个评测集编制专家，负责为授信政策、财务报告等文档生成"
@@ -103,6 +114,7 @@ def build_qa_prompt(
         "3. 正式书面表达，避免口语；\n"
         "4. 不包含『根据上文』『根据材料』『请结合材料』等提示语；\n"
         "5. 一条问题只问一个核心事实。\n\n"
+        f"{atomicity_instruction}"
         "【答案生成约束】\n"
         "1. 答案仅基于原文证据，不补充常识；\n"
         "2. must_have_points 列出所有必须命中的答案要点（字符串数组）；\n"

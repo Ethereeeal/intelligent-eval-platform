@@ -192,6 +192,23 @@ def list_cases_by_document(
     )
 
 
+@cases_router.get("/selection/{evaluation_purpose}")
+def select_cases_for_evaluation(
+    evaluation_purpose: str,
+    document_id: int | None = Query(None),
+    max_cases: int = Query(20, ge=1, le=100),
+):
+    """按开发自测 / 测试全量测 / 业务测用途从同一绿色题库中选择题目。"""
+    try:
+        return pipeline_service.select_cases_for_evaluation(
+            evaluation_purpose=evaluation_purpose,
+            document_id=document_id,
+            max_cases=max_cases,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @cases_router.get("/{case_id}", response_model=CaseDetailOut)
 def get_case(case_id: int):
     case = pipeline_service.get_case(case_id)

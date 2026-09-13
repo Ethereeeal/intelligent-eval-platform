@@ -239,7 +239,6 @@
       const eiuAllByDoc = {};
       eius.forEach(e => {
         (eiuAllByDoc[e.document_id] = eiuAllByDoc[e.document_id] || []).push(e);
-        if (e.is_questionable === false) return; // 排除项只计入质量概览，不进入声明表
         (eiuByDoc[e.document_id] = eiuByDoc[e.document_id] || []).push(e);
       });
       const caseByDoc = {};
@@ -264,34 +263,61 @@
         const id = "doc" + d.document_id;
         const purpose = docPurposeOf(d); // basic 或 gen
         const rawClaims = eiuAllByDoc[d.document_id] || [];
+        // 最终质量颜色优先取自动处置；历史数据按质量状态兼容，不用抽取路径颜色。
+        const routeColorOf = e => ["green", "yellow", "red"].includes(e.auto_disposition)
+          ? e.auto_disposition
+          : e.is_questionable === false || e.quality_status === "rejected" ? "red"
+          : e.quality_status === "verified" || e.review_status === "quality_verified" ? "green" : "yellow";
         const kp = (eiuByDoc[d.document_id] || []).map((e, i) => {
-          const status = e.quality_status || (e.review_status === "quality_verified" ? "verified" : "candidate");
+          const status = ({ green: "verified", yellow: "needs_review", red: "rejected" })[routeColorOf(e)];
           const statusLabel = ({ verified: "已验证", needs_review: "待复核", rejected: "已排除", candidate: "候选" }[status] || "候选");
-          const routeLabel = ({ green: "绿色·确定性验证", yellow: "黄色·LLM 审查", red: "红色·人工复核" }[e.route_color] || "");
-          const checkValues = Object.values(e.quality_checks || {});
+          const routeColor = routeColorOf(e);
+          const routeLabel = ({ green: "已验证，可生成", yellow: "待复核", red: "已排除" }[routeColor] || "");
+          const checks = Object.fromEntries(Object.entries(e.quality_checks || {}).filter(([key]) => ["fidelity", "completeness", "atomicity"].includes(key)));
+          const checkValues = Object.values(checks);
           const passed = checkValues.filter(x => x && x.status === "pass").length;
-          const qualityDetail = Object.entries(e.quality_checks || {}).map(([key, value]) => {
-            const label = ({ fidelity: "忠实性", completeness: "完整性", atomicity: "原子性", testability: "可测试性" }[key] || key);
+          const qualityDetail = Object.entries(checks).map(([key, value]) => {
+            const label = ({ fidelity: "忠实性与可追溯性", completeness: "上下文完整性", atomicity: "原子性" }[key] || key);
             const statusText = value && value.status === "pass" ? "通过" : value && value.status === "fail" ? "失败" : "需关注";
             const reasons = value && Array.isArray(value.reasons) && value.reasons.length ? `：${value.reasons.join("；")}` : "";
             return `${label}${statusText}${reasons}`;
           }).join("\n");
           const evidenceChain = (e.evidence_details || []).map(x => {
-            const role = ({ direct: "直接证据", reference: "引用条款", context: "上下文", parent: "上级结构" }[x.role] || "证据");
+            const role = ({
+              direct: "直接证据", reference: "引用条款", context: "上下文", parent: "上级结构",
+              inherited: "继承结构", lead: "列表引导", neighbor: "邻接上下文", same_article: "同条款",
+              table_header: "表头", definition: "定义", requested_reference: "补充引用",
+              requested_definition: "补充定义", requested_condition: "补充条件", requested_subject: "补充主体"
+            }[x.role] || "证据");
             return `${role} Block #${x.block_id}${x.section_path ? `（${x.section_path}）` : ""}`;
           }).join(" → ");
           return {
           id: "KP-" + e.eiu_id,
+          documentId: e.document_id,
+          blockId: e.block_id,
+          evidenceDetails: e.evidence_details || [],
+          exclusionReason: e.exclusion_reason || "",
+          policyVersion: e.quality_policy_version,
           stmt: e.statement || "",
           type: ({ rule: "规则", constraint: "约束", definition: "定义", process: "流程" }[e.eiu_type] || "规则"),
           prio: ({ P0: "核心必测", P1: "必须覆盖", P2: "建议覆盖" }[e.content_priority] || "建议覆盖"),
           qualityStatus: status,
           qualityLabel: statusLabel,
           qualityScore: e.quality_score,
-          qualityText: checkValues.length ? `${passed}/4 通过${e.complexity_level ? ` · ${e.complexity_level}` : ""}${routeLabel ? ` · ${routeLabel}` : ""}` : (routeLabel || "未检查"),
-          qualityDetail: `${qualityDetail || "暂无质量检查详情"}${routeLabel ? `\n路由：${routeLabel}` : ""}${Array.isArray(e.route_reasons) && e.route_reasons.length ? `\n原因：${e.route_reasons.join("；")}` : ""}`,
-          qualityChecks: e.quality_checks || {},
-          crossBlock: Array.isArray(e.evidence_details) && e.evidence_details.some(x => ["reference", "context"].includes(x.role)),
+          qualityText: checkValues.length ? `${passed}/3 通过${!e.quality_policy_version ? " · 历史结果" : ""}` : "未检查",
+          qualityDetail: qualityDetail || "暂无质量检查详情",
+          qualityChecks: checks,
+          routeColor,
+          routeLabel,
+          routeReasons: Array.isArray(e.route_reasons) ? e.route_reasons : [],
+          reviewAction: e.review_action || "",
+          reviewAttempts: Number(e.review_attempts || 0),
+          evidenceRoles: [...new Set((e.evidence_details || []).map(x => x.role).filter(Boolean))],
+          crossBlock: Array.isArray(e.evidence_details) && e.evidence_details.some(x => [
+            "reference", "context", "parent", "inherited", "lead", "neighbor", "same_article",
+            "table_header", "definition", "requested_reference", "requested_definition",
+            "requested_condition", "requested_subject"
+          ].includes(x.role)),
           evidenceChain: evidenceChain || kpSec(e),
           // 后端未提供证据/来源时，兜底填充这两个字段，保证前端非空展示
           // 证据列统一用「章节」(section_path)；来源文档直接用文件名
@@ -302,11 +328,18 @@
           };
         });
         const claimStats = {
-          candidate: rawClaims.filter(e => e.is_questionable !== false).length,
-          verified: rawClaims.filter(e => e.is_questionable !== false && (e.quality_status === "verified" || e.review_status === "quality_verified")).length,
-          needsReview: rawClaims.filter(e => e.is_questionable !== false && e.quality_status === "needs_review").length,
-          rejected: rawClaims.filter(e => e.is_questionable === false || e.quality_status === "rejected").length,
-          crossBlock: rawClaims.filter(e => Array.isArray(e.evidence_details) && e.evidence_details.some(x => ["reference", "context"].includes(x.role))).length
+          candidate: rawClaims.length,
+          verified: rawClaims.filter(e => routeColorOf(e) === "green").length,
+          needsReview: rawClaims.filter(e => routeColorOf(e) === "yellow").length,
+          rejected: rawClaims.filter(e => routeColorOf(e) === "red").length,
+          crossBlock: rawClaims.filter(e => Array.isArray(e.evidence_details) && e.evidence_details.some(x => [
+            "reference", "context", "parent", "inherited", "lead", "neighbor", "same_article",
+            "table_header", "definition", "requested_reference", "requested_definition",
+            "requested_condition", "requested_subject"
+          ].includes(x.role))).length,
+          green: rawClaims.filter(e => routeColorOf(e) === "green").length,
+          yellow: rawClaims.filter(e => routeColorOf(e) === "yellow").length,
+          red: rawClaims.filter(e => routeColorOf(e) === "red").length
         };
         // qa.type 由文档用途决定：基础问题输入文档产出「基础问题」(plain)，泛化输入文档产出「泛化问题」(gen)
         const qaType = purpose === "gen" ? "gen" : "plain";

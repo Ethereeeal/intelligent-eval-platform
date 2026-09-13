@@ -12,6 +12,7 @@
 | GET  | `/api/documents` | 文档列表 |
 | GET  | `/api/documents/{document_id}` | 文档详情 |
 | GET  | `/api/documents/{document_id}/blocks` | 文档切块列表 |
+| GET  | `/api/documents/{document_id}/processing-trace` | 上传、解析、分块、EIU 抽取与门禁的结构化处理轨迹 |
 
 ### 任务接口
 

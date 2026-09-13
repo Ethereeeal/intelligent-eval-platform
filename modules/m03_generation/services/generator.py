@@ -76,6 +76,7 @@ class CaseGenerator:
             section_path=block.get("section_path", "未分类"),
             page_no=block.get("page_no"),
             constraints=eiu.get("constraints_json"),
+            quality_checks=eiu.get("quality_checks") or eiu.get("quality_checks_json"),
         )
         raw = self._call_and_parse(prompt)
         raw = self._validate_generation_output(
@@ -118,6 +119,9 @@ class CaseGenerator:
             evidence=evidence,
             content_priority=eiu.get("content_priority", "P2"),
             statement_norm=normalize_statement(eiu.get("statement", "")),
+            evaluation_profiles=eiu.get("evaluation_profiles") or [],
+            canonical_intent_key=eiu.get("canonical_intent_key"),
+            manual_inclusion=bool(eiu.get("manual_include")),
         )
         if not case.question:
             raise ValueError(f"EIU {eiu['eiu_id']} 生成结果缺少 question 字段")
@@ -140,6 +144,9 @@ class CaseGenerator:
             content_priority=case.content_priority,
             review_status=case.review_status,
             statement_norm=case.statement_norm,
+            evaluation_profiles=case.evaluation_profiles,
+            canonical_intent_key=case.canonical_intent_key,
+            manual_inclusion=case.manual_inclusion,
         )
 
     # ------------------------------------------------------------------

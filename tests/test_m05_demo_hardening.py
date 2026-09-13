@@ -1,6 +1,6 @@
 import unittest
 
-from modules.shared.services.database import _serialize_text_value
+from modules.shared.services.database import DatabaseService, _serialize_text_value
 from modules.m05_dataset_lifecycle.services.lifecycle import DatasetLifecycleService
 from modules.m05_dataset_lifecycle.services.composition import (
     resolve_composition,
@@ -58,6 +58,33 @@ class _ExternalMaterializeDatabase:
 
     def save_eval_case(self, **kwargs):
         self.saved.append(kwargs)
+
+
+class _DuplicateSnapshotDatabase:
+    def __init__(self):
+        self.saved = []
+
+    def list_generated_cases(self):
+        return [
+            {"case_id": 1, "question": "同一个问题", "gold_answer": "答案 A", "review_status": "quality_verified"},
+            {"case_id": 2, "question": "同一个问题", "gold_answer": "答案 B", "review_status": "quality_verified"},
+        ]
+
+    def save_eval_case(self, **kwargs):
+        self.saved.append(kwargs)
+
+
+class _DuplicateUploadQualityDatabase:
+    def get_uploaded_set(self, set_id):
+        return {
+            "name": "允许重复题的上传集",
+            "quality_snapshot": {
+                "total": 2,
+                "data_completeness_rate": 1,
+                "valid_qa_ratio": 1,
+                "duplicate_question_ratio": 0.5,
+            },
+        }
 
 
 class _FreezeMetadataDatabase:
@@ -289,6 +316,24 @@ class M05DemoHardeningTests(unittest.TestCase):
             "origin": "document_library",
             "pipeline": ["m03_generation", "m04_quality_governance"],
         })
+
+    def test_snapshot_keeps_duplicate_questions_as_independent_cases(self):
+        database = _DuplicateSnapshotDatabase()
+        count = DatasetLifecycleService(database)._snapshot_cases(version_id=1)
+        self.assertEqual(count, 2)
+        self.assertEqual([item["question"] for item in database.saved], ["同一个问题", "同一个问题"])
+        self.assertEqual([item["gold_answer"] for item in database.saved], ["答案 A", "答案 B"])
+
+    def test_duplicate_upload_questions_do_not_block_freeze_quality_gate(self):
+        DatasetLifecycleService(_DuplicateUploadQualityDatabase())._assert_selected_uploads_quality([1])
+
+    def test_legacy_duplicate_helper_reports_but_does_not_remove_questions(self):
+        result = DatabaseService.dedup_exact_cases(
+            object.__new__(DatabaseService),
+            [{"question": "相同问题"}, {"question": "相同问题"}],
+        )
+        self.assertEqual(len(result["keep"]), 2)
+        self.assertEqual(len(result["duplicate"]), 1)
 
 
 if __name__ == "__main__":

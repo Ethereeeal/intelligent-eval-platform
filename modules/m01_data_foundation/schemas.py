@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class DocumentUploadResponse(BaseModel):
@@ -50,3 +50,16 @@ class JobOut(BaseModel):
     message: str | None = None
     created_at: str | None = None
     finished_at: str | None = None
+
+
+class DocumentProcessingTraceOut(BaseModel):
+    trace_id: int
+    job_id: int | None = None
+    document_id: int
+    block_id: int | None = None
+    eiu_id: int | None = None
+    stage: str
+    event: str
+    status: str
+    detail: dict = Field(default_factory=dict)
+    created_at: str | None = None

@@ -75,7 +75,7 @@ class DatasetLifecycleService:
         return [c for c in all_cases if c.get("review_status") in PUBLISHABLE_STATUSES]
 
     def _assert_selected_uploads_quality(self, uploaded_set_ids: list[int] | None) -> None:
-        """上传集门禁：证据可缺失，但问题/答案完整、有效且不得存在重复题。"""
+        """上传集门禁：证据可缺失，但问题/答案必须完整有效；重复题仅作提示统计。"""
         for set_id in uploaded_set_ids or []:
             item = self.db.get_uploaded_set(set_id)
             if item is None:
@@ -83,8 +83,8 @@ class DatasetLifecycleService:
             quality = item.get("quality_snapshot") or {}
             if quality.get("total", item.get("total_cases", 0)) <= 0:
                 raise ValueError(f"上传评测集“{item.get('name', set_id)}”为空")
-            if quality.get("data_completeness_rate", 0) < 1 or quality.get("valid_qa_ratio", 0) < 1 or quality.get("duplicate_question_ratio", 0) > 0:
-                raise ValueError(f"上传评测集“{item.get('name', set_id)}”未通过质量门禁（需问题/答案完整、有效且无重复题）")
+            if quality.get("data_completeness_rate", 0) < 1 or quality.get("valid_qa_ratio", 0) < 1:
+                raise ValueError(f"上传评测集“{item.get('name', set_id)}”未通过质量门禁（需问题/答案完整且有效）")
 
     # ------------------------------------------------------------------
     # 版本冻结
@@ -152,7 +152,7 @@ class DatasetLifecycleService:
             split_config={"format": "full", "include_retired": False},
             snapshot_metadata=snapshot_metadata,
         )
-        # 把通过门禁的 generated_case 快照为不可变 eval_case 副本（按选择合并 + 精确去重）
+        # 把通过门禁的 generated_case 快照为不可变 eval_case 副本（按选择合并，保留重复题）
         case_count = self._snapshot_cases(version_id=version_id, document_ids=document_ids)
         # 方案 B：把选中的上传库 / 公共库题物化进同一版本
         case_count += self._materialize_external(
@@ -194,14 +194,13 @@ class DatasetLifecycleService:
     ) -> int:
         """将可发布态的 generated_case 复制为 eval_case 快照（冻结后不可变）。
 
-        冻结时自动做精确去重：按归一化 question 哈希去掉"一模一样"的问题
-        （前端按选择合并评测集时，跨文档/跨来源的重复题在此清理）。
+        不对问题做去重：同一问题来自不同文档、来源或生成批次时，仍作为独立评测样本
+        快照保存，保证用户选择的题目数量和来源不被静默改变。
         document_ids 非空时仅快照所选文档的可发布 case。
         """
         cases = self._publishable_cases(document_ids=document_ids)
-        dedup = self.db.dedup_exact_cases(cases)
         count = 0
-        for case in dedup["keep"]:
+        for case in cases:
             self.db.save_eval_case(
                 version_id=version_id,
                 case_uid=f"case_{version_id:04d}_{case['case_id']:06d}",

@@ -10,6 +10,7 @@ from modules.m08_auto_evaluation.services.intermediate_metrics import (
     normalize_intermediate_config,
     score_intermediate,
 )
+from modules.m08_auto_evaluation.services.intermediate_diagnosis import explain_intermediate
 from modules.m08_auto_evaluation.services.metrics import score_case
 from modules.m08_auto_evaluation.services.optimization import build_optimization
 from modules.shared.services.database import DatabaseService
@@ -35,11 +36,17 @@ def _evaluate_case(
     scores = score_case(sample, result, judge_config)
     normalized_intermediate = normalize_intermediate_config(intermediate_config)
     if normalized_intermediate["enabled"]:
-        scores["intermediate"] = score_intermediate(
+        intermediate_scores = score_intermediate(
             sample,
             result or {},
             normalized_intermediate["nodes"],
         )
+        intermediate_scores["diagnosis"] = explain_intermediate(
+            sample,
+            result or {},
+            intermediate_scores,
+        )
+        scores["intermediate"] = intermediate_scores
     diagnosis = diagnose(sample, result, scores)
     if scores.get("error"):
         status = "error"
@@ -60,6 +67,7 @@ def _evaluate_case(
             "rewrite_reference": sample.get("rewrite_reference"),
             "reference_contexts": sample.get("reference_contexts"),
         },
+        "agent_observations": (result or {}).get("agent_observations"),
         "scores": scores,
         "diagnosis": diagnosis,
         "status": status,

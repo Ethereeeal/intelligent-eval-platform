@@ -34,6 +34,7 @@ modules/m08_auto_evaluation/
     ├── rules.py            # must_have_points / acceptable_answers 确定性规则评测
     ├── judge.py            # 自定义提示词 LLM-as-a-Judge 与结构化结果解析
     ├── intermediate_metrics.py # rewrite / intent / RAG 固定中间节点指标
+    ├── intermediate_diagnosis.py # 中间节点规则诊断与按需 LLM 优化建议
     ├── diagnosis.py        # E2E/D9 黑盒失败标记（FR-DIAG）
     └── optimization.py     # 黑盒失败说明 + ErrorBook 聚类（FR-OPT）
 ```
@@ -52,6 +53,8 @@ modules/m08_auto_evaluation/
 - 多轮最小闭环：`run_multi` 按 `turns[]` 顺序构造请求，把已有问答作为固定历史上下文，最后一轮调用目标智能体并用该轮标准答案评分。`key_turn`、`turn_type`、`depends_on_turns` 可以作为高级标注保留，但不是基本评测前置条件。
 - 中间节点评测是运行级可选项，运行时可选择 `rewrite`、`intent`、`rag`；节点内指标固定，不提供逐项勾选。`intent` 只评估意图分类，不评估参数槽位。
 - `rewrite` 固定计算语义相似度；存在约束标注时追加约束 Precision / Recall / F1 和完整保持率，没有约束标注时只计算语义相似度。`intent` 只比较标准意图标签与实际意图标签，不引入不通用的参数槽位指标。`rag` 固定使用 RAGAS Context Precision、Context Recall、Faithfulness、Answer Relevancy 四项指标。
+- 中间节点诊断先使用固定阈值和节点语义规则定位问题：改写检查语义/约束保持，意图检查分类错误，RAG 检查四项 RAGAS 指标。低指标、分类不一致或约束丢失会保留节点、指标、阈值和建议；缺少节点数据、依赖未配置或调用失败会分别标记 `data_missing` / `unavailable` / `error`，不按 0 分处理。
+- 只有存在可解释的指标异常时才调用 LLM 生成优化解释；模型输入包含问题、标准答案、实际回答、节点输出、检索文本、节点分数和规则诊断，模型只能返回结构化摘要与按节点建议。原始模型响应不落库，模型不可用时仍保留规则诊断。单题结果写入 `scores.intermediate.diagnosis`，运行汇总提供高频问题、建议计数和模型生成次数。
 - RAG 只需要评测集问题/标准答案和待测智能体实际返回的检索文本；外部评测集也可以使用，不依赖平台内部 Block、EIU 或 `source_ref`，也不要求只有一个正确检索片段。没有实际检索文本时，RAG 节点记为 `data_missing`。
 - HTTP 适配器可在响应中配置 `retrieved_path` 和 `node_outputs_path`；前者读取实际检索片段，后者读取 `rewrite` / `intent` / `rag` 节点输出。适配器只做字段路径映射，不假设不同智能体的节点返回格式相同。
 - **安全**：`adapter_config` 中的 `api_key` 不入库（持久化前剔除，接口回显掩码 `***`）；单题复测需重新提交敏感配置，前端复用模板也不保存 API Key 或 Header 值。运行时若需做上下文分析，只允许使用本次评测实际发送给目标智能体的对话内容。
@@ -65,6 +68,7 @@ POST /api/evaluation-runs {composition_id, adapter, adapter_config, intermediate
   → 组合解析为统一输入样本（m05 composition.resolve_composition；文档生成来源必须是 frozen 版本）
   → 异步线程逐题调用适配器
   → score_case（短答案精确匹配 / 长答案语义相似度，并独立执行评测集约束规则与可选 Judge）
+  → 中间节点固定指标 + 规则诊断；存在指标异常时按需请求 LLM 解释优化建议
   → 多轮失败/未评分样本保留前置对话，供人工上下文分析
   → diagnose（答错标记 E2E；调用异常标记 D9；不推断检索或生成根因）
   → 写 evaluation_case_result + error_book_item

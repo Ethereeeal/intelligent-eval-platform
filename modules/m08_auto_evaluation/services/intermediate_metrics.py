@@ -17,6 +17,9 @@ from collections import defaultdict
 from typing import Any
 
 from modules.m05_dataset_lifecycle.services.scoring import score_answer
+from modules.m08_auto_evaluation.services.intermediate_diagnosis import (
+    aggregate_intermediate_diagnosis,
+)
 from modules.shared.core.config import settings
 
 SUPPORTED_NODES = ("rewrite", "intent", "rag")
@@ -364,4 +367,8 @@ def aggregate_intermediate(results: list[dict], nodes: list[str]) -> dict:
                 else None
             )
         output[node] = summary
-    return {"enabled": bool(output), "nodes": output}
+    return {
+        "enabled": bool(output),
+        "nodes": output,
+        "diagnosis": aggregate_intermediate_diagnosis(results),
+    }

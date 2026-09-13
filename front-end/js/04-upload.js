@@ -66,12 +66,12 @@
 
   function downloadEIU(docId) {
     const d = DOCS[docId]; if (!d) return;
-    const rows = d.kp || [];
-    // 导出 CSV：知识点 / 推荐 / 类型 / 证据(章节) / 来源文档，Excel 友好（含 BOM）
-    const head = ["知识点", "推荐", "类型", "证据", "来源文档"];
+    const rows = (d.kp || []).filter(k => k.routeColor === "green");
+      // 仅导出可生成知识点，不导出内部重要性等级。
+    const head = ["知识点", "质量状态", "类型", "证据", "来源文档"];
     const esc = (v) => `"${String(v == null ? "" : v).replace(/"/g, '""')}"`;
     const lines = [head.map(esc).join(",")];
-    rows.forEach(k => lines.push([k.stmt, k.prio, k.type, k.ev, k.src].map(esc).join(",")));
+    rows.forEach(k => lines.push([k.stmt, k.qualityLabel, k.type, k.ev, k.src].map(esc).join(",")));
     const csv = "﻿" + lines.join("\r\n");
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
     const url = URL.createObjectURL(blob);

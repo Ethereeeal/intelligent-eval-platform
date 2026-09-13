@@ -94,7 +94,7 @@ Block 仍然需要保留：它用于文档结构恢复、页码/章节定位、�
 | 原子性 `atomicity` | 陈述超过160字、包含多个规范谓词、分号或多重冒号时告警 | 发现可能混合多项规则的陈述 |
 | 可测试性 `testability` | 检测过短文本、标题/附件式文本、缺少规则谓词或量化条件 | 排除难以形成稳定问答的内容 |
 
-每项检查当前只有 `pass`（1.0）和 `warning`（0.5）两类结果；`quality_score` 是四项得分的平均值。四项全通过才自动为 `verified`，任一告警为 `needs_review`；不可出题项为 `rejected`。人工修改陈述后会回退为待复核，避免沿用旧结论。
+每项检查当前只有 `pass`（1.0）和 `warning`（0.5）两类结果；`quality_score` 是忠实性、完整性、原子性三项结果的提示性平均值，不作为门禁。忠实性与完整性通过即自动为 `verified`，原子性告警不单独转为 `needs_review`；不可出题项为 `rejected`。人工修改陈述后会回退为待复核，避免沿用旧结论。
 
 知识点还会计算 `complexity_score`（1–5）和 `complexity_level`：根据语义分句数、规则/条件谓词数、数值约束数、引用/上下文证据来判断。分数≤2 为 L1，3–4 为 L2，5 为 L3。**该复杂度用于判断知识点理解和复核成本，不等同于 QA 难度。**
 
@@ -132,7 +132,7 @@ M03 只对同时满足 `is_questionable=true` 且“已验证”的知识点生�
 
 冻结文档生成题时，当前仅快照 M04 可发布态样本：`quality_verified`、`governance_passed`、`user_confirmed`、`published`。冻结后的 `eval_case` 为不可变副本，便于复测和审计。
 
-上传评测集有单独的结构门禁：题目/答案完整率 `data_completeness_rate=100%`、有效 QA 比例 `valid_qa_ratio=100%`、重复问题比例 `duplicate_question_ratio=0`。证据可以缺失。公共库在真实数据未导入时，选择后可能物化 0 题，不会伪造样本。
+上传评测集有单独的结构门禁：题目/答案完整率 `data_completeness_rate=100%`、有效 QA 比例 `valid_qa_ratio=100%`。证据可以缺失；重复问题比例 `duplicate_question_ratio` 仅作为提示统计，不拦截上传或冻结。生成库冻结和外部题物化均不删除重复问题，题目按用户选择原样保留。公共库在真实数据未导入时，选择后可能物化 0 题，不会伪造样本。
 
 ## 5. 前端实际展示字段和概览口径
 
@@ -198,6 +198,8 @@ M03 只对同时满足 `is_questionable=true` 且“已验证”的知识点生�
 Judge 汇总另有 `judge_enabled`、`judge_scored`、`judge_passed`、`judge_passed_rate`。只有 Judge 成功返回结构化结果的题目进入 Judge 分母；模型未配置、输入缺失和调用/解析异常不按 0 分计。Judge 的逐题 `reason` 和 `criteria` 可在结果详情及导出的 Excel 中查看。
 
 当前默认仍是黑盒诊断：答错只记为 `E2E`（端到端失败，不能推断具体根因）；调用异常记为 `D9`。评测运行可以额外启用中间节点评测并选择 `rewrite`、`intent`、`rag` 节点，指标集合固定，也可以独立启用 LLM-as-a-Judge 并填写评测规则提示词。`rewrite` 计算语义相似度和有标注时的约束 Precision/Recall/F1；`intent` 只计算意图分类准确率、Macro-F1、分类明细和混淆矩阵；`rag` 使用 RAGAS Context Precision、Context Recall、Faithfulness、Answer Relevancy。外部智能体通过 HTTP 响应路径提供检索文本和节点输出，不绑定平台内部 Block/EIU；未返回所选节点数据时标记 `data_missing`，不计为 0 分。
+
+中间节点另外提供一层诊断：固定阈值规则先定位低语义相似度、约束未保持、意图分类不一致和 RAGAS 指标偏低，再在确有指标异常且模型已配置时请求 LLM 解释原因、给出按节点优化建议。单题诊断写入 `scores.intermediate.diagnosis`，汇总提供高频问题和建议计数；模型未配置、输入缺失或调用失败时保留规则诊断，不伪造 0 分。该建议只供人工优化智能体，不自动修改提示词、适配器或评测集。
 
 ## 7. 当前未实现或不能作为正式质量结论的指标
 

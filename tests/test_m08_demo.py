@@ -9,7 +9,7 @@ from modules.m08_auto_evaluation import api
 from modules.m08_auto_evaluation.api import _build_evaluation_workbook
 from modules.m08_auto_evaluation.schemas import AdapterTestRequest, ErrorBookUpdateRequest
 from modules.m08_auto_evaluation.services import runner
-from modules.m08_auto_evaluation.services.adapter import MockAdapter, OpenAiCompatibleAdapter
+from modules.m08_auto_evaluation.services.adapter import HttpAdapter, MockAdapter, OpenAiCompatibleAdapter
 from modules.m08_auto_evaluation.services.diagnosis import diagnose
 from modules.m08_auto_evaluation.services.metrics import aggregate, score_case
 from modules.m08_auto_evaluation.services.optimization import build_optimization
@@ -111,6 +111,7 @@ class M08DemoTests(unittest.TestCase):
                 "source": "uploaded",
                 "diagnosis": None,
                 "error_message": None,
+                "agent_observations": {"used_document_tool": True, "sources": ["manual.docx"]},
             }],
         )
         workbook = load_workbook(BytesIO(content), read_only=True, data_only=True)
@@ -120,7 +121,30 @@ class M08DemoTests(unittest.TestCase):
         self.assertEqual(report["F2"].value, 1.0)
         self.assertEqual(report["G2"].value, 0.85)
         self.assertEqual(report["H2"].value, "覆盖标准答案")
+        self.assertEqual(report["Q2"].value, '{"used_document_tool": true, "sources": ["manual.docx"]}')
         self.assertEqual(workbook["运行摘要"]["B3"].value, "#5")
+
+    def test_http_adapter_keeps_answer_and_additional_response_fields(self):
+        adapter = HttpAdapter({
+            "url": "http://agent.example.test/v1/qa",
+            "observation_paths": {"首个来源": "sources.0"},
+        })
+        payload = {
+            "answer": "可用回答",
+            "used_document_tool": True,
+            "sources": ["manual.docx"],
+            "request_id": "req-1",
+        }
+        self.assertEqual(adapter._resolve_path(payload, "answer"), "可用回答")
+        self.assertEqual(
+            adapter._observations(payload),
+            {
+                "used_document_tool": True,
+                "sources": ["manual.docx"],
+                "request_id": "req-1",
+                "首个来源": "manual.docx",
+            },
+        )
 
     def test_multi_turn_usage_accumulates_model_calls(self):
         adapter = _MeasuredAdapter()

@@ -20,11 +20,37 @@ from modules.shared.services.database import DatabaseService
 logger = get_logger(__name__)
 
 
-def _is_generation_ready(eiu: dict) -> bool:
-    return bool(eiu.get("is_questionable")) and (
-        eiu.get("quality_status") == "verified"
-        or eiu.get("review_status") == "quality_verified"
+def _is_generation_ready(eiu: dict, *, allow_manual_override: bool = False) -> bool:
+    """正式批量出题只消费绿色 EIU。
+
+    人工指定纳入仅允许显式单条生成，用于实验或业务确认；它不会被全量自动生成
+    混入，也不改变自动质量结论和正式覆盖口径。
+    """
+    if eiu.get("auto_disposition") == "green":
+        return bool(eiu.get("is_questionable"))
+    if allow_manual_override and eiu.get("auto_disposition") in {"green", "yellow"}:
+        return bool(eiu.get("manual_include"))
+    # 兼容尚未重算的历史数据；新数据必须命中 auto_disposition=green。
+    return (
+        eiu.get("auto_disposition") is None
+        and bool(eiu.get("is_questionable"))
+        and (eiu.get("quality_status") == "verified" or eiu.get("review_status") == "quality_verified")
     )
+
+
+def _default_angles_for_eiu(eiu: dict[str, Any]) -> list[str]:
+    """原子性警告不阻断出题，但默认增加角度以覆盖复合陈述中的独立事实。"""
+    checks = eiu.get("quality_checks") or eiu.get("quality_checks_json") or {}
+    atomicity = checks.get("atomicity") or {}
+    if atomicity.get("status") != "warning":
+        return ["primary"]
+    factors = eiu.get("complexity_factors") or eiu.get("complexity_factors_json") or {}
+    try:
+        predicate_count = int(factors.get("predicate_count") or 0)
+    except (TypeError, ValueError):
+        predicate_count = 0
+    count = max(2, min(3, predicate_count or 2))
+    return ["primary", "condition", "exception"][:count]
 
 
 class PipelineService:
@@ -111,6 +137,7 @@ class PipelineService:
                     result = self._generate_for_eiu_with_angles(
                         eiu,
                         angles=angles,
+                        expand_atomicity=True,
                         include_variations=include_variations,
                         variation_count=variation_count,
                     )
@@ -204,6 +231,7 @@ class PipelineService:
                     result = self._generate_for_eiu_with_angles(
                         eiu,
                         angles=angles,
+                        expand_atomicity=True,
                         include_variations=include_variations,
                         variation_count=variation_count,
                     )
@@ -251,11 +279,12 @@ class PipelineService:
         eiu = self.database.get_eiu(eiu_id)
         if eiu is None:
             raise ValueError("EIU not found")
-        if not _is_generation_ready(eiu):
+        if not _is_generation_ready(eiu, allow_manual_override=True):
             raise ValueError("EIU 尚未通过质量验证，不能生成问答对")
         result = self._generate_for_eiu_with_angles(
             eiu,
             angles=[angle],
+            expand_atomicity=False,
             include_variations=include_variations,
             variation_count=variation_count,
         )
@@ -373,6 +402,59 @@ class PipelineService:
             purpose=purpose,
         )
 
+    def select_cases_for_evaluation(
+        self,
+        *,
+        evaluation_purpose: str,
+        document_id: int | None = None,
+        max_cases: int = 20,
+    ) -> dict[str, Any]:
+        """同一绿色题库按用途选择，不复制知识点或问答对。
+
+        开发自测优先覆盖核心规范意图簇，再在上限内补充；全量测与业务测按
+        已判定的用途适配性筛选。人工试验题不进入正式用途选择。
+        """
+        if evaluation_purpose not in {"developer_smoke", "test_full", "business"}:
+            raise ValueError("未知评测用途")
+        cases = [
+            case for case in self.database.list_generated_cases(document_id=document_id)
+            if not case.get("manual_inclusion")
+            and evaluation_purpose in (case.get("evaluation_profiles") or [])
+        ]
+        if evaluation_purpose != "developer_smoke":
+            return {
+                "purpose": evaluation_purpose,
+                "document_id": document_id,
+                "selection_policy": "按用途适配性选择全部正式绿色题目",
+                "total": len(cases),
+                "cases": cases,
+            }
+
+        # 每个规范意图最多保留一题；P0 优先，再补 P1，避免固定题数随机截断。
+        ordered = sorted(
+            cases,
+            key=lambda case: ({"P0": 0, "P1": 1, "P2": 2}.get(case.get("content_priority"), 3), case["case_id"]),
+        )
+        selected: list[dict] = []
+        covered_intents: set[str] = set()
+        for case in ordered:
+            key = case.get("canonical_intent_key") or f"eiu-{case.get('eiu_id')}"
+            if key in covered_intents:
+                continue
+            selected.append(case)
+            covered_intents.add(key)
+            if len(selected) >= max_cases:
+                break
+        return {
+            "purpose": evaluation_purpose,
+            "document_id": document_id,
+            "selection_policy": "优先覆盖全部核心规则簇；超出上限时按内部重要性排序",
+            "max_cases": max_cases,
+            "total": len(selected),
+            "covered_intent_count": len(covered_intents),
+            "cases": selected,
+        }
+
     def get_case(self, case_id: int) -> dict | None:
         return self.database.get_generated_case(case_id)
 
@@ -467,6 +549,7 @@ class PipelineService:
         eiu: dict[str, Any],
         *,
         angles: list[str] | None,
+        expand_atomicity: bool = True,
         include_variations: bool,
         variation_count: int,
     ) -> dict[str, Any]:
@@ -479,7 +562,11 @@ class PipelineService:
             "variation_case_ids": [],
             "error": None,
         }
-        angle_list = angles or ["primary"]
+        angle_list = angles if angles else _default_angles_for_eiu(eiu)
+        # 现有前端默认显式发送 ["primary"]。批量生成时仍将原子性告警
+        # 扩展为多个单事实角度；单 EIU 手动指定角度则保持用户意图不变。
+        if expand_atomicity and angle_list == ["primary"]:
+            angle_list = _default_angles_for_eiu(eiu)
         for angle in angle_list:
             try:
                 case = self.generator.generate_for_eiu(eiu, angle=angle)
