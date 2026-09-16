@@ -15,19 +15,87 @@ from modules.m08_auto_evaluation.services.intermediate_metrics import (
     normalize_intermediate_config,
 )
 from modules.m08_auto_evaluation.services.judge import evaluate_judge, normalize_judge_config
+from modules.m08_auto_evaluation.services.method_config import (
+    METHOD_LABELS,
+    METHOD_STANDARD_LABELS,
+    normalize_evaluation_selection,
+)
 from modules.m08_auto_evaluation.services.rules import evaluate_rules
+from modules.m08_auto_evaluation.services.text_metrics import (
+    BLEU_PARAMETERS,
+    ROUGE_L_PARAMETERS,
+    score_reference_metric,
+)
 
 
-def score_case(sample: dict, result: dict, judge_config: dict | None = None) -> dict:
+def score_case(
+    sample: dict,
+    result: dict,
+    judge_config: dict | None = None,
+    evaluation_methods: list[str] | None = None,
+    task_profile: str = "question_answering",
+) -> dict:
     """单题分层评分：答案、规则与 LLM Judge 独立计算。"""
     gold = str(sample.get("gold_answer") or "").strip()
     answer = str((result or {}).get("answer") or "").strip()
     error = (result or {}).get("error")
     usage = (result or {}).get("usage") or {}
-    rule_score = None if error else evaluate_rules(sample, answer)
+    legacy = evaluation_methods is None
+    selection = normalize_evaluation_selection(
+        task_profile,
+        evaluation_methods,
+        legacy_judge_enabled=bool((judge_config or {}).get("enabled")),
+    )
+    methods = selection["evaluation_methods"]
+    rule_score = None
+    if not error and "rules" in methods:
+        rule_score = evaluate_rules(sample, answer)
+        if rule_score is None and not legacy:
+            rule_score = {
+                "method": "rules",
+                "status": "data_missing",
+                "score": None,
+                "passed": None,
+                "reason": "评测样本未提供 must_have_points 或 acceptable_answers",
+            }
+    judge_config = dict(judge_config or {})
+    judge_config["enabled"] = "llm_as_judge" in methods
     judge_score = None if error else evaluate_judge(sample, result or {}, judge_config)
+    reference_metrics = {
+        method: score_reference_metric(method, sample, answer)
+        for method in ("bleu", "rouge_l")
+        if method in methods and not error
+    }
     if error:
-        return {
+        if not legacy and "rules" in methods:
+            rule_score = {
+                "method": "rules",
+                "status": "error",
+                "score": None,
+                "passed": None,
+                "reason": "目标智能体调用失败，未执行规则评测",
+            }
+        if not legacy and "llm_as_judge" in methods:
+            judge_score = {
+                "method": "llm_as_judge",
+                "status": "error",
+                "score": None,
+                "passed": None,
+                "reason": "目标智能体调用失败，未执行 Judge 评测",
+            }
+        reference_metrics = {
+            method: {
+                "method": method,
+                "status": "error",
+                "score": None,
+                "reason": "目标智能体调用失败，未执行文本指标",
+                "parameters": dict(BLEU_PARAMETERS if method == "bleu" else ROUGE_L_PARAMETERS),
+            }
+            for method in ("bleu", "rouge_l")
+            if method in methods
+        }
+    if error:
+        scores = {
             "em": None,
             "score": None,
             "method": None,
@@ -39,8 +107,12 @@ def score_case(sample: dict, result: dict, judge_config: dict | None = None) -> 
             "cost": usage.get("cost"),
             "error": error,
         }
-    if not gold:
-        return {
+        scores.update(reference_metrics)
+        if "answer_comparison" in methods:
+            scores["answer_comparison"] = {"status": "error", "score": None}
+        return scores
+    if "answer_comparison" not in methods or not gold:
+        scores = {
             "em": None,
             "score": None,
             "method": None,
@@ -52,9 +124,17 @@ def score_case(sample: dict, result: dict, judge_config: dict | None = None) -> 
             "cost": usage.get("cost"),
             "error": None,
         }
+        if "answer_comparison" in methods:
+            scores["answer_comparison"] = {
+                "status": "data_missing",
+                "score": None,
+                "reason": "评测样本未提供标准答案",
+            }
+        scores.update(reference_metrics)
+        return scores
     use_semantic = len(gold) > 30
     scoring = score_answer(answer, gold, use_semantic=use_semantic)
-    return {
+    scores = {
         "em": scoring["exact_match"],
         "score": scoring["score"],
         "method": scoring["method"],
@@ -65,13 +145,23 @@ def score_case(sample: dict, result: dict, judge_config: dict | None = None) -> 
         "tokens": usage.get("tokens"),
         "cost": usage.get("cost"),
         "error": None,
+        "answer_comparison": {
+            "status": "scored",
+            "method": scoring["method"],
+            "score": scoring["score"],
+            "exact_match": scoring["exact_match"],
+        },
     }
+    scores.update(reference_metrics)
+    return scores
 
 
 def aggregate(
     results: list[dict],
     intermediate_config: dict | None = None,
     judge_config: dict | None = None,
+    task_profile: str | None = None,
+    evaluation_methods: list[str] | None = None,
 ) -> dict:
     """运行结果汇总：主评分、规则、Judge、按难度/维度分组、耗时成本和错误率。"""
     scored = [r for r in results if r.get("scores") and r["scores"].get("score") is not None]
@@ -118,8 +208,41 @@ def aggregate(
             dim_bucket["passed"] += 1
     normalized_intermediate = normalize_intermediate_config(intermediate_config)
     normalized_judge = normalize_judge_config(judge_config) if judge_config is not None else None
+    selection = normalize_evaluation_selection(
+        task_profile,
+        evaluation_methods,
+        legacy_judge_enabled=bool(normalized_judge and normalized_judge["enabled"]),
+    )
+    reference_metric_summaries: dict[str, dict] = {}
+    for method in ("bleu", "rouge_l"):
+        if method not in selection["evaluation_methods"]:
+            continue
+        method_results = [((result.get("scores") or {}).get(method) or {}) for result in results]
+        values = [
+            float(item["score"])
+            for item in method_results
+            if item.get("status") == "scored" and item.get("score") is not None
+        ]
+        statuses = Counter(item.get("status", "data_missing") for item in method_results)
+        status = (
+            "scored" if values else "error" if statuses.get("error")
+            else "unavailable" if statuses.get("unavailable") else "data_missing"
+        )
+        reference_metric_summaries[method] = {
+            "label": METHOD_LABELS[method],
+            "standard": METHOD_STANDARD_LABELS[method],
+            "status": status,
+            "score": round(sum(values) / len(values), 4) if values else None,
+            "scored": len(values),
+            "total": len(results),
+            "data_missing": statuses.get("data_missing", 0),
+            "unavailable": statuses.get("unavailable", 0),
+            "errors": statuses.get("error", 0),
+        }
     return {
         "total": len(results),
+        "task_profile": selection["task_profile"],
+        "evaluation_methods": selection["evaluation_methods"],
         "scored": len(scored),
         "passed": len(passed),
         "passed_rate": round(len(passed) / len(scored), 4) if scored else None,
@@ -138,6 +261,7 @@ def aggregate(
         "total_latency_ms": total_latency,
         "total_tokens": total_tokens,
         "total_cost": round(total_cost, 4),
+        "reference_metrics": reference_metric_summaries,
         "intermediate": aggregate_intermediate(
             results,
             normalized_intermediate["nodes"],

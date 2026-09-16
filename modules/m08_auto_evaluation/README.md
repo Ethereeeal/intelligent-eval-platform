@@ -64,7 +64,7 @@ modules/m08_auto_evaluation/
 ## 4. 运行与指标
 
 ```
-POST /api/evaluation-runs {composition_id, adapter, adapter_config, intermediate_eval?, judge_eval?}
+POST /api/evaluation-runs {composition_id, adapter, adapter_config, task_profile?, evaluation_methods?, intermediate_eval?, judge_eval?}
   → 组合解析为统一输入样本（m05 composition.resolve_composition；文档生成来源必须是 frozen 版本）
   → 异步线程逐题调用适配器
   → score_case（短答案精确匹配 / 长答案语义相似度，并独立执行评测集约束规则与可选 Judge）
@@ -80,7 +80,7 @@ POST /api/evaluation-runs {composition_id, adapter, adapter_config, intermediate
 - 规则评测不调用模型，也不从 `gold_answer` 自动猜测规则；仅消费评测集已有的 `must_have_points` 和 `acceptable_answers` 字段。
 - `must_have_points` 中的每个要点都必须在智能体回答中命中；当前使用规范化后的文本包含判断。
 - `acceptable_answers` 中只要有一个完整答案与智能体回答规范化后精确一致即可命中。
-- 两类字段为空时跳过对应检查；没有任何约束时，结果不生成 `scores.rule`。
+- 两类字段为空时跳过对应检查；显式选择规则评测但样本没有约束时返回 `data_missing`，历史旧请求保持跳过规则字段的兼容行为。
 - 规则结果写入每条结果的 `scores.rule`，并在运行汇总中单独返回 `rule_scored`、`rule_passed`、`rule_passed_rate`，不覆盖既有 `scores.score` 和通过/失败状态。
 - 规则未通过时会保留缺失要点和命中答案下标，方便结果详情和 Excel 报告追溯；调用异常不会被算成规则失败。
 - 单题结果详情会展开显示已选中间节点的标准/参考值、实际输出和指标；`rewrite` 展示标准改写与实际改写，`intent` 展示标准意图与预测意图，`rag` 展示四项 RAGAS 指标及实际检索片段。规则评测另外展示每个必答要点的命中状态、缺失列表和要点 Recall。
@@ -116,7 +116,17 @@ Judge 配置示例：
 `intermediate_eval` 缺省或关闭时完全沿用旧的最终答案评测流程。每条结果的中间分数写入
 `scores.intermediate`，运行选择写入 `evaluation_run.intermediate_eval`；历史运行缺少该字段时按关闭处理。
 
-### 4.1 中间节点评测口径
+### 4.1 任务类型、评测方法与报告
+
+- `task_profile` 为单次运行选择：`question_answering`（默认）、`translation`、`text_generation`；混合任务拆分为多次运行。
+- `evaluation_methods` 多选并行，支持 `answer_comparison`、`rules`、`llm_as_judge`、`bleu`、`rouge_l`。缺省请求按旧流程启用标准答案比对和规则评测，并在旧 `judge_eval.enabled=true` 时启用 Judge；显式选择 BLEU / ROUGE-L 时必须分别匹配翻译 / 文本生成任务。
+- BLEU、ROUGE-L 需有实际回答与标准参考文本；`gold_answer` 和 `acceptable_answers` 作为可用参考。缺少数据返回 `data_missing` 和空分，不记作 0。BLEU 使用 1–4 阶可用 n-gram 等权、加一平滑、长度惩罚；ROUGE-L 使用最长公共子序列、β=1。文本按 CJK 单字与其他语言词语切分、忽略标点，参数随单题分数与 Excel 报告导出。
+- Accuracy、Precision、Recall、Micro-F1、BLEU、ROUGE-L 标注为 GB/T 45288.2—2025 附录 A.1 公式；LLM-as-a-Judge 标注为第 6.5(c) 提及的评测方法而非国标指标。语义相似度、规则评测、RAGAS、Macro-F1 与改写约束指标标为项目方法/扩展。国标标注仅说明引用关系，不代表项目已获标准符合性认证；人工 MOS 暂不实现。
+- 意图节点汇总 Accuracy、Micro-Precision/Recall/F1、Macro-F1、分类别 Precision/Recall/F1 与混淆矩阵；单标签多分类下三项 Micro 指标等于 Accuracy。
+- 运行配置随评测记录持久化，并由重跑和单题复测沿用。旧运行缺少新增字段时按通用问答、原答案比对/规则行为兼容。结果汇总返回任务类型、所选方法、文本指标均值和节点指标。
+- Excel 包含逐题方法结果、运行配置、指标汇总及意图类别明细；列明适用样本数、标准标注和 BLEU/ROUGE-L 参数，不导出适配器密钥。
+
+### 4.2 中间节点评测口径
 
 中间节点评测是一次运行的附加评测，不改变最终答案的通过/失败判定。前端只让用户选择是否启用以及节点类型；选中节点后使用以下固定指标：
 

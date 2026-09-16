@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections import defaultdict
+from collections import Counter, defaultdict
 from typing import Any
 
 from modules.m05_dataset_lifecycle.services.scoring import score_answer
@@ -299,7 +299,17 @@ def _f1(precision: float, recall: float) -> float:
 def _classification_aggregate(items: list[dict]) -> dict:
     scored = [item for item in items if item.get("status") == "scored"]
     if not scored:
-        return {"status": "data_missing", "accuracy": None, "macro_f1": None, "by_label": {}, "confusion": {}}
+        return {
+            "status": "data_missing",
+            "accuracy": None,
+            "micro_precision": None,
+            "micro_recall": None,
+            "micro_f1": None,
+            "macro_f1": None,
+            "by_label": {},
+            "confusion": {},
+            "scored": 0,
+        }
     labels = sorted({item["reference"] for item in scored} | {item["predicted"] for item in scored})
     by_label: dict[str, dict] = {}
     confusion: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
@@ -320,9 +330,14 @@ def _classification_aggregate(items: list[dict]) -> dict:
             "f1": round(f1, 4),
             "support": tp + fn,
         }
+    accuracy = round(sum(item["correct"] for item in scored) / len(scored), 4)
     return {
         "status": "scored",
-        "accuracy": round(sum(item["correct"] for item in scored) / len(scored), 4),
+        "accuracy": accuracy,
+        # 单标签多分类中，micro P/R/F1 均等于总体正确率。
+        "micro_precision": accuracy,
+        "micro_recall": accuracy,
+        "micro_f1": accuracy,
         "macro_f1": round(sum(f1_values) / len(f1_values), 4),
         "by_label": by_label,
         "confusion": {key: dict(value) for key, value in confusion.items()},
@@ -343,6 +358,7 @@ def aggregate_intermediate(results: list[dict], nodes: list[str]) -> dict:
             output[node] = _classification_aggregate(items)
             continue
         scored = [item for item in items if item.get("status") == "scored"]
+        status_counts = Counter(item.get("status") or "data_missing" for item in items)
         if node == "rewrite":
             fields = ["semantic_similarity", "constraint_precision", "constraint_recall", "constraint_f1"]
         else:
@@ -353,8 +369,14 @@ def aggregate_intermediate(results: list[dict], nodes: list[str]) -> dict:
             values = [float(item[field]) for item in items if item.get(field) is not None]
             if values:
                 summary[field] = round(sum(values) / len(values), 4)
-        summary["status"] = "scored" if scored else "data_missing"
+        summary["status"] = (
+            "scored" if scored else "error" if status_counts.get("error")
+            else "unavailable" if status_counts.get("unavailable") else "data_missing"
+        )
         summary["scored"] = len(scored)
+        summary["data_missing"] = status_counts.get("data_missing", 0)
+        summary["unavailable"] = status_counts.get("unavailable", 0)
+        summary["errors"] = status_counts.get("error", 0)
         if node == "rewrite":
             complete = [
                 item.get("full_constraint_preservation")

@@ -30,6 +30,10 @@ class EvaluationRunRequest(BaseModel):
     name: str | None = None
     adapter: str = "mock"
     adapter_config: dict | None = None
+    task_profile: Literal["question_answering", "translation", "text_generation"] = "question_answering"
+    evaluation_methods: list[
+        Literal["answer_comparison", "rules", "llm_as_judge", "bleu", "rouge_l"]
+    ] | None = None
     intermediate_eval: IntermediateEvalConfig = Field(default_factory=IntermediateEvalConfig)
     judge_eval: JudgeEvalConfig = Field(default_factory=JudgeEvalConfig)
 

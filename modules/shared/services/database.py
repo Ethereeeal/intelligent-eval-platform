@@ -522,6 +522,10 @@ class DatabaseService:
                     conn.execute(text("ALTER TABLE evaluation_run ADD COLUMN intermediate_eval JSON NULL"))
                 if "judge_eval" not in run_cols:
                     conn.execute(text("ALTER TABLE evaluation_run ADD COLUMN judge_eval JSON NULL"))
+                if "task_profile" not in run_cols:
+                    conn.execute(text("ALTER TABLE evaluation_run ADD COLUMN task_profile VARCHAR(40) NULL"))
+                if "evaluation_methods" not in run_cols:
+                    conn.execute(text("ALTER TABLE evaluation_run ADD COLUMN evaluation_methods JSON NULL"))
         if "error_book_item" in inspector.get_table_names():
             error_cols = {c["name"] for c in inspector.get_columns("error_book_item")}
             with engine.begin() as conn:
@@ -2888,6 +2892,8 @@ class DatabaseService:
         adapter_config: dict | None = None,
         intermediate_eval: dict | None = None,
         judge_eval: dict | None = None,
+        task_profile: str = "question_answering",
+        evaluation_methods: list[str] | None = None,
     ) -> int:
         with SessionLocal() as session:
             row = EvaluationRunRow(
@@ -2897,6 +2903,8 @@ class DatabaseService:
                 adapter_config=adapter_config,
                 intermediate_eval=intermediate_eval,
                 judge_eval=judge_eval,
+                task_profile=task_profile,
+                evaluation_methods=evaluation_methods,
             )
             session.add(row)
             session.commit()
@@ -3075,6 +3083,14 @@ class DatabaseService:
     @staticmethod
     def _evaluation_run_to_dict(row: "EvaluationRunRow") -> dict:
         adapter_config = dict(row.adapter_config or {})
+        judge_eval = row.judge_eval or {"enabled": False, "prompt": "", "include_history": False, "include_intermediate": False, "include_retrieved": False}
+        evaluation_methods = (
+            list(row.evaluation_methods)
+            if row.evaluation_methods is not None
+            else ["answer_comparison", "rules"]
+        )
+        if row.evaluation_methods is None and judge_eval.get("enabled"):
+            evaluation_methods.append("llm_as_judge")
         # 安全：不回显 API Key 等敏感配置
         if "api_key" in adapter_config:
             adapter_config["api_key"] = "***"
@@ -3084,8 +3100,10 @@ class DatabaseService:
             "name": row.name,
             "adapter": row.adapter,
             "adapter_config": adapter_config,
+            "task_profile": row.task_profile or "question_answering",
+            "evaluation_methods": evaluation_methods,
             "intermediate_eval": row.intermediate_eval or {"enabled": False, "nodes": []},
-            "judge_eval": row.judge_eval or {"enabled": False, "prompt": "", "include_history": False, "include_intermediate": False, "include_retrieved": False},
+            "judge_eval": judge_eval,
             "status": row.status,
             "progress": row.progress,
             "total": row.total,
@@ -3311,6 +3329,8 @@ class EvaluationRunRow(Base):
     adapter_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     intermediate_eval: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     judge_eval: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    task_profile: Mapped[str | None] = mapped_column(String(40), nullable=True, default="question_answering")
+    evaluation_methods: Mapped[list | None] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
     progress: Mapped[int] = mapped_column(Integer, default=0)
     total: Mapped[int] = mapped_column(Integer, default=0)

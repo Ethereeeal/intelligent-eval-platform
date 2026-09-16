@@ -12,7 +12,17 @@
     renderedRunId: null,
     renderedResultsSignature: null,
     pollTimer: null,
+    taskProfile: "question_answering",
+    evaluationMethods: ["answer_comparison", "rules"],
+    intermediateNodes: [],
+    judgePrompt: "",
+    judgeContext: { history: false, intermediate: false, retrieved: false },
+    summary: {},
   };
+  state.taskProfile ||= "question_answering";
+  state.evaluationMethods ||= ["answer_comparison", "rules"];
+  state.intermediateNodes ||= [];
+  state.judgeContext ||= { history: false, intermediate: false, retrieved: false };
   const $w = () => document.getElementById("evWorkspace");
   const post = async (path, body) => {
     const r = await fetch(API_BASE + path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -72,6 +82,108 @@
     : run.status === "failed" ? `<span class="tw-count" style="color:#c0392b;background:rgba(192,57,43,.12)">失败</span>`
     : `<span class="tw-count">${esc(runStatusLabel(run.status))}</span>`;
 
+  const taskProfileLabels = { question_answering: "通用问答", translation: "翻译", text_generation: "文本生成" };
+  const methodOptions = [
+    { id: "answer_comparison", label: "标准答案比对", note: "短答案精确匹配；长答案语义相似度", standard: "项目方法" },
+    { id: "rules", label: "规则评测", note: "读取 must_have_points / acceptable_answers", standard: "项目方法" },
+    { id: "llm_as_judge", label: "LLM-as-a-Judge", note: "使用自定义规则提示词进行判定", standard: "GB/T 45288.2—2025 第 6.5(c)（评测方法，非指标）" },
+    { id: "bleu", label: "BLEU", note: "仅翻译任务可选；需要标准参考文本", standard: "GB/T 45288.2—2025 附录 A.1.5" },
+    { id: "rouge_l", label: "ROUGE-L", note: "仅文本生成任务可选；需要标准参考文本", standard: "GB/T 45288.2—2025 附录 A.1.6" },
+  ];
+  const nodeOptions = [
+    { id: "rewrite", label: "改写", note: "语义相似度；有约束标注时计算约束保持率及 P/R/F1" },
+    { id: "intent", label: "意图识别", note: "Accuracy、Micro/Macro-F1、分类别 P/R/F1、混淆矩阵" },
+    { id: "rag", label: "RAG", note: "RAGAS：Context Precision / Recall、Faithfulness、Answer Relevancy" },
+  ];
+
+  function evaluationControlsHTML() {
+    const profile = state.taskProfile || "question_answering";
+    const compatible = method => method === "bleu" ? profile === "translation"
+      : method === "rouge_l" ? profile === "text_generation" : true;
+    const selected = new Set(state.evaluationMethods || []);
+    const methods = methodOptions.map(item => {
+      const disabled = !compatible(item.id);
+      const checked = !disabled && selected.has(item.id);
+      return `<label class="ev-choice ${disabled ? "disabled" : ""}"><input type="checkbox" name="evMethod" value="${item.id}" ${checked ? "checked" : ""} ${disabled ? "disabled" : ""}/><span><b>${item.label}</b><small>${item.note}</small><em>${item.standard}</em></span></label>`;
+    }).join("");
+    const nodes = nodeOptions.map(item => `<label class="ev-choice"><input type="checkbox" name="evNode" value="${item.id}" ${(state.intermediateNodes || []).includes(item.id) ? "checked" : ""}/><span><b>${item.label}</b><small>${item.note}</small></span></label>`).join("");
+    const judgeEnabled = selected.has("llm_as_judge");
+    return `<div class="ev-eval-config-grid">
+      <label class="es-field">本次任务类型<select class="es-input" id="evTaskProfile">${Object.entries(taskProfileLabels).map(([value, label]) => `<option value="${value}" ${profile === value ? "selected" : ""}>${label}</option>`).join("")}</select><small>一次运行只选择一种任务类型；混合任务请拆分运行。</small></label>
+      <div class="ev-eval-group"><div class="ev-eval-group-title">评测方法 <small>可多选，并行输出独立结果</small></div><div class="ev-choice-grid">${methods}</div></div>
+      <div class="ev-eval-group"><div class="ev-eval-group-title">中间过程节点 <small>可选；选中节点后使用固定指标组</small></div><div class="ev-choice-grid">${nodes}</div></div>
+    </div>
+    <div id="evJudgeFields" class="ev-judge-fields" ${judgeEnabled ? "" : "hidden"}>
+      <label class="es-field">Judge 评测规则<textarea class="es-input" id="evJudgePrompt" rows="4" maxlength="10000" placeholder="写清楚判定标准、通过条件和评分规则"></textarea></label>
+      <div class="ev-judge-context"><span>附加输入（按需勾选）</span><label><input type="checkbox" id="evJudgeHistory"/>多轮历史</label><label><input type="checkbox" id="evJudgeIntermediate"/>中间节点结果</label><label><input type="checkbox" id="evJudgeRetrieved"/>检索结果</label></div>
+    </div>
+    <p class="ev-standard-note">带“GB/T 45288.2—2025”标记的是引用标准公式或条文；该标注不表示本项目已通过国标认证。人工 MOS 评测暂未纳入。</p>`;
+  }
+
+  function bindEvaluationControls() {
+    const host = document.getElementById("evEvaluationControls");
+    if (!host) return;
+    const previousPrompt = host.querySelector("#evJudgePrompt");
+    const previousContext = {
+      history: host.querySelector("#evJudgeHistory")?.checked,
+      intermediate: host.querySelector("#evJudgeIntermediate")?.checked,
+      retrieved: host.querySelector("#evJudgeRetrieved")?.checked,
+    };
+    if (previousPrompt) state.judgePrompt = previousPrompt.value;
+    for (const key of Object.keys(previousContext)) {
+      if (previousContext[key] !== undefined) state.judgeContext[key] = previousContext[key];
+    }
+    host.innerHTML = evaluationControlsHTML();
+    const promptInput = host.querySelector("#evJudgePrompt");
+    if (promptInput) {
+      promptInput.value = state.judgePrompt || "";
+      promptInput.oninput = () => { state.judgePrompt = promptInput.value; };
+    }
+    for (const key of Object.keys(state.judgeContext)) {
+      const input = host.querySelector(`#evJudge${key[0].toUpperCase()}${key.slice(1)}`);
+      if (input) {
+        input.checked = Boolean(state.judgeContext[key]);
+        input.onchange = () => { state.judgeContext[key] = input.checked; };
+      }
+    }
+    host.querySelector("#evTaskProfile").onchange = event => {
+      state.taskProfile = event.target.value;
+      state.evaluationMethods = (state.evaluationMethods || []).filter(method =>
+        (method !== "bleu" || state.taskProfile === "translation")
+        && (method !== "rouge_l" || state.taskProfile === "text_generation"),
+      );
+      bindEvaluationControls();
+    };
+    host.querySelectorAll("input[name=evMethod]").forEach(input => input.onchange = () => {
+      state.evaluationMethods = [...host.querySelectorAll("input[name=evMethod]:checked")].map(item => item.value);
+      bindEvaluationControls();
+    });
+    host.querySelectorAll("input[name=evNode]").forEach(input => input.onchange = () => {
+      state.intermediateNodes = [...host.querySelectorAll("input[name=evNode]:checked")].map(item => item.value);
+    });
+  }
+
+  function readEvaluationControls() {
+    const methods = [...document.querySelectorAll("input[name=evMethod]:checked")].map(item => item.value);
+    const nodes = [...document.querySelectorAll("input[name=evNode]:checked")].map(item => item.value);
+    if (!methods.length && !nodes.length) throw new Error("至少选择一种评测方法或一个中间过程节点");
+    const judgeEnabled = methods.includes("llm_as_judge");
+    const prompt = document.getElementById("evJudgePrompt")?.value.trim() || "";
+    if (judgeEnabled && !prompt) throw new Error("选择 LLM-as-a-Judge 后，请填写评测规则");
+    return {
+      task_profile: document.getElementById("evTaskProfile").value,
+      evaluation_methods: methods,
+      intermediate_eval: { enabled: nodes.length > 0, nodes },
+      judge_eval: {
+        enabled: judgeEnabled,
+        prompt: judgeEnabled ? prompt : "",
+        include_history: judgeEnabled && Boolean(document.getElementById("evJudgeHistory")?.checked),
+        include_intermediate: judgeEnabled && Boolean(document.getElementById("evJudgeIntermediate")?.checked),
+        include_retrieved: judgeEnabled && Boolean(document.getElementById("evJudgeRetrieved")?.checked),
+      },
+    };
+  }
+
   function shell(content, sideExtra) {
     $w().innerHTML = `<div class="ev-layout"><aside class="ev-side"><button class="ev-side-item ${state.tab === "config" ? "on" : ""}" data-ev-tab="config"><i data-lucide="sliders-horizontal"></i><span>评测配置</span></button><button class="ev-side-item ${state.tab === "results" ? "on" : ""}" data-ev-tab="results"><i data-lucide="chart-no-axes-combined"></i><span>评测结果</span></button>${sideExtra || ""}</aside><div class="ev-main">${content}</div></div>`;
     icons();
@@ -125,6 +237,7 @@
     shell(`<div class="card card-pad"><div class="ev-config-head"><div><div class="card-t">请求体设置</div><p>配置可保存为浏览器内的复用模板，密钥和 Header 值不会保存。</p></div><div class="ev-profile-actions"><select class="es-input" id="evProfile"><option value="">选择已保存配置</option>${profiles.map(item => `<option value="${esc(item.id)}">${esc(item.name)}</option>`).join("")}</select><button class="btn ghost" id="evSaveProfile"><i data-lucide="save"></i>保存配置</button><button class="btn ghost" id="evTestAdapter"><i data-lucide="plug-zap"></i>测试通路</button></div></div><div class="ev-call-types" id="evCallTypes"><button class="on" data-adapter="openai_compatible">OpenAI 兼容接口</button><button data-adapter="http">通用 HTTP</button><button data-adapter="mock">Mock 演示</button></div>
       <div id="evAdapterFields"></div></div>
       <div class="card card-pad ev-section"><div class="card-t">选择评测集</div><p class="es-gen-hint">评测库同时展示冻结版本和已创建的组合；冻结版本首次发起评测时会自动登记为可执行组合。</p><div class="ev-set-actions"><button class="btn ghost" id="evCreateSet"><i data-lucide="combine"></i>创建 / 合并评测集</button></div><div class="ev-compositions">${sourceRows || `<div class="es-gen-hint">暂无已冻结的评测集，请先生成并冻结评测集。</div>`}</div></div>
+      <div class="card card-pad ev-section"><div class="card-t">评测方法与中间节点</div><div id="evEvaluationControls"></div></div>
       <div class="ev-run-foot"><label class="es-field">运行名称（可选）</label><input class="es-input" id="evRunName" placeholder="例如：客服智能体 v0.1 回归测试"/><button class="btn primary" id="evStart"><i data-lucide="play"></i>发起评测</button></div>`);
     // Demo 不提供 Mock 入口；评测集以可展开的“评测库”目录展示。
     document.querySelector('[data-adapter="mock"]').remove();
@@ -136,6 +249,7 @@
     folder.onclick = () => { const closed = compositionBox.classList.toggle("collapsed"); folder.querySelector("svg").setAttribute("data-lucide", closed ? "chevron-right" : "chevron-down"); icons(); };
     const nameInput = document.getElementById("evRunName");
     nameInput.previousElementSibling.remove(); nameInput.remove();
+    bindEvaluationControls();
     setAdapter(state.draftAdapter || "openai_compatible");
     if (state.draftConfig) applyAdapterConfig(state.adapter, state.draftConfig);
     document.querySelectorAll("#evCallTypes button").forEach(b => b.onclick = () => setAdapter(b.dataset.adapter));
@@ -237,6 +351,13 @@
   async function start() {
     const selectedSource = state.selectedSource || (state.compositionId ? { kind: "composition", compositionId: Number(state.compositionId) } : null);
     if (!selectedSource) return toast("请先从评测库选择一个评测集");
+    let evaluationConfig, requestConfig;
+    try {
+      evaluationConfig = readEvaluationControls();
+      requestConfig = adapterConfig();
+    } catch (error) {
+      return toast(error.message);
+    }
     try {
       const [compositionsResponse, versionsResponse] = await Promise.all([
         apiGet("/api/compositions"),
@@ -269,11 +390,11 @@
         composition = compositions.find(item => Number(item.composition_id) === Number(selectedSource.compositionId));
       }
       if (!composition) return toast("所选评测集版本不存在，请重新选择");
-      openRunConfirmation(composition, adapterConfig());
+      openRunConfirmation(composition, requestConfig, evaluationConfig);
     } catch (e) { toast("发起失败：" + e.message); }
   }
 
-  function openRunConfirmation(composition, config) {
+  function openRunConfirmation(composition, config, evaluationConfig) {
     const modal = document.createElement("div");
     modal.className = "modal-mask";
     const adapterLabel = state.adapter === "http" ? "通用 HTTP" : "OpenAI 兼容接口";
@@ -307,6 +428,7 @@
           <section class="ev-confirm-card"><div class="ev-confirm-label">请求配置</div><b>${esc(adapterLabel)}</b><pre>${esc(JSON.stringify(requestSummary, null, 2))}</pre></section>
           <section class="ev-confirm-card"><div class="ev-confirm-label">可执行评测集</div><b>${esc(composition.name || `评测集 #${composition.composition_id}`)}</b><dl><div><dt>版本</dt><dd>#${composition.composition_id}</dd></div><div><dt>来源数</dt><dd>${Array.isArray(composition.items) ? composition.items.length : 0}</dd></div><div><dt>创建时间</dt><dd>${esc(formatDateTime(composition.created_at))}</dd></div></dl></section>
         </div>
+        <section class="ev-confirm-card ev-confirm-evaluation"><div class="ev-confirm-label">本次评测方案</div><dl><div><dt>任务类型</dt><dd>${esc(taskProfileLabels[evaluationConfig.task_profile])}</dd></div><div><dt>评测方法</dt><dd>${esc(evaluationConfig.evaluation_methods.map(id => methodOptions.find(item => item.id === id)?.label || id).join("、") || "无")}</dd></div><div><dt>中间节点</dt><dd>${esc(evaluationConfig.intermediate_eval.nodes.map(id => nodeOptions.find(item => item.id === id)?.label || id).join("、") || "未启用")}</dd></div><div><dt>Judge附加输入</dt><dd>${esc([["include_history", "多轮历史"], ["include_intermediate", "中间节点结果"], ["include_retrieved", "检索结果"]].filter(([key]) => evaluationConfig.judge_eval[key]).map(([, label]) => label).join("、") || "无")}</dd></div></dl></section>
         <p class="ev-confirm-note"><i data-lucide="shield-check"></i>密钥及请求头敏感值仅以掩码展示，不会写入评测报告。</p>
       </div>
       <div class="modal-foot"><button class="btn ghost modal-cancel">返回修改</button><button class="btn primary" id="evConfirmStart"><i data-lucide="play"></i>确认发起</button></div>
@@ -324,7 +446,13 @@
       button.disabled = true;
       button.innerHTML = '<span class="spinner"></span>正在发起';
       try {
-        const run = await post("/api/evaluation-runs", { composition_id: state.compositionId, name, adapter: state.adapter, adapter_config: config });
+        const run = await post("/api/evaluation-runs", {
+          composition_id: state.compositionId,
+          name,
+          adapter: state.adapter,
+          adapter_config: config,
+          ...evaluationConfig,
+        });
         state.runId = run.run_id;
         state.tab = "results";
         close();
@@ -353,7 +481,75 @@
 
   function metrics(rows) {
     const stat = analysisStats(rows);
-    return `<div id="evAnalysisMetrics" class="ev-kpis"><div><span class="ev-kpi-ic"><i data-lucide="badge-check"></i></span><small>分析通过率</small><b>${stat.scored ? Math.round(stat.passed / stat.scored * 100) : 0}%</b><em>${stat.passed}/${stat.scored} 道已评分题</em></div><div><span class="ev-kpi-ic"><i data-lucide="chart-spline"></i></span><small>平均得分</small><b>${stat.averageScore == null ? "—" : Math.round(stat.averageScore * 100)}</b><em>按当前分析阈值 ${state.threshold.toFixed(2)}</em></div><div><span class="ev-kpi-ic"><i data-lucide="circle-alert"></i></span><small>调用异常</small><b>${stat.errors}</b><em>${stat.low} 道答案未通过</em></div><div><span class="ev-kpi-ic"><i data-lucide="timer"></i></span><small>P95 耗时</small><b>${stat.p95 == null ? "—" : Math.round(stat.p95) + " ms"}</b><em>${stat.total} 道原始结果</em></div></div>`;
+    return `<div id="evAnalysisMetrics" class="ev-kpis"><div><span class="ev-kpi-ic"><i data-lucide="badge-check"></i></span><small>答案比对通过率</small><b>${stat.scored ? Math.round(stat.passed / stat.scored * 100) + "%" : "—"}</b><em>${stat.passed}/${stat.scored} 道有标准答案比对结果</em></div><div><span class="ev-kpi-ic"><i data-lucide="chart-spline"></i></span><small>答案比对平均分</small><b>${stat.averageScore == null ? "—" : Math.round(stat.averageScore * 100)}</b><em>按当前分析阈值 ${state.threshold.toFixed(2)}</em></div><div><span class="ev-kpi-ic"><i data-lucide="circle-alert"></i></span><small>调用异常</small><b>${stat.errors}</b><em>${stat.low} 道答案未通过</em></div><div><span class="ev-kpi-ic"><i data-lucide="timer"></i></span><small>P95 耗时</small><b>${stat.p95 == null ? "—" : Math.round(stat.p95) + " ms"}</b><em>${stat.total} 道原始结果</em></div></div>`;
+  }
+
+  const metricValue = value => value == null || !Number.isFinite(Number(value)) ? "不适用" : `${(Number(value) * 100).toFixed(1)}%`;
+  const metricStatusLabel = value => ({ scored: "已计算", data_missing: "不适用：缺少数据", unavailable: "不可用：依赖或模型未配置", error: "计算失败", not_selected: "未选择" })[value] || "未计算";
+  const methodNames = methods => (methods || []).map(id => methodOptions.find(item => item.id === id)?.label || id);
+  const selectedNodeNames = nodes => (nodes || []).map(id => nodeOptions.find(item => item.id === id)?.label || id);
+
+  function evaluationReportSummaryHTML(run, summary) {
+    if (!run) return "";
+    const methods = run.evaluation_methods || ["answer_comparison", "rules"];
+    const nodes = run.intermediate_eval?.enabled ? run.intermediate_eval.nodes || [] : [];
+    const judge = run.judge_eval || {};
+    const optionalInputs = [
+      [judge.include_history, "多轮历史"],
+      [judge.include_intermediate, "中间节点结果"],
+      [judge.include_retrieved, "检索结果"],
+    ].filter(([enabled]) => enabled).map(([, label]) => label);
+    const methodCards = [];
+    if (methods.includes("answer_comparison")) {
+      const scored = state.results.filter(item => item.scores?.score != null);
+      const average = scored.length ? scored.reduce((total, item) => total + Number(item.scores.score), 0) / scored.length : null;
+      methodCards.push(`<div class="ev-eval-result-card"><div><b>标准答案比对</b><span class="ev-standard-tag project">项目方法</span></div><strong>${metricValue(average)}</strong><small>${scored.length}/${state.results.length} 题有结果</small></div>`);
+    }
+    if (methods.includes("rules")) methodCards.push(`<div class="ev-eval-result-card"><div><b>规则评测通过率</b><span class="ev-standard-tag project">项目方法</span></div><strong>${metricValue(summary.rule_passed_rate)}</strong><small>${summary.rule_scored || 0}/${state.results.length} 题有可用规则标注</small></div>`);
+    if (methods.includes("llm_as_judge")) methodCards.push(`<div class="ev-eval-result-card"><div><b>LLM-as-a-Judge通过率</b><span class="ev-standard-tag method">标准方法</span></div><strong>${metricValue(summary.judge_passed_rate)}</strong><small>${summary.judge_scored || 0}/${state.results.length} 题完成 · GB/T 45288.2—2025 第 6.5(c)，非指标</small></div>`);
+    for (const id of ["bleu", "rouge_l"]) {
+      if (!methods.includes(id)) continue;
+      const item = summary.reference_metrics?.[id] || {};
+      const option = methodOptions.find(method => method.id === id);
+      const parameters = state.results.map(result => result.scores?.[id]?.parameters).find(Boolean);
+      const parameterDetails = parameters
+        ? `<details class="ev-report-params"><summary>查看计算参数</summary><pre>${esc(JSON.stringify(parameters, null, 2))}</pre></details>`
+        : "";
+      methodCards.push(`<div class="ev-eval-result-card"><div><b>${option?.label || id}</b><span class="ev-standard-tag national">国标公式</span></div><strong>${metricValue(item.score)}</strong><small>${item.scored || 0}/${item.total || state.results.length} 题已计算 · ${esc(metricStatusLabel(item.status))}${item.data_missing ? ` · ${item.data_missing} 题缺少输入` : ""}${item.unavailable ? ` · ${item.unavailable} 题不可用` : ""}${item.errors ? ` · ${item.errors} 题执行失败` : ""}</small><small>${esc(option?.standard || "")}</small>${parameterDetails}</div>`);
+    }
+    const definitions = {
+      rewrite: [
+        ["semantic_similarity", "语义相似度", "项目扩展"],
+        ["constraint_precision", "约束 Precision", "项目扩展"],
+        ["constraint_recall", "约束 Recall", "项目扩展"],
+        ["constraint_f1", "约束 F1", "项目扩展"],
+        ["full_constraint_preservation_rate", "完整约束保持率", "项目扩展"],
+      ],
+      intent: [
+        ["accuracy", "Accuracy", "GB/T 45288.2—2025 附录 A.1.1"],
+        ["micro_precision", "Precision（Micro）", "GB/T 45288.2—2025 附录 A.1.3"],
+        ["micro_recall", "Recall（Micro）", "GB/T 45288.2—2025 附录 A.1.2"],
+        ["micro_f1", "Micro-F1", "GB/T 45288.2—2025 附录 A.1.4"],
+        ["macro_f1", "Macro-F1", "项目扩展"],
+      ],
+      rag: [
+        ["context_precision", "Context Precision", "RAGAS 项目方法"],
+        ["context_recall", "Context Recall", "RAGAS 项目方法"],
+        ["faithfulness", "Faithfulness", "RAGAS 项目方法"],
+        ["answer_relevancy", "Answer Relevancy", "RAGAS 项目方法"],
+      ],
+    };
+    const nodeSummary = summary.intermediate?.nodes || {};
+    const nodeCards = nodes.map(node => {
+      const item = nodeSummary[node] || {};
+      const values = definitions[node] || [];
+      const rows = values.map(([key, label, standard]) => `<div class="ev-node-metric"><span>${esc(label)}<small>${esc(standard)}</small></span><b>${metricValue(item[key])}</b></div>`).join("");
+      const classDetails = node === "intent" && item.by_label && Object.keys(item.by_label).length
+        ? `<details class="ev-node-extra"><summary>分类别结果与混淆矩阵</summary><pre>${esc(JSON.stringify({ by_label: item.by_label, confusion: item.confusion }, null, 2))}</pre></details>`
+        : "";
+      return `<section class="ev-node-result"><div class="ev-node-result-head"><b>${esc(nodeOptions.find(option => option.id === node)?.label || node)}</b><span>${esc(metricStatusLabel(item.status))}</span><small>${Number(item.scored || 0)}/${state.results.length} 题</small></div><div class="ev-node-metrics">${rows || '<span class="es-gen-hint">暂无指标</span>'}</div>${classDetails}</section>`;
+    }).join("");
+    return `<section class="card card-pad ev-run-summary" id="evRunEvaluationSummary"><div class="ev-run-summary-head"><div><div class="card-t">本次评测配置与方法结果</div><p>指标按所选方法独立计算，不合并成一个综合分数。</p></div><span class="ev-task-chip">${esc(taskProfileLabels[run.task_profile] || "通用问答")}</span></div><div class="ev-run-config-chips"><span><b>评测方法</b>${esc(methodNames(methods).join("、") || "未选择")}</span><span><b>中间节点</b>${esc(selectedNodeNames(nodes).join("、") || "未启用")}</span><span><b>Judge附加输入</b>${esc(optionalInputs.join("、") || "无")}</span></div><div class="ev-eval-result-grid">${methodCards.join("")}</div>${nodeCards ? `<div class="ev-node-result-grid">${nodeCards}</div>` : ""}<p class="ev-standard-note">国标标签仅表示指标公式或评测方法条文的引用，不代表本项目已通过国标认证；人工 MOS 暂未纳入。</p></section>`;
   }
 
   function refreshAnalysisMetrics() {
@@ -421,6 +617,8 @@
     }
     syncRunCatalog(runs);
     if (resultsChanged) {
+      const evaluationSummary = document.getElementById("evRunEvaluationSummary");
+      if (evaluationSummary) evaluationSummary.outerHTML = evaluationReportSummaryHTML(run, state.summary);
       filterRows();
       state.renderedResultsSignature = nextResultsSignature;
     }
@@ -439,6 +637,7 @@
     let data = { results: [], summary: {} }, run = null;
     if (state.runId) { data = await apiGet(`/api/evaluation-runs/${state.runId}/results`); run = runs.find(x => Number(x.run_id) === Number(state.runId)); }
     state.results = data.results || [];
+    state.summary = data.summary || {};
     const sameRunPage = run && state.renderedRunId != null && Number(state.renderedRunId) === Number(run.run_id) && document.querySelector(".ev-result-content") && document.getElementById("evReportRows");
     if (sameRunPage) {
       updateResultPage(run, runs);
@@ -463,7 +662,7 @@
       </div>`;
     }).join("")}</div>` : `<div class="es-library-tree ev-side-catalog"><div class="ev-empty-catalog"><i data-lucide="folder-search"></i><span>暂无评测结果</span></div></div>`;
     const progress = progressHTML(run);
-    const content = run ? `<div class="ev-result-title"><div><span class="es-tag">${esc(runStatusLabel(run.status))}</span><h2>${esc(run.name || `运行 #${run.run_id}`)}</h2><p>${esc(selectedComposition?.name || `评测集 #${run.composition_id}`)} · 版本 #${esc(run.composition_id)} · ${esc(formatDateTime(run.created_at))}</p></div><div class="ev-result-actions"><button class="btn ghost" id="evCompareRun"><i data-lucide="git-compare-arrows"></i>版本对比</button><label class="ev-threshold">分析阈值<input class="es-input" id="evThreshold" type="number" min="0" max="1" step=".05" value="${state.threshold}"/><small>仅影响当前页面分析</small></label></div></div>${progress}${metrics(state.results)}<div class="card card-pad ev-report"><div class="ev-report-head"><div><div class="card-t">原始评测报告</div><p>原始结果不会因人工处置消失；点击任意行查看评分明细、处理记录和单题复测。</p></div><div class="ev-export-wrap"><button class="btn ghost" id="evExportToggle"><i data-lucide="download"></i>导出报告<i data-lucide="chevron-down"></i></button><div class="ev-export-popover" id="evExportPopover" hidden><label><input type="checkbox" id="evExportFiltered"/>仅导出当前筛选结果</label><small>默认导出当前运行的全部原始报告</small><button class="btn primary" id="evExportConfirm"><i data-lucide="file-spreadsheet"></i>导出 Excel</button></div></div></div><div class="ev-filters"><input class="es-input" id="evSearch" placeholder="搜索问题、标准答案或智能体回答"/><select class="es-input" id="evStatus"><option value="">全部结果</option><option value="meets">达到分析阈值</option><option value="below">答案未通过</option><option value="error">调用异常</option><option value="unscored">未评分</option><option value="open">待处理</option><option value="processed">已处理待复测</option><option value="verified">已验证</option><option value="ignored">已忽略</option></select></div><div class="ev-table-wrap"><table class="ev-table"><thead><tr><th>问题 / 标准答案</th><th>智能体回答 A'</th><th>得分</th><th>耗时</th><th>结果 / 处理状态</th></tr></thead><tbody id="evReportRows"></tbody></table></div></div>` : `<div class="ev-result-empty"><span><i data-lucide="chart-no-axes-combined"></i></span><h2>选择一次评测运行</h2><p>从左侧「评测结果目录」中展开并选择运行，即可查看指标和原始报告。</p><button class="btn primary" id="evConfigBtn">前往评测配置</button></div>`;
+    const content = run ? `<div class="ev-result-title"><div><span class="es-tag">${esc(runStatusLabel(run.status))}</span><h2>${esc(run.name || `运行 #${run.run_id}`)}</h2><p>${esc(selectedComposition?.name || `评测集 #${run.composition_id}`)} · 版本 #${esc(run.composition_id)} · ${esc(formatDateTime(run.created_at))}</p></div><div class="ev-result-actions"><button class="btn ghost" id="evCompareRun"><i data-lucide="git-compare-arrows"></i>版本对比</button><label class="ev-threshold">分析阈值<input class="es-input" id="evThreshold" type="number" min="0" max="1" step=".05" value="${state.threshold}"/><small>仅影响当前页面分析</small></label></div></div>${progress}${metrics(state.results)}${evaluationReportSummaryHTML(run, state.summary)}<div class="card card-pad ev-report"><div class="ev-report-head"><div><div class="card-t">原始评测报告</div><p>原始结果不会因人工处置消失；点击任意行查看评分明细、处理记录和单题复测。</p></div><div class="ev-export-wrap"><button class="btn ghost" id="evExportToggle"><i data-lucide="download"></i>导出报告<i data-lucide="chevron-down"></i></button><div class="ev-export-popover" id="evExportPopover" hidden><label><input type="checkbox" id="evExportFiltered"/>仅导出当前筛选结果</label><small>默认导出当前运行的全部原始报告</small><button class="btn primary" id="evExportConfirm"><i data-lucide="file-spreadsheet"></i>导出 Excel</button></div></div></div><div class="ev-filters"><input class="es-input" id="evSearch" placeholder="搜索问题、标准答案或智能体回答"/><select class="es-input" id="evStatus"><option value="">全部结果</option><option value="meets">达到分析阈值</option><option value="below">答案未通过</option><option value="error">调用异常</option><option value="unscored">未评分</option><option value="open">待处理</option><option value="processed">已处理待复测</option><option value="verified">已验证</option><option value="ignored">已忽略</option></select></div><div class="ev-table-wrap"><table class="ev-table"><thead><tr><th>问题 / 标准答案</th><th>智能体回答 A'</th><th>得分</th><th>耗时</th><th>结果 / 处理状态</th></tr></thead><tbody id="evReportRows"></tbody></table></div></div>` : `<div class="ev-result-empty"><span><i data-lucide="chart-no-axes-combined"></i></span><h2>选择一次评测运行</h2><p>从左侧「评测结果目录」中展开并选择运行，即可查看指标和原始报告。</p><button class="btn primary" id="evConfigBtn">前往评测配置</button></div>`;
     shell(`<div class="ev-results-layout ev-results-single"><div class="ev-result-content">${content}</div></div>`, catalog);
     state.renderedRunId = run ? Number(run.run_id) : null;
     // 仿评测集库目录交互（事件委托到稳定的父容器，子节点重建也不丢监听）
@@ -546,11 +745,25 @@
     document.querySelectorAll(".ev-detail-mask").forEach(item => item.remove());
     const scores = result.scores || {}, issue = result.error_book;
     const scoreLabels = { score: "答案得分", em: "精确匹配", method: "评分方法", refusal_ok: "拒答判断", latency_ms: "调用耗时", tokens: "Token", cost: "成本", error: "调用错误" };
-    const scoreRows = Object.entries(scores).filter(([, value]) => value != null && value !== "").map(([key, value]) => {
+    const scoreRows = Object.entries(scores).filter(([, value]) => value != null && value !== "" && (typeof value !== "object" || value instanceof Date)).map(([key, value]) => {
       const failed = key === "score" && Number(value) < state.threshold || key === "error" && value || typeof value === "boolean" && value === false;
       const shown = typeof value === "boolean" ? (value ? "是" : "否") : key === "score" ? Math.round(Number(value) * 100) : key === "latency_ms" ? `${value} ms` : value;
       return `<div class="ev-score-row ${failed ? "failed" : ""}"><span>${esc(scoreLabels[key] || key)}</span><b>${esc(shown)}</b>${failed ? '<i data-lucide="circle-x"></i>' : '<i data-lucide="circle-check"></i>'}</div>`;
     }).join("") || '<p class="es-gen-hint">本题没有可用评分项。</p>';
+    const methodDetailItems = [
+      ["answer_comparison", "标准答案比对"],
+      ["rule", "规则评测"],
+      ["judge", "LLM-as-a-Judge"],
+      ["bleu", "BLEU"],
+      ["rouge_l", "ROUGE-L"],
+      ["intermediate", "中间过程节点"],
+    ].filter(([key]) => scores[key] != null);
+    const methodDetailHTML = methodDetailItems.map(([key, label]) => {
+      const value = scores[key];
+      const status = value?.status || (value?.score != null ? "scored" : "data_missing");
+      const shown = value?.score == null ? metricStatusLabel(status) : metricValue(value.score);
+      return `<details class="ev-method-detail"><summary><span>${esc(label)}</span><b>${esc(shown)}</b></summary><pre>${esc(JSON.stringify(value, null, 2))}</pre></details>`;
+    }).join("") || '<p class="es-gen-hint">本题未运行额外方法或中间节点评测。</p>';
     const observable = result.status === "error" ? "调用异常" : scores.score == null ? "未评分" : Number(scores.score) >= state.threshold ? "达到分析阈值" : "答案未通过";
     const observationRows = result.agent_observations && Object.keys(result.agent_observations).length
       ? Object.entries(result.agent_observations).map(([key, value]) => `<div><b>${esc(key)}</b><pre class="ev-observations">${esc(typeof value === "string" ? value : JSON.stringify(value, null, 2))}</pre></div>`).join("")
@@ -560,6 +773,7 @@
       <section><h4>评测样本</h4><dl class="ev-detail-list"><div><dt>问题</dt><dd>${esc(result.question)}</dd></div><div><dt>标准答案</dt><dd>${esc(result.gold_answer || "—")}</dd></div><div><dt>智能体回答</dt><dd>${esc(result.answer || result.error_message || "—")}</dd></div><div><dt>所属维度</dt><dd>${esc(result.dimension || "未标注")}</dd></div></dl></section>
       <section><h4>目标智能体额外输出</h4><p class="ev-section-note">保留最终答案以外的响应字段，可用于分析工具调用、来源或中间节点。</p><div class="ev-observation-list">${observationRows}</div></section>
       <section><h4>评分明细</h4><p class="ev-section-note">仅展示后端实际返回的评分项；红色项表示未达到当前分析阈值。</p><div class="ev-score-list">${scoreRows}</div></section>
+      <section><h4>方法与节点详细结果</h4><p class="ev-section-note">按 JSON 保留各评测方法的状态、计算参数和逐项结果；缺失输入显示为不适用，不记作零分。</p><div class="ev-method-detail-list">${methodDetailHTML}</div></section>
       <section><div class="ev-section-title"><h4>异常处理</h4><span class="es-tag ${issue?.status === "verified" ? "ok" : issue?.status === "open" ? "bad" : "warn"}">${esc(treatmentLabel(issue?.status))}</span></div>${issue ? `<label class="es-field">人工分类<select class="es-input" id="evIssueCategory"><option value="">请选择</option>${[["agent_answer","智能体回答问题"],["request_config","请求配置问题"],["dataset","评测集内容问题"],["scoring","评分规则问题"],["platform","平台运行问题"],["unknown","待进一步确认"]].map(([value,label]) => `<option value="${value}" ${issue.resolution_category === value ? "selected" : ""}>${label}</option>`).join("")}</select></label><label class="es-field">处理备注<textarea class="es-input" id="evIssueNote" rows="3" placeholder="记录判断依据、修改内容或忽略原因">${esc(issue.resolution_note || "")}</textarea></label><div class="ev-treatment-actions"><button class="btn ghost" id="evIgnoreIssue">忽略</button><button class="btn primary" id="evProcessIssue">标记已处理，等待复测</button></div>` : '<p class="es-gen-hint">本题未进入异常处理队列。</p>'}</section>
       <section><div class="ev-section-title"><h4>复测记录</h4>${["error", "failed"].includes(result.status) || Number(scores.score) < state.threshold ? '<button class="btn ghost" id="evRetryCase"><i data-lucide="rotate-cw"></i>单题复测</button>' : ""}</div><div id="evAttemptList" class="ev-attempt-list"><span class="spinner"></span></div></section>
     </div></aside>`;
