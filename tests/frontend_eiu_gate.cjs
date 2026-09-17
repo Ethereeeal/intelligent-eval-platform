@@ -37,6 +37,16 @@ async function run() {
   assert.ok(red.includes('只读'));
   assert.ok(!red.includes('kp-delete'));
   assert.equal((html.match(/data-kp-filter=/g) || []).length, 3);
+  const problemGroups = JSON.parse(vm.runInContext(`JSON.stringify(processingProblemGroups([
+    {status:'info',stage:'parse',event:'completed',detail:{}},
+    {status:'warning',stage:'quality_gate',event:'final_disposition',detail:{auto_disposition:'red',exclusion_reason:'证据不完整'}},
+    {status:'warning',stage:'quality_gate',event:'final_disposition',detail:{auto_disposition:'red',exclusion_reason:'证据不完整'}},
+    {status:'error',stage:'parse',event:'failed',detail:{message:'文件格式无法识别'}}
+  ]))`, context));
+  assert.deepEqual(problemGroups, [
+    {stage:'质量检查',summary:'未采用：证据不完整',count:2},
+    {stage:'文档解析',summary:'处理失败：文件格式无法识别',count:1},
+  ]);
   const rows = ['green','yellow','red'].map(disposition => ({dataset:{disposition},style:{},textContent:disposition,querySelector:()=>({textContent:disposition})}));
   const empty = {}, note = {};
   context.fixture = {dataset:{},querySelectorAll:s=>s === '.kp-tr' ? rows : [],querySelector:s=>s === '[data-kp-empty]' ? empty : note};
@@ -49,6 +59,6 @@ async function run() {
   vm.runInContext('applyKpFilters(fixture)', context);
   assert.ok(rows.every(r=>r.style.display === 'none'));
   assert.equal(empty.hidden, false);
-  console.log('PASS: EIU mapping, three checks, archive, escaping, color/search intersection');
+  console.log('PASS: EIU mapping, problem-only trace, archive, escaping, color/search intersection');
 }
 run().catch(error => { console.error(error); process.exitCode = 1; });
