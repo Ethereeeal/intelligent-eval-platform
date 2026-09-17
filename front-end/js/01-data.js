@@ -301,6 +301,8 @@
           stmt: e.statement || "",
           type: ({ rule: "规则", constraint: "约束", definition: "定义", process: "流程" }[e.eiu_type] || "规则"),
           prio: ({ P0: "核心必测", P1: "必须覆盖", P2: "建议覆盖" }[e.content_priority] || "建议覆盖"),
+          importance: ({ P0: "高", P1: "中", P2: "低" }[e.content_priority] || "低"),
+          importanceCode: e.content_priority || "P2",
           qualityStatus: status,
           qualityLabel: statusLabel,
           qualityScore: e.quality_score,

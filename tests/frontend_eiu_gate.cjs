@@ -12,9 +12,9 @@ async function run() {
   await vm.runInContext(`
     apiGet = async path => path === '/api/documents' ? [{document_id:1,file_name:'测试文档',parse_status:'completed'}]
       : path === '/api/eiu' ? {items:[
-        {eiu_id:1,document_id:1,statement:'绿色',auto_disposition:'green',quality_policy_version:'v1',quality_checks:{fidelity:{status:'pass'},completeness:{status:'pass'},atomicity:{status:'pass'},testability:{status:'fail'}}},
-        {eiu_id:2,document_id:1,statement:'黄色',auto_disposition:'yellow',quality_status:'verified'},
-        {eiu_id:3,document_id:1,statement:'<script>危险</script>',auto_disposition:'red',is_questionable:false},
+        {eiu_id:1,document_id:1,statement:'绿色',content_priority:'P0',auto_disposition:'green',quality_policy_version:'v1',quality_checks:{fidelity:{status:'pass'},completeness:{status:'pass'},atomicity:{status:'pass'},testability:{status:'fail'}}},
+        {eiu_id:2,document_id:1,statement:'黄色',content_priority:'P1',auto_disposition:'yellow',quality_status:'verified'},
+        {eiu_id:3,document_id:1,statement:'<script>危险</script>',content_priority:'P2',auto_disposition:'red',is_questionable:false},
         {eiu_id:4,document_id:1,statement:'历史待复核',route_color:'red',quality_status:'needs_review'},
         {eiu_id:5,document_id:1,statement:'历史已验证',route_color:'yellow',quality_status:'verified'}
       ]} : [];
@@ -25,10 +25,13 @@ async function run() {
   assert.equal(doc.claimStats.candidate, 5);
   assert.equal(doc.claimStats.rejected, 1);
   assert.equal(doc.kp[0].qualityText, '3/3 通过');
+  assert.deepEqual(doc.kp.slice(0, 3).map(k => k.importance), ['高','中','低']);
   assert.ok(!doc.kp[0].qualityDetail.includes('可测试性'));
   const html = vm.runInContext('kpTableHTML(DOCS.doc1.kp)', context);
   assert.ok(!/P0|P1|P2|全部通过|kp-status-select/.test(html));
   assert.ok(html.includes('&lt;script&gt;危险&lt;/script&gt;'));
+  assert.ok(html.includes('data-filter="importance"'));
+  assert.ok(html.includes('kp-importance p0') && html.includes('>高</span>'));
   assert.ok(html.includes('data-disposition="red" style="display:none" data-filtered="1"'));
   const red = html.split('data-disposition="red"')[1].split('class="kp-tr"')[0];
   assert.ok(red.includes('只读'));

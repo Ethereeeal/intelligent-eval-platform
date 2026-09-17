@@ -106,8 +106,9 @@
         <span>验证状态<span class="col-filter" data-filter="status"><i data-lucide="filter"></i></span><span class="kp-resize" data-resize="1"></span></span>
         <span>质量检查<span class="col-filter" data-filter="quality"><i data-lucide="filter"></i></span><span class="kp-resize" data-resize="2"></span></span>
         <span>类型<span class="col-filter" data-filter="type"><i data-lucide="filter"></i></span><span class="kp-resize" data-resize="3"></span></span>
-        <span>证据链<span class="col-filter" data-filter="ev"><i data-lucide="filter"></i></span><span class="kp-resize" data-resize="4"></span></span>
-        <span>来源文档<span class="col-filter" data-filter="src"><i data-lucide="filter"></i></span></span>
+        <span>重要性<span class="col-filter" data-filter="importance"><i data-lucide="filter"></i></span><span class="kp-resize" data-resize="4"></span></span>
+        <span>证据链<span class="col-filter" data-filter="ev"><i data-lucide="filter"></i></span><span class="kp-resize" data-resize="5"></span></span>
+        <span>来源文档<span class="col-filter" data-filter="src"><i data-lucide="filter"></i></span><span class="kp-resize" data-resize="6"></span></span>
         <span>操作</span>
       </div>
       ${all.map((k, i) => `<div class="kp-tr" data-disposition="${escapeHTML(k.routeColor || "yellow")}"${k.routeColor === "green" ? "" : ' style="display:none" data-filtered="1"'}>
@@ -115,6 +116,7 @@
         <span class="kp-td kp-c-status"><span class="claim-status ${escapeHTML(k.qualityStatus)}">${escapeHTML(k.qualityLabel)}</span></span>
         <span class="kp-td kp-c-quality" title="${escapeHTML(k.qualityDetail || "")}">${escapeHTML(k.qualityText || "未检查")}</span>
         <span class="kp-td kp-c-type"><span class="pill br">${escapeHTML(k.type)}</span></span>
+        <span class="kp-td kp-c-importance"><span class="kp-importance ${escapeHTML(String(k.importanceCode || "P2").toLowerCase())}" title="重要性：${escapeHTML(k.importance || "低")}">${escapeHTML(k.importance || "低")}</span></span>
         <span class="kp-td kp-td-ev kp-c-ev">${k.crossBlock ? '<span class="cross-block-tag">跨块</span> ' : ''}${escapeHTML(k.evidenceChain || k.ev)}</span>
         <span class="kp-td kp-td-src kp-c-src">${escapeHTML(k.src)}</span>
         <span class="kp-td kp-kp-actions">${k.routeColor === "red" ? '<span class="muted">只读</span>' : `<button class="btn ghost icon-only sm kp-delete" type="button" data-eiu-id="${escapeHTML(String(k.id || "").replace(/^KP-/, ""))}" title="删除知识点" aria-label="删除知识点"><i data-lucide="trash-2"></i></button>`}</span>
@@ -1152,7 +1154,7 @@
   }
 
   // 知识点表格列筛选（与评测集列筛选机制一致）
-  const kpColFilterLabel = { stmt: "知识点", status: "验证状态", quality: "质量检查", prio: "优先级", type: "类型", ev: "证据链", src: "来源文档" };
+  const kpColFilterLabel = { stmt: "知识点", status: "验证状态", quality: "质量检查", importance: "重要性", type: "类型", ev: "证据链", src: "来源文档" };
   function kpFilterCellValue(cell, field) {
     if (!cell) return "—";
     if (field === "status") {
@@ -1401,7 +1403,7 @@
   // 知识点表格列宽拖拽调整（与主评测集表一致）
   function bindKpColResize(table) {
     if (!table) return;
-    const defCols = [320, 120, 140, 100, 260, 200, 76];
+    const defCols = [320, 120, 140, 100, 88, 260, 200, 76];
     const cur = () => {
       const v = getComputedStyle(table).getPropertyValue("--kp-cols");
       if (v && v.trim()) return v.trim().split(/\s+/).map(s => parseFloat(s));
