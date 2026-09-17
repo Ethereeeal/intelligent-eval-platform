@@ -27,6 +27,10 @@ class EvaluationRunRequest(BaseModel):
     """发起一次批量评测运行（组合作为输入）。"""
 
     composition_id: int
+    scenario_id: int | None = None
+    dataset_version_id: int | None = None
+    iteration_id: int | None = None
+    agent_version: str | None = Field(default=None, max_length=128)
     name: str | None = None
     adapter: str = "mock"
     adapter_config: dict | None = None

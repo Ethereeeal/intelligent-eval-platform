@@ -316,6 +316,8 @@
       <div class="modal-head"><span>生成评测集</span><button class="modal-x" type="button">×</button></div>
       <div class="modal-body es-generator-body">
         <label class="es-field">评测集名称</label><input class="es-input" id="esGeneratorName" value="组合评测集 ${new Date().toLocaleDateString("zh-CN")}" />
+        <label class="es-field">业务场景</label><input class="es-input" id="esGeneratorScenario" value="${escapeHTML(window.__esScenarioName || `业务场景 ${new Date().toLocaleDateString("zh-CN")}`)}" placeholder="例如：客服密码找回" />
+        <p class="es-generator-hint">本次生成先保存为草稿，完成自动质检和人工校验后再冻结为可评测版本。</p>
         <section class="es-generator-section"><div class="es-generator-title">文档库</div><p class="es-generator-hint">从文档库中的任意文档多选，保留原有文件夹层级；所选文档会按已有生成能力补齐评测集。</p><div class="es-generator-list">${esGeneratorFolderTree(docs, "data-es-generator-doc")}</div></section>
         <section class="es-generator-section"><div class="es-generator-title">生成策略</div><div class="es-generator-policy-grid"><div class="es-generator-policy"><div class="es-generator-policy-controls"><label class="opt"><input type="checkbox" id="esGeneratorCrossBlock"/><span>跨块问题组合</span></label><label class="opt"><input type="checkbox" id="esGeneratorCrossDoc"/><span>跨文档生成</span></label></div></div></div></section>
         <section class="es-generator-section"><div class="es-generator-title">上传库</div><p class="es-generator-hint">上传评测集按其文件夹层级展示。</p><div class="es-generator-list">${esGeneratorFolderTree(uploadedSets.map((set, index) => ({ id: index, name: set.name || `上传评测集 #${set.set_id}`, meta: `${set.total_cases || set.cases?.length || 0} 题`, folder_path: set.folder_path || "" })), "data-es-generator-upload")}</div></section>
@@ -342,6 +344,8 @@
       const generationConfig = { cross_block: mask.querySelector("#esGeneratorCrossBlock").checked, cross_document: mask.querySelector("#esGeneratorCrossDoc").checked, output: "flat" };
       const payload = {
         name,
+        scenario_id: Number.isFinite(Number(window.__esScenarioId)) ? Number(window.__esScenarioId) : null,
+        scenario_name: mask.querySelector("#esGeneratorScenario").value.trim() || name,
         created_by: "web",
         document_ids: docIds.map(id => Number(String(id).replace(/^doc/, ""))).filter(Number.isFinite),
         uploaded_set_ids: uploadedSetIds.map(Number),
@@ -402,23 +406,24 @@
         }
       }
       try {
-        esGeneratorProgress(84, "正在写入评测集库", "固化本次生成的文档、上传题目和公共库配额");
-        const response = await fetch(API_BASE + "/api/freeze", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+        esGeneratorProgress(84, "正在保存评测集草稿", "保存文档、上传题目和公共库配额，等待人工校验");
+        const response = await fetch(API_BASE + "/api/drafts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
         if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.detail || response.status); }
-        const frozenVersion = await response.json();
+        const draftVersion = await response.json();
         if (returnToEvaluation) {
-          // 冻结版本就是评测库中的可选评测集；组合仅在实际发起运行时由工作台按需创建。
-          window.__evSelectedDatasetVersionId = Number(frozenVersion.version_id);
-          goto("evaluation");
-          esGeneratorProgress(100, "已存入评测集库并带回评测配置", "新冻结版本已默认选中", "done");
-          toast("已存入评测集库并带回评测配置", "ok");
+          window.__esView = "custom";
+          window.__esScenarioId = Number(draftVersion.scenario_id) || window.__esScenarioId;
+          window.__esScenarioName = draftVersion.snapshot_metadata?.scenario_name || window.__esScenarioName;
+          await renderEvalSetLibrary();
+          esGeneratorProgress(100, "草稿已保存", "请进入评测集库完成人工校验后冻结", "done");
+          toast("评测集草稿已保存，请完成人工校验", "ok");
           return;
         }
         window.__esView = "custom";
         esGeneratorProgress(94, "正在刷新评测集库", "读取刚刚生成的评测集");
         await renderEvalSetLibrary();
-        esGeneratorProgress(100, "已存入评测集库", failedDocs.length ? `${failedDocs.length} 个文档生成未完成` : "生成结果已可查看", "done");
-        toast(failedDocs.length ? `已永久存入评测集库；${failedDocs.length} 个文档生成未完成` : "已永久存入评测集库");
+        esGeneratorProgress(100, "草稿已保存到评测集库", failedDocs.length ? `${failedDocs.length} 个文档生成未完成，需人工处理` : "请完成自动质检与人工校验后冻结", "done");
+        toast(failedDocs.length ? `草稿已保存；${failedDocs.length} 个文档生成未完成` : "评测集草稿已保存，请完成人工校验");
       } catch (error) {
         const detail = [error.message || "请稍后重试", ...failureDetails].join("；");
         esGeneratorProgress(84, "评测集写入失败", detail, "error");

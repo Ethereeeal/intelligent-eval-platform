@@ -114,6 +114,13 @@ def start_run_async(
 
     def _run() -> None:
         db = DatabaseService()
+
+        def sync_iteration(status: str) -> None:
+            run = db.get_evaluation_run(run_id)
+            iteration_id = run.get("iteration_id") if run else None
+            if iteration_id is not None:
+                db.update_evaluation_iteration(iteration_id, status=status)
+
         try:
             db.update_evaluation_run(
                 run_id,
@@ -122,6 +129,7 @@ def start_run_async(
                 progress=0,
                 started_at=datetime.utcnow(),
             )
+            sync_iteration("in_progress")
             for idx, sample in enumerate(samples, start=1):
                 current = db.get_evaluation_run(run_id)
                 if current is None:
@@ -130,6 +138,7 @@ def start_run_async(
                     db.update_evaluation_run(
                         run_id, status="cancelled", finished_at=datetime.utcnow()
                     )
+                    sync_iteration("dismissed")
                     return
                 try:
                     evaluated = _evaluate_case(
@@ -167,12 +176,14 @@ def start_run_async(
                 progress=100,
                 finished_at=datetime.utcnow(),
             )
+            sync_iteration("completed")
         except Exception:  # noqa: BLE001 — 后台线程必须形成可见终态
             try:
                 if db.get_evaluation_run(run_id) is not None:
                     db.update_evaluation_run(
                         run_id, status="failed", finished_at=datetime.utcnow()
                     )
+                    sync_iteration("dismissed")
             except Exception:  # noqa: BLE001 — 数据库不可用时线程只能安全退出
                 pass
 

@@ -79,6 +79,62 @@ class MaterializeRequest(BaseModel):
     public_selections: list[dict] | None = None
 
 
+class ScenarioRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=4000)
+    tags: list[str] = Field(default_factory=list)
+    created_by: str | None = None
+
+
+class ScenarioUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=4000)
+    tags: list[str] | None = None
+
+
+class DraftRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    scenario_id: int | None = None
+    scenario_name: str | None = Field(default=None, max_length=255)
+    scenario_description: str | None = Field(default=None, max_length=4000)
+    scenario_tags: list[str] = Field(default_factory=list)
+    created_by: str | None = None
+    document_ids: list[int] | None = None
+    uploaded_set_ids: list[int] | None = None
+    public_selections: list[dict] | None = None
+    generation_config: dict | None = None
+    parent_version_id: int | None = None
+
+
+class ReviewRequest(BaseModel):
+    status: str = Field(pattern="^(approved|rejected|excluded|pending)$")
+    actor: str | None = None
+    reason: str | None = Field(default=None, max_length=2000)
+
+
+class IterationRequest(BaseModel):
+    scenario_id: int
+    version_id: int | None = None
+    parent_version_id: int | None = None
+    run_id: int | None = None
+    agent_version: str | None = Field(default=None, max_length=128)
+    optimization_type: str = Field(default="dataset", pattern="^(dataset|agent)$")
+    status: str = Field(default="planned", pattern="^(planned|in_progress|completed|dismissed)$")
+    summary: str | None = Field(default=None, max_length=4000)
+    metadata: dict | None = None
+    created_by: str | None = None
+
+
+class IterationUpdateRequest(BaseModel):
+    version_id: int | None = None
+    parent_version_id: int | None = None
+    run_id: int | None = None
+    agent_version: str | None = Field(default=None, max_length=128)
+    status: str | None = Field(default=None, pattern="^(planned|in_progress|completed|dismissed)$")
+    summary: str | None = Field(default=None, max_length=4000)
+    metadata: dict | None = None
+
+
 class DimensionCreate(BaseModel):
     code: str
     name: str
@@ -107,6 +163,102 @@ _MAX_UPLOAD_CASES = 100_000
 # ----------------------------------------------------------------------
 # 版本
 # ----------------------------------------------------------------------
+@router.post("/scenarios")
+def create_scenario(payload: ScenarioRequest):
+    return _service.db.create_scenario(**payload.model_dump())
+
+
+@router.get("/scenarios")
+def list_scenarios(search: str | None = None):
+    return _service.db.list_scenarios(search)
+
+
+@router.get("/scenarios/similar")
+def list_similar_scenarios(
+    name: str | None = None,
+    description: str | None = None,
+    tags: list[str] | None = Query(default=None),
+    document_names: list[str] | None = Query(default=None),
+    exclude_id: int | None = None,
+    limit: int = Query(default=5, ge=1, le=20),
+):
+    return _service.db.list_similar_scenarios(
+        name=name,
+        description=description,
+        tags=tags,
+        document_names=document_names,
+        exclude_id=exclude_id,
+        limit=limit,
+    )
+
+
+@router.get("/scenarios/{scenario_id}")
+def get_scenario(scenario_id: int):
+    scenario = _service.db.get_scenario(scenario_id)
+    if scenario is None:
+        raise HTTPException(status_code=404, detail="scenario not found")
+    return scenario
+
+
+@router.patch("/scenarios/{scenario_id}")
+def update_scenario(scenario_id: int, payload: ScenarioUpdateRequest):
+    scenario = _service.db.update_scenario(scenario_id, **payload.model_dump(exclude_none=True))
+    if scenario is None:
+        raise HTTPException(status_code=404, detail="scenario not found")
+    return scenario
+
+
+@router.get("/scenarios/{scenario_id}/iterations")
+def list_scenario_iterations(scenario_id: int):
+    if _service.db.get_scenario(scenario_id) is None:
+        raise HTTPException(status_code=404, detail="scenario not found")
+    return _service.db.list_evaluation_iterations(scenario_id)
+
+
+@router.post("/iterations")
+def create_iteration(payload: IterationRequest):
+    if _service.db.get_scenario(payload.scenario_id) is None:
+        raise HTTPException(status_code=404, detail="scenario not found")
+    values = payload.model_dump()
+    values["metadata_json"] = values.pop("metadata")
+    return {"iteration_id": _service.db.save_evaluation_iteration(**values)}
+
+
+@router.patch("/iterations/{iteration_id}")
+def update_iteration(iteration_id: int, payload: IterationUpdateRequest):
+    values = payload.model_dump(exclude_none=True)
+    if "metadata" in values:
+        values["metadata_json"] = values.pop("metadata")
+    result = _service.db.update_evaluation_iteration(iteration_id, **values)
+    if result is None:
+        raise HTTPException(status_code=404, detail="iteration not found")
+    return result
+
+
+@router.post("/drafts")
+def create_draft(payload: DraftRequest):
+    try:
+        return _service.create_draft(**payload.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/versions/{version_id}/clone")
+def clone_version(version_id: int, actor: str | None = None):
+    try:
+        return _service.clone_version(version_id, created_by=actor)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.post("/versions/{version_id}/freeze")
+def freeze_draft(version_id: int, actor: str | None = None):
+    try:
+        return _service.freeze_draft(version_id, actor=actor)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
 @router.post("/freeze")
 def freeze_version(payload: FreezeRequest):
     """冻结生成库为不可变版本，并把选中的上传库 / 公共库题一并物化进同一版本（方案 B）。"""
@@ -147,6 +299,60 @@ def get_version(version_id: int):
     if version is None:
         raise HTTPException(status_code=404, detail="version not found")
     return version
+
+
+@router.get("/versions/{version_id}/diff")
+def version_diff(version_id: int):
+    try:
+        return _service.version_diff(version_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/versions/{version_id}/cases/{case_id}/quality-check")
+def check_draft_case(version_id: int, case_id: int):
+    case = _service.get_version(version_id)
+    if case is None:
+        raise HTTPException(status_code=404, detail="version not found")
+    try:
+        result = _service.check_draft_case(case_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if result is None or result.get("case", {}).get("version_id") != version_id:
+        raise HTTPException(status_code=404, detail="case not found")
+    return result
+
+
+@router.post("/versions/{version_id}/cases/{case_id}/review")
+def review_draft_case(version_id: int, case_id: int, payload: ReviewRequest):
+    case = _service.db.get_eval_case(case_id)
+    if case is None or case.get("version_id") != version_id:
+        raise HTTPException(status_code=404, detail="case not found")
+    try:
+        result = _service.review_case(case_id, status=payload.status, actor=payload.actor, reason=payload.reason)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return result
+
+
+@router.post("/versions/{version_id}/review-all")
+def review_all_draft_cases(version_id: int, payload: ReviewRequest):
+    version = _service.get_version(version_id)
+    if version is None:
+        raise HTTPException(status_code=404, detail="version not found")
+    if version.get("status") != "draft":
+        raise HTTPException(status_code=409, detail="冻结或发布版本不可批量审核，请先克隆草稿")
+    cases = _service.list_cases(version_id, include_retired=False, limit=100000)
+    results = []
+    for case in cases:
+        if case.get("auto_quality_status") == "passed":
+            try:
+                reviewed = _service.review_case(case["case_id"], status=payload.status, actor=payload.actor, reason=payload.reason)
+                if reviewed:
+                    results.append(reviewed)
+            except ValueError:
+                continue
+    return {"updated": len(results), "cases": results}
 
 
 # ----------------------------------------------------------------------

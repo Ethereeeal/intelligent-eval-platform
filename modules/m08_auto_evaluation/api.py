@@ -104,6 +104,10 @@ def create_evaluation_run(payload: EvaluationRunRequest):
         raise HTTPException(status_code=400, detail="至少选择一种评测方法或一个中间评测节点")
     run_id = _db.save_evaluation_run(
         composition_id=payload.composition_id,
+        scenario_id=payload.scenario_id,
+        dataset_version_id=payload.dataset_version_id,
+        iteration_id=payload.iteration_id,
+        agent_version=payload.agent_version,
         name=payload.name,
         adapter=payload.adapter,
         adapter_config=_sanitize_adapter_config(payload.adapter_config),
@@ -112,6 +116,13 @@ def create_evaluation_run(payload: EvaluationRunRequest):
         task_profile=selection["task_profile"],
         evaluation_methods=selection["evaluation_methods"],
     )
+    if payload.iteration_id is not None:
+        _db.update_evaluation_iteration(
+            payload.iteration_id,
+            run_id=run_id,
+            status="in_progress",
+            agent_version=payload.agent_version,
+        )
     start_run_async(
         run_id=run_id,
         samples=samples,
@@ -129,6 +140,10 @@ def create_evaluation_run(payload: EvaluationRunRequest):
             actor="web",
             detail={
                 "composition_id": payload.composition_id,
+                "scenario_id": payload.scenario_id,
+                "dataset_version_id": payload.dataset_version_id,
+                "iteration_id": payload.iteration_id,
+                "agent_version": payload.agent_version,
                 "adapter": payload.adapter,
                 "multi_turn": payload.multi_turn,
                 "total": len(samples),
@@ -334,6 +349,10 @@ def retry_evaluation_run(run_id: int):
         raise HTTPException(status_code=400, detail="组合解析为空，无可评测样本")
     new_run_id = _db.save_evaluation_run(
         composition_id=run["composition_id"],
+        scenario_id=run.get("scenario_id"),
+        dataset_version_id=run.get("dataset_version_id"),
+        iteration_id=run.get("iteration_id"),
+        agent_version=run.get("agent_version"),
         name=(run.get("name") or "评测运行") + "（重跑）",
         adapter=run["adapter"],
         adapter_config=_sanitize_adapter_config(run.get("adapter_config")),
@@ -342,6 +361,12 @@ def retry_evaluation_run(run_id: int):
         task_profile=run.get("task_profile") or "question_answering",
         evaluation_methods=run.get("evaluation_methods"),
     )
+    if run.get("iteration_id") is not None:
+        _db.update_evaluation_iteration(
+            run["iteration_id"],
+            run_id=new_run_id,
+            status="in_progress",
+        )
     start_run_async(
         run_id=new_run_id,
         samples=samples,

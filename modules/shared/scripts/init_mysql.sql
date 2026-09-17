@@ -98,10 +98,43 @@ CREATE TABLE IF NOT EXISTS chat_message (
 );
 
 -- ===================== m05 数据集生命周期 =====================
+CREATE TABLE IF NOT EXISTS eval_scenario (
+  scenario_id INT PRIMARY KEY AUTO_INCREMENT,
+  name VARCHAR(255) NOT NULL,
+  description TEXT,
+  tags JSON,
+  status VARCHAR(32) NOT NULL DEFAULT 'active',
+  created_by VARCHAR(128),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS evaluation_iteration (
+  iteration_id INT PRIMARY KEY AUTO_INCREMENT,
+  scenario_id INT NOT NULL,
+  version_id INT,
+  parent_version_id INT,
+  run_id INT,
+  agent_version VARCHAR(128),
+  optimization_type VARCHAR(32) NOT NULL DEFAULT 'dataset',
+  status VARCHAR(32) NOT NULL DEFAULT 'planned',
+  summary TEXT,
+  metadata_json JSON,
+  created_by VARCHAR(128),
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_iteration_scenario_id (scenario_id),
+  INDEX idx_iteration_version_id (version_id),
+  INDEX idx_iteration_run_id (run_id)
+);
+
 -- 评测集版本（冻结元数据快照）
 CREATE TABLE IF NOT EXISTS dataset_version (
   version_id INT PRIMARY KEY AUTO_INCREMENT,
-  corpus_id INT NOT NULL,
+  -- 历史字段保留兼容；新场景闭环以 scenario_id 关联，不再要求 corpus_id。
+  corpus_id INT NULL,
+  scenario_id INT,
+  parent_version_id INT,
+  iteration_no INT NOT NULL DEFAULT 1,
   version_number VARCHAR(64) NOT NULL,
   status VARCHAR(32) DEFAULT 'draft',
   case_count INT DEFAULT 0,
@@ -130,6 +163,11 @@ CREATE TABLE IF NOT EXISTS eval_case (
   eiu_ids JSON,
   content_priority VARCHAR(32),
   review_status VARCHAR(32) DEFAULT 'candidate',
+  auto_quality_status VARCHAR(32) NOT NULL DEFAULT 'pending',
+  manual_review_status VARCHAR(32) NOT NULL DEFAULT 'pending',
+  manual_review_by VARCHAR(128),
+  manual_review_at DATETIME,
+  manual_review_reason TEXT,
   source VARCHAR(32) DEFAULT 'native',
   retired BOOLEAN DEFAULT FALSE,
   UNIQUE KEY uniq_case_uid (case_uid),

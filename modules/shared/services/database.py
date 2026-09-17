@@ -346,10 +346,47 @@ class ChatMessageRow(Base):
 # ----------------------------------------------------------------------
 # m05 — 数据集生命周期：版本与样本
 # ----------------------------------------------------------------------
+class ScenarioRow(Base):
+    """按业务场景沉淀评测集与多轮迭代。"""
+
+    __tablename__ = "eval_scenario"
+
+    scenario_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    tags: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="active")
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class EvaluationIterationRow(Base):
+    """场景工作台中的一轮数据集/智能体优化记录。"""
+
+    __tablename__ = "evaluation_iteration"
+
+    iteration_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scenario_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    version_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    parent_version_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    run_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    agent_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    optimization_type: Mapped[str] = mapped_column(String(32), nullable=False, default="dataset")
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="planned")
+    summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    metadata_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class DatasetVersionRow(Base):
     __tablename__ = "dataset_version"
 
     version_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scenario_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    parent_version_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    iteration_no: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     version_number: Mapped[str] = mapped_column(String(64), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="draft")
     case_count: Mapped[int] = mapped_column(Integer, default=0)
@@ -378,6 +415,11 @@ class EvalCaseRow(Base):
     eiu_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
     content_priority: Mapped[str | None] = mapped_column(String(32), nullable=True)
     review_status: Mapped[str] = mapped_column(String(32), nullable=False, default="candidate")
+    auto_quality_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    manual_review_status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    manual_review_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    manual_review_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    manual_review_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="native")
     retired: Mapped[bool] = mapped_column(default=False)
 
@@ -421,6 +463,40 @@ class DatabaseService:
         from sqlalchemy import inspect
 
         inspector = inspect(engine)
+        # 场景闭环与草稿审核：Base.metadata 负责新库建表；这里补齐历史 SQLite/MySQL 表的列。
+        if "dataset_version" in inspector.get_table_names():
+            version_cols = {c["name"] for c in inspector.get_columns("dataset_version")}
+            with engine.begin() as conn:
+                if "scenario_id" not in version_cols:
+                    conn.execute(text("ALTER TABLE dataset_version ADD COLUMN scenario_id INTEGER NULL"))
+                if "parent_version_id" not in version_cols:
+                    conn.execute(text("ALTER TABLE dataset_version ADD COLUMN parent_version_id INTEGER NULL"))
+                if "iteration_no" not in version_cols:
+                    conn.execute(text("ALTER TABLE dataset_version ADD COLUMN iteration_no INTEGER NOT NULL DEFAULT 1"))
+        if "eval_case" in inspector.get_table_names():
+            case_cols = {c["name"] for c in inspector.get_columns("eval_case")}
+            with engine.begin() as conn:
+                if "auto_quality_status" not in case_cols:
+                    conn.execute(text("ALTER TABLE eval_case ADD COLUMN auto_quality_status VARCHAR(32) NOT NULL DEFAULT 'pending'"))
+                if "manual_review_status" not in case_cols:
+                    conn.execute(text("ALTER TABLE eval_case ADD COLUMN manual_review_status VARCHAR(32) NOT NULL DEFAULT 'pending'"))
+                if "manual_review_by" not in case_cols:
+                    conn.execute(text("ALTER TABLE eval_case ADD COLUMN manual_review_by VARCHAR(128) NULL"))
+                if "manual_review_at" not in case_cols:
+                    conn.execute(text("ALTER TABLE eval_case ADD COLUMN manual_review_at DATETIME NULL"))
+                if "manual_review_reason" not in case_cols:
+                    conn.execute(text("ALTER TABLE eval_case ADD COLUMN manual_review_reason TEXT NULL"))
+        if "evaluation_run" in inspector.get_table_names():
+            run_cols = {c["name"] for c in inspector.get_columns("evaluation_run")}
+            with engine.begin() as conn:
+                if "scenario_id" not in run_cols:
+                    conn.execute(text("ALTER TABLE evaluation_run ADD COLUMN scenario_id INTEGER NULL"))
+                if "dataset_version_id" not in run_cols:
+                    conn.execute(text("ALTER TABLE evaluation_run ADD COLUMN dataset_version_id INTEGER NULL"))
+                if "iteration_id" not in run_cols:
+                    conn.execute(text("ALTER TABLE evaluation_run ADD COLUMN iteration_id INTEGER NULL"))
+                if "agent_version" not in run_cols:
+                    conn.execute(text("ALTER TABLE evaluation_run ADD COLUMN agent_version VARCHAR(128) NULL"))
         # 历史上传曾将 GB18030/UTF-8 文件名字节按 Latin-1 入库；启动时定向修复，
         # 仅更新可明确还原的 document.file_name，不改对象存储路径和业务关联。
         if "document" in inspector.get_table_names():
@@ -1796,9 +1872,215 @@ class DatabaseService:
     # ------------------------------------------------------------------
     # m05 — dataset_version / eval_case
     # ------------------------------------------------------------------
+    def create_scenario(
+        self,
+        *,
+        name: str,
+        description: str | None = None,
+        tags: list[str] | None = None,
+        created_by: str | None = None,
+    ) -> dict:
+        with SessionLocal() as session:
+            row = ScenarioRow(
+                name=name.strip(),
+                description=(description or "").strip() or None,
+                tags=sorted({str(tag).strip() for tag in (tags or []) if str(tag).strip()}),
+                created_by=created_by,
+            )
+            session.add(row)
+            session.commit()
+            session.refresh(row)
+            return self._scenario_to_dict(row)
+
+    def get_scenario(self, scenario_id: int) -> dict | None:
+        with SessionLocal() as session:
+            row = session.get(ScenarioRow, scenario_id)
+            return self._scenario_to_dict(row) if row else None
+
+    def list_scenarios(self, search: str | None = None) -> list[dict]:
+        with SessionLocal() as session:
+            query = session.query(ScenarioRow).filter(ScenarioRow.status == "active")
+            rows = query.order_by(ScenarioRow.updated_at.desc(), ScenarioRow.scenario_id.desc()).all()
+            items = [self._scenario_to_dict(row) for row in rows]
+        keyword = (search or "").strip().lower()
+        if not keyword:
+            return items
+        return [item for item in items if keyword in " ".join([item["name"], item.get("description") or "", *item.get("tags", [])]).lower()]
+
+    def list_similar_scenarios(
+        self,
+        *,
+        name: str | None = None,
+        description: str | None = None,
+        tags: list[str] | None = None,
+        document_names: list[str] | None = None,
+        exclude_id: int | None = None,
+        limit: int = 5,
+    ) -> list[dict]:
+        """返回用于人工确认的场景推荐，不自动复用或合并。"""
+        query_name = str(name or "").strip().lower()
+        query_description = str(description or "").strip().lower()
+        query_tags = {str(tag).strip().lower() for tag in (tags or []) if str(tag).strip()}
+        query_document_names = [str(value).strip().lower() for value in (document_names or []) if str(value).strip()]
+
+        def tokens(value: str) -> set[str]:
+            # 同时支持中文连续片段和英文/数字词；推荐只是辅助，不依赖分词服务。
+            return set(re.findall(r"[\w\u3400-\u9fff]+", value.lower()))
+
+        name_tokens = tokens(query_name)
+        description_tokens = tokens(query_description)
+        document_tokens = set().union(*(tokens(value) for value in query_document_names)) if query_document_names else set()
+        document_names_by_id = {item.get("document_id"): item.get("file_name") or "" for item in self.list_documents()}
+        scenario_document_names: dict[int, list[str]] = {}
+        for version in self.list_dataset_versions():
+            scenario_id = version.get("scenario_id")
+            if scenario_id is None:
+                continue
+            ids = (version.get("snapshot_metadata") or {}).get("document_ids") or []
+            scenario_document_names.setdefault(scenario_id, []).extend(
+                document_names_by_id.get(int(document_id), "")
+                for document_id in ids
+                if str(document_id).isdigit() and document_names_by_id.get(int(document_id))
+            )
+        scored: list[dict] = []
+        for item in self.list_scenarios():
+            if exclude_id is not None and item.get("scenario_id") == exclude_id:
+                continue
+            item_name = str(item.get("name") or "")
+            item_description = str(item.get("description") or "")
+            item_tags = {str(tag).strip().lower() for tag in (item.get("tags") or []) if str(tag).strip()}
+            score = 0.0
+            matched: list[str] = []
+            if query_name and (query_name in item_name.lower() or item_name.lower() in query_name):
+                score += 0.55
+                matched.append("名称")
+            name_overlap = name_tokens & tokens(item_name)
+            if name_overlap:
+                score += min(0.3, 0.1 * len(name_overlap))
+                if "名称" not in matched:
+                    matched.append("名称关键词")
+            tag_overlap = query_tags & item_tags
+            if tag_overlap:
+                score += min(0.3, 0.1 * len(tag_overlap))
+                matched.append("标签")
+            description_overlap = description_tokens & tokens(item_description)
+            if description_overlap:
+                score += min(0.15, 0.05 * len(description_overlap))
+                matched.append("说明关键词")
+            candidate_document_tokens = set().union(*(tokens(value) for value in scenario_document_names.get(item["scenario_id"], []))) if scenario_document_names.get(item["scenario_id"]) else set()
+            if document_tokens and document_tokens & candidate_document_tokens:
+                score += 0.2
+                matched.append("关联文档")
+            if score > 0:
+                scored.append({**item, "similarity_score": round(min(score, 1.0), 3), "matched_fields": matched})
+        scored.sort(key=lambda item: (-item["similarity_score"], -(item.get("scenario_id") or 0)))
+        return scored[: max(1, min(limit, 20))]
+
+    def update_scenario(self, scenario_id: int, **updates: object) -> dict | None:
+        with SessionLocal() as session:
+            row = session.get(ScenarioRow, scenario_id)
+            if not row:
+                return None
+            if updates.get("name") is not None:
+                row.name = str(updates["name"]).strip()
+            if "description" in updates and updates["description"] is not None:
+                row.description = str(updates["description"]).strip() or None
+            if "tags" in updates and updates["tags"] is not None:
+                row.tags = sorted({str(tag).strip() for tag in (updates["tags"] or []) if str(tag).strip()})
+            row.updated_at = datetime.utcnow()
+            session.commit()
+            session.refresh(row)
+            return self._scenario_to_dict(row)
+
+    @staticmethod
+    def _scenario_to_dict(row: "ScenarioRow") -> dict:
+        return {
+            "scenario_id": row.scenario_id,
+            "name": row.name,
+            "description": row.description,
+            "tags": row.tags or [],
+            "status": row.status,
+            "created_by": row.created_by,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+            "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        }
+
+    def save_evaluation_iteration(self, **fields: object) -> int:
+        with SessionLocal() as session:
+            row = EvaluationIterationRow(**fields)
+            session.add(row)
+            session.commit()
+            session.refresh(row)
+            return row.iteration_id
+
+    def update_evaluation_iteration(self, iteration_id: int, **updates: object) -> dict | None:
+        with SessionLocal() as session:
+            row = session.get(EvaluationIterationRow, iteration_id)
+            if not row:
+                return None
+            for key, value in updates.items():
+                if hasattr(row, key) and value is not None:
+                    setattr(row, key, value)
+            session.commit()
+            session.refresh(row)
+            return self._iteration_to_dict(row)
+
+    def list_evaluation_iterations(self, scenario_id: int) -> list[dict]:
+        with SessionLocal() as session:
+            rows = session.query(EvaluationIterationRow).filter(
+                EvaluationIterationRow.scenario_id == scenario_id
+            ).order_by(EvaluationIterationRow.iteration_id.desc()).all()
+            return [self._iteration_to_dict(row) for row in rows]
+
+    @staticmethod
+    def _iteration_to_dict(row: "EvaluationIterationRow") -> dict:
+        return {
+            "iteration_id": row.iteration_id,
+            "scenario_id": row.scenario_id,
+            "version_id": row.version_id,
+            "parent_version_id": row.parent_version_id,
+            "run_id": row.run_id,
+            "agent_version": row.agent_version,
+            "optimization_type": row.optimization_type,
+            "status": row.status,
+            "summary": row.summary,
+            "metadata": row.metadata_json or {},
+            "created_by": row.created_by,
+            "created_at": row.created_at.isoformat() if row.created_at else None,
+        }
+
+    def review_eval_case(
+        self,
+        case_id: int,
+        *,
+        status: str,
+        actor: str | None = None,
+        reason: str | None = None,
+    ) -> dict | None:
+        allowed = {"approved", "rejected", "excluded", "pending"}
+        if status not in allowed:
+            raise ValueError(f"unsupported manual review status: {status}")
+        with SessionLocal() as session:
+            row = session.get(EvalCaseRow, case_id)
+            if not row:
+                return None
+            row.manual_review_status = status
+            row.manual_review_by = actor
+            row.manual_review_at = datetime.utcnow()
+            row.manual_review_reason = (reason or "").strip() or None
+            # 排除保留审计但不进入冻结版本；改回待审/通过时允许恢复到草稿。
+            row.retired = status == "excluded"
+            row.review_status = "user_confirmed" if status == "approved" else ("needs_revision" if status == "rejected" else "candidate")
+            session.commit()
+            session.refresh(row)
+            return self._eval_case_to_dict(row)
+
     def save_dataset_version(
         self,
         *,
+        scenario_id: int | None = None,
+        parent_version_id: int | None = None,
+        iteration_no: int = 1,
         version_number: str,
         status: str = "draft",
         case_count: int = 0,
@@ -1808,6 +2090,9 @@ class DatabaseService:
     ) -> int:
         with SessionLocal() as session:
             row = DatasetVersionRow(
+                scenario_id=scenario_id,
+                parent_version_id=parent_version_id,
+                iteration_no=iteration_no,
                 version_number=version_number,
                 status=status,
                 case_count=case_count,
@@ -1830,6 +2115,9 @@ class DatabaseService:
             return [
                 {
                     "version_id": row.version_id,
+                    "scenario_id": row.scenario_id,
+                    "parent_version_id": row.parent_version_id,
+                    "iteration_no": row.iteration_no,
                     "version_number": row.version_number,
                     "status": row.status,
                     "case_count": row.case_count,
@@ -1849,6 +2137,9 @@ class DatabaseService:
                 return None
             return {
                 "version_id": row.version_id,
+                "scenario_id": row.scenario_id,
+                "parent_version_id": row.parent_version_id,
+                "iteration_no": row.iteration_no,
                 "version_number": row.version_number,
                 "status": row.status,
                 "case_count": row.case_count,
@@ -1866,6 +2157,9 @@ class DatabaseService:
         status: str | None = None,
         case_count: int | None = None,
         snapshot_metadata: dict | None = None,
+        scenario_id: int | None = None,
+        parent_version_id: int | None = None,
+        iteration_no: int | None = None,
         freeze: bool = False,
     ) -> None:
         with SessionLocal() as session:
@@ -1878,6 +2172,12 @@ class DatabaseService:
                 row.case_count = case_count
             if snapshot_metadata is not None:
                 row.snapshot_metadata = snapshot_metadata
+            if scenario_id is not None:
+                row.scenario_id = scenario_id
+            if parent_version_id is not None:
+                row.parent_version_id = parent_version_id
+            if iteration_no is not None:
+                row.iteration_no = iteration_no
             if freeze:
                 row.frozen_at = datetime.utcnow()
             session.commit()
@@ -1908,6 +2208,10 @@ class DatabaseService:
         eiu_ids: list | None = None,
         content_priority: str | None = None,
         review_status: str = "candidate",
+        auto_quality_status: str = "pending",
+        manual_review_status: str = "pending",
+        manual_review_by: str | None = None,
+        manual_review_reason: str | None = None,
         source: str = "native",
     ) -> int:
         with SessionLocal() as session:
@@ -1926,6 +2230,10 @@ class DatabaseService:
                 eiu_ids=eiu_ids,
                 content_priority=content_priority,
                 review_status=review_status,
+                auto_quality_status=auto_quality_status,
+                manual_review_status=manual_review_status,
+                manual_review_by=manual_review_by,
+                manual_review_reason=manual_review_reason,
                 source=source,
                 retired=False,
             )
@@ -1982,6 +2290,10 @@ class DatabaseService:
         must_have_points: list | None = None,
         acceptable_answers: list | None = None,
         evidence: list | None = None,
+        auto_quality_status: str | None = None,
+        manual_review_status: str | None = None,
+        manual_review_by: str | None | object = _UNSET,
+        manual_review_reason: str | None | object = _UNSET,
     ) -> None:
         with SessionLocal() as session:
             row = session.get(EvalCaseRow, case_id)
@@ -2005,6 +2317,14 @@ class DatabaseService:
                 row.acceptable_answers = acceptable_answers
             if evidence is not None:
                 row.evidence = evidence
+            if auto_quality_status is not None:
+                row.auto_quality_status = auto_quality_status
+            if manual_review_status is not None:
+                row.manual_review_status = manual_review_status
+            if manual_review_by is not _UNSET:
+                row.manual_review_by = manual_review_by
+            if manual_review_reason is not _UNSET:
+                row.manual_review_reason = manual_review_reason
             # 手动编辑后回退质量校验状态（复用 FR-DS-EDIT-001）
             row.review_status = "candidate"
             session.commit()
@@ -2035,6 +2355,11 @@ class DatabaseService:
             "eiu_ids": row.eiu_ids,
             "content_priority": row.content_priority,
             "review_status": row.review_status,
+            "auto_quality_status": row.auto_quality_status,
+            "manual_review_status": row.manual_review_status,
+            "manual_review_by": row.manual_review_by,
+            "manual_review_at": row.manual_review_at.isoformat() if row.manual_review_at else None,
+            "manual_review_reason": row.manual_review_reason,
             "source": row.source,
             "retired": row.retired,
         }
@@ -2889,6 +3214,10 @@ class DatabaseService:
         composition_id: int | None,
         name: str | None,
         adapter: str,
+        scenario_id: int | None = None,
+        dataset_version_id: int | None = None,
+        iteration_id: int | None = None,
+        agent_version: str | None = None,
         adapter_config: dict | None = None,
         intermediate_eval: dict | None = None,
         judge_eval: dict | None = None,
@@ -2898,6 +3227,10 @@ class DatabaseService:
         with SessionLocal() as session:
             row = EvaluationRunRow(
                 composition_id=composition_id,
+                scenario_id=scenario_id,
+                dataset_version_id=dataset_version_id,
+                iteration_id=iteration_id,
+                agent_version=agent_version,
                 name=name,
                 adapter=adapter,
                 adapter_config=adapter_config,
@@ -3097,6 +3430,10 @@ class DatabaseService:
         return {
             "run_id": row.run_id,
             "composition_id": row.composition_id,
+            "scenario_id": getattr(row, "scenario_id", None),
+            "dataset_version_id": getattr(row, "dataset_version_id", None),
+            "iteration_id": getattr(row, "iteration_id", None),
+            "agent_version": getattr(row, "agent_version", None),
             "name": row.name,
             "adapter": row.adapter,
             "adapter_config": adapter_config,
@@ -3324,6 +3661,10 @@ class EvaluationRunRow(Base):
 
     run_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     composition_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    scenario_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    dataset_version_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    iteration_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    agent_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
     name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     adapter: Mapped[str] = mapped_column(String(64), nullable=False)
     adapter_config: Mapped[dict | None] = mapped_column(JSON, nullable=True)

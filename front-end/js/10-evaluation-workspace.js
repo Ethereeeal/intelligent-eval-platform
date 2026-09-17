@@ -5,6 +5,10 @@
     compositionId: null,
     selectedSource: null,
     multiTurn: false,
+    datasetVersionId: null,
+    scenarioId: null,
+    iterationId: null,
+    agentVersion: "",
     runId: null,
     results: [],
     filteredResults: [],
@@ -107,6 +111,10 @@
     if (window.__evSelectedDatasetVersionId) {
       state.compositionId = null;
       state.selectedSource = { kind: "version", versionId: Number(window.__evSelectedDatasetVersionId) };
+      state.datasetVersionId = Number(window.__evSelectedDatasetVersionId);
+      const selectedVersion = versions.find(item => Number(item.version_id) === state.datasetVersionId);
+      state.scenarioId = selectedVersion?.scenario_id || null;
+      state.iterationId = null;
       window.__evSelectedDatasetVersionId = null;
     }
     const representedVersionIds = new Set(
@@ -160,9 +168,16 @@
       if (kind === "version") {
         state.compositionId = null;
         state.selectedSource = { kind: "version", versionId: id };
+        state.datasetVersionId = id;
+        state.iterationId = null;
+        const selectedVersion = versions.find(item => Number(item.version_id) === id);
+        state.scenarioId = selectedVersion?.scenario_id || null;
       } else {
         state.compositionId = id;
         state.selectedSource = { kind: "composition", compositionId: id };
+        state.datasetVersionId = null;
+        state.scenarioId = null;
+        state.iterationId = null;
       }
       document.querySelectorAll(".ev-composition").forEach(x => x.classList.toggle("selected", x.querySelector("input").checked));
     });
@@ -287,7 +302,9 @@
           };
         }
         state.compositionId = Number(composition.composition_id);
-        state.selectedSource = { kind: "composition", compositionId: state.compositionId };
+        state.selectedSource = { kind: "version", versionId: Number(version.version_id) };
+        state.datasetVersionId = Number(version.version_id);
+        state.scenarioId = version.scenario_id || null;
       } else {
         composition = compositions.find(item => Number(item.composition_id) === Number(selectedSource.compositionId));
       }
@@ -337,6 +354,8 @@
       <div class="modal-body">
         <label class="es-field" for="evConfirmName">运行名称</label>
         <input class="es-input" id="evConfirmName" maxlength="255" value="${esc(defaultRunName(composition.name || `评测集-${composition.composition_id}`))}" />
+        <label class="es-field" for="evConfirmAgentVersion">被测智能体版本标识</label>
+        <input class="es-input" id="evConfirmAgentVersion" maxlength="128" value="${esc(state.agentVersion || "")}" placeholder="例如：客服智能体 v1.2.0" />
         <div class="ev-confirm-grid">
           <section class="ev-confirm-card"><div class="ev-confirm-label">请求配置</div><b>${esc(adapterLabel)}</b><pre>${esc(JSON.stringify(requestSummary, null, 2))}</pre></section>
           <section class="ev-confirm-card"><div class="ev-confirm-label">可执行评测集</div><b>${esc(composition.name || `评测集 #${composition.composition_id}`)}</b><dl><div><dt>版本</dt><dd>#${composition.composition_id}</dd></div><div><dt>运行模式</dt><dd>${state.multiTurn ? "多轮对话" : "单轮问答"}</dd></div><div><dt>来源数</dt><dd>${Array.isArray(composition.items) ? composition.items.length : 0}</dd></div><div><dt>创建时间</dt><dd>${esc(formatDateTime(composition.created_at))}</dd></div></dl></section>
@@ -359,8 +378,20 @@
       button.disabled = true;
       button.innerHTML = '<span class="spinner"></span>正在发起';
       try {
+        const agentVersion = modal.querySelector("#evConfirmAgentVersion").value.trim();
+        state.agentVersion = agentVersion;
+        let iterationId = state.iterationId;
+        if (state.scenarioId && !iterationId) {
+          const iteration = await post("/api/iterations", { scenario_id: Number(state.scenarioId), version_id: state.datasetVersionId || null, agent_version: agentVersion || null, optimization_type: "agent", status: "in_progress", summary: "开始对当前评测集版本进行智能体回归评测", created_by: "web" });
+          iterationId = iteration.iteration_id;
+          state.iterationId = iterationId;
+        }
         const run = await post("/api/evaluation-runs", {
           composition_id: state.compositionId,
+          scenario_id: state.scenarioId || null,
+          dataset_version_id: state.datasetVersionId || null,
+          iteration_id: iterationId || null,
+          agent_version: agentVersion || null,
           name,
           adapter: state.adapter,
           adapter_config: config,
@@ -463,7 +494,7 @@
         : "";
       return `<section class="ev-node-result"><div class="ev-node-result-head"><b>${esc(nodeOptions.find(option => option.id === node)?.label || node)}</b><span>${esc(metricStatusLabel(item.status))}</span><small>${Number(item.scored || 0)}/${state.results.length} 题</small></div><div class="ev-node-metrics">${rows || '<span class="es-gen-hint">暂无指标</span>'}</div>${classDetails}</section>`;
     }).join("");
-    return `<section class="card card-pad ev-run-summary" id="evRunEvaluationSummary"><div class="ev-run-summary-head"><div><div class="card-t">本次评测配置与方法结果</div><p>指标按所选方法独立计算，不合并成一个综合分数。</p></div><span class="ev-task-chip">${esc(taskProfileLabels[run.task_profile] || "通用问答")}</span></div><div class="ev-run-config-chips"><span><b>评测方法</b>${esc(methodNames(methods).join("、") || "未选择")}</span><span><b>中间节点</b>${esc(selectedNodeNames(nodes).join("、") || "未启用")}</span><span><b>Judge附加输入</b>${esc(optionalInputs.join("、") || "无")}</span></div><div class="ev-eval-result-grid">${methodCards.join("")}</div>${nodeCards ? `<div class="ev-node-result-grid">${nodeCards}</div>` : ""}<p class="ev-standard-note">国标标签仅表示指标公式或评测方法条文的引用，不代表本项目已通过国标认证；人工 MOS 暂未纳入。</p></section>`;
+    return `<section class="card card-pad ev-run-summary" id="evRunEvaluationSummary"><div class="ev-run-summary-head"><div><div class="card-t">本次评测配置与方法结果</div><p>指标按所选方法独立计算，不合并成一个综合分数。</p></div><span class="ev-task-chip">${esc(taskProfileLabels[run.task_profile] || "通用问答")}</span></div><div class="ev-run-config-chips"><span><b>业务场景</b>${esc(run.scenario_id ? `场景 #${run.scenario_id}` : "未关联")}</span><span><b>评测集版本</b>${esc(run.dataset_version_id ? `版本 #${run.dataset_version_id}` : "组合评测集")}</span><span><b>被测智能体</b>${esc(run.agent_version || "未填写版本")}</span><span><b>评测方法</b>${esc(methodNames(methods).join("、") || "未选择")}</span><span><b>中间节点</b>${esc(selectedNodeNames(nodes).join("、") || "未启用")}</span><span><b>Judge附加输入</b>${esc(optionalInputs.join("、") || "无")}</span></div><div class="ev-eval-result-grid">${methodCards.join("")}</div>${nodeCards ? `<div class="ev-node-result-grid">${nodeCards}</div>` : ""}<p class="ev-standard-note">国标标签仅表示指标公式或评测方法条文的引用，不代表本项目已通过国标认证；人工 MOS 暂未纳入。</p></section>`;
   }
 
   function refreshAnalysisMetrics() {

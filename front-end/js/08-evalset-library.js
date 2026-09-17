@@ -18,6 +18,16 @@ const apiPostES = async (path, body) => {
   }
   return res.json();
 };
+const apiPutES = async (path, body) => {
+  const res = await fetch(API_BASE + path, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+  if (!res.ok) { const detail = await res.json().catch(() => ({})); throw new Error(detail.detail || res.status); }
+  return res.json();
+};
+const apiDeleteES = async path => {
+  const res = await fetch(API_BASE + path, { method: "DELETE" });
+  if (!res.ok) { const detail = await res.json().catch(() => ({})); throw new Error(detail.detail || res.status); }
+  return res.json();
+};
 
 // 公共库 6 维度（文件 → 维度名 + 占位可用量；后端接入后改为真实可用量）
 const ES_PUBLIC_DIMS = [
@@ -165,6 +175,7 @@ async function esOpenLibraryDocument(row) {
   const cacheKey = `${kind}:${id}`;
   let cases = window.__esDocumentRows?.[cacheKey];
   let uploadedSnapshot = window.__esQualitySnapshots?.[cacheKey] || null;
+  let versionMeta = null;
   if (!cases && kind === "uploaded") {
     const sample = ES_UPLOADED_SAMPLES.find(item => String(item.set_id) === String(id));
     const result = sample ? sample : await apiGet(`/api/eval-sets/uploaded/${id}`).catch(() => null);
@@ -175,7 +186,11 @@ async function esOpenLibraryDocument(row) {
   }
   if (!cases && kind === "public") cases = ES_PUBLIC_DIMS.find(item => item.key === id)?.cases || [];
   if (!cases && kind === "custom" && String(id).startsWith("version:")) {
-    cases = await apiGet(`/api/versions/${String(id).slice("version:".length)}/cases`).catch(() => []);
+    const versionId = String(id).slice("version:".length);
+    [versionMeta, cases] = await Promise.all([
+      apiGet(`/api/versions/${versionId}`).catch(() => null),
+      apiGet(`/api/versions/${versionId}/cases?limit=100000`).catch(() => []),
+    ]);
   }
   if (!cases && kind === "custom") {
     const customSets = (window.__customSets && window.__customSets.length) ? window.__customSets : ES_CUSTOM_SAMPLES;
@@ -185,8 +200,11 @@ async function esOpenLibraryDocument(row) {
     const doc = DOCS[String(id)];
     cases = (doc && doc.qa) ? doc.qa.map(item => ({ q: item.q, a: item.a, evidence: item.evidence || "", src: item.src || name })) : [];
   }
+  if (kind === "custom" && String(id).startsWith("version:") && !versionMeta) {
+    versionMeta = await apiGet(`/api/versions/${String(id).slice("version:".length)}`).catch(() => null);
+  }
   if (navigationToken !== window.__esNavigationToken || window.__esView !== kind) return;
-  const rows = (cases || []).map((item, index) => ({ id: item.id || item.case_id || `${kind}-${id}-${index}`, q: item.q || item.question || "", a: item.a || item.answer || item.gold_answer || "", diff: item.diff || item.difficulty || "中等", review: item.review || item.review_status || "待审核", evidence: item.evidence || "", src: item.src || item.source || name }));
+  const rows = (cases || []).map((item, index) => ({ id: item.id || item.case_id || `${kind}-${id}-${index}`, q: item.q || item.question || "", a: item.a || item.answer || item.gold_answer || "", diff: item.diff || item.difficulty || "中等", review: item.review || item.manual_review_status || item.review_status || "待审核", autoQuality: item.auto_quality_status || "—", evidence: item.evidence || "", src: item.src || item.source || name, source: item.source || "", caseId: item.case_id }));
   let quality = kind === "public" ? null : esStructuralQuality(rows, uploadedSnapshot);
   if (kind === "generate") {
     const documentId = Number(String(id).replace(/^doc/, ""));
@@ -196,16 +214,20 @@ async function esOpenLibraryDocument(row) {
   }
   window.__esDocumentRows = window.__esDocumentRows || {};
   window.__esDocumentRows[cacheKey] = rows;
-  esRenderTemplateDetail($("#esReadonlyQaDetail"), { kind, id, name, rows, quality, editable: kind !== "public" });
+  const editable = kind !== "public" && (kind !== "custom" || versionMeta?.status === "draft");
+  esRenderTemplateDetail($("#esReadonlyQaDetail"), { kind, id, name, rows, quality, editable, version: versionMeta });
   icons();
 }
 
-function esTemplateRow(row, editable) {
-  const cell = (field, cls) => `<div class="qa-cell ${cls}${editable ? " es-cell-editable" : ""}" ${editable ? `data-es-case-field="${field}"` : ""}><span>${escapeHTML(row[field] || "") || "—"}</span></div>`;
-  return `<div class="qa-row es-template-row es-template-four" data-es-case-id="${escapeHTML(row.id)}">${cell("q", "qa-q-cell")}${cell("a", "qa-a-cell")}${cell("evidence", "qa-ev-cell")}${cell("src", "qa-src-cell")}${editable ? `<div class="qa-cell qa-act-cell es-template-actions"><button class="btn ghost icon-only sm" data-es-case-delete="${escapeHTML(row.id)}" title="删除"><i data-lucide="trash-2"></i></button></div>` : ""}</div>`;
+function esTemplateRow(row, editable, detail = {}) {
+  const sourceReadonly = detail.kind === "custom" && row.source === "public";
+  const cellEditable = editable && !sourceReadonly;
+  const cell = (field, cls) => { const fieldEditable = cellEditable && field !== "src"; return `<div class="qa-cell ${cls}${fieldEditable ? " es-cell-editable" : ""}" ${fieldEditable ? `data-es-case-field="${field}"` : ""}><span>${escapeHTML(row[field] || "") || "—"}</span>${field === "src" && detail.kind === "custom" ? `<small class="es-case-state">质检：${escapeHTML(row.autoQuality || "待检查")} · 人工：${escapeHTML(row.review || "待审核")}${sourceReadonly ? " · 公共题只读" : " · 来源只读"}</small>` : ""}</div>`; };
+  const actions = editable ? `<div class="qa-cell qa-act-cell es-template-actions">${detail.kind === "custom" && detail.version?.status === "draft" ? `<button class="btn ghost icon-only sm" data-es-case-quality="${escapeHTML(row.id)}" title="自动质检"><i data-lucide="shield-check"></i></button><button class="btn ghost icon-only sm" data-es-case-review="approved" data-es-case-id="${escapeHTML(row.id)}" title="人工通过"><i data-lucide="check"></i></button><button class="btn ghost icon-only sm" data-es-case-review="rejected" data-es-case-id="${escapeHTML(row.id)}" title="驳回"><i data-lucide="rotate-ccw"></i></button>` : ""}<button class="btn ghost icon-only sm" data-es-case-delete="${escapeHTML(row.id)}" title="删除"><i data-lucide="trash-2"></i></button></div>` : "";
+  return `<div class="qa-row es-template-row es-template-four" data-es-case-id="${escapeHTML(row.id)}">${cell("q", "qa-q-cell")}${cell("a", "qa-a-cell")}${cell("evidence", "qa-ev-cell")}${cell("src", "qa-src-cell")}${actions}</div>`;
 }
 
-function esOpenCellEditor(cell, record, field) {
+function esOpenCellEditor(cell, record, field, detail = {}) {
   const titles = { q: "问题", a: "标准答案", evidence: "证据", src: "来源" };
   const mask = document.createElement("div");
   mask.className = "modal-mask";
@@ -214,10 +236,20 @@ function esOpenCellEditor(cell, record, field) {
   const close = () => mask.remove();
   mask.querySelector(".modal-x").onclick = close;
   mask.querySelector(".modal-cancel").onclick = close;
-  mask.querySelector("#esCellSave").onclick = () => {
+  mask.querySelector("#esCellSave").onclick = async () => {
+    const previous = record[field];
     record[field] = mask.querySelector("#esCellEditor").value.trim();
-    cell.querySelector("span").textContent = record[field] || "—";
-    close();
+    try {
+      if (detail.kind === "custom" && detail.version?.status === "draft" && Number.isFinite(Number(record.id))) {
+        const payload = field === "q" ? { question: record[field] } : field === "a" ? { gold_answer: record[field] } : field === "evidence" ? { evidence: record[field] ? [{ original_text: record[field] }] : [] } : {};
+        if (Object.keys(payload).length) await apiPutES(`/api/cases/${record.id}`, payload);
+      }
+      cell.querySelector("span").textContent = record[field] || "—";
+      close();
+    } catch (error) {
+      record[field] = previous;
+      toast("保存失败：" + error.message, "warn");
+    }
   };
   mask.querySelector("#esCellEditor").focus();
 }
@@ -309,16 +341,18 @@ function esBindPurposePreview(target, documentId) {
 
 function esRenderTemplateDetail(target, detail, options = {}) {
   if (!target) return;
-  const { kind, id, name, rows, quality, editable } = detail;
+  const { kind, id, name, rows, quality, editable, version } = detail;
+  const cacheKey = `${kind}:${id}`;
   const fieldFilters = {};
   const filterHead = (label, field) => `${label}<button class="col-filter" data-es-focus-filter="${field}" title="筛选${label}"><i data-lucide="filter"></i></button>`;
-  target.innerHTML = `${options.fullscreen ? "" : `<div class="lib-head"><div class="lh-ic"><i data-lucide="message-square-text"></i></div><div><div class="lh-title">${escapeHTML(name)}</div><div class="lh-sub">评测集 · ${rows.length} 条</div></div></div>`}
+  const lifecycleActions = !options.fullscreen && kind === "custom" && version ? `<div class="es-version-workbench"><div><b>版本 ${escapeHTML(version.version_number || "")}</b><span class="es-tag ${version.status === "draft" ? "warn" : "ok"}">${esScenarioStatusLabel(version.status)}</span><small>${version.status === "draft" ? "自动质检与人工确认均通过后才可冻结" : "冻结版本只读；优化请克隆为新草稿"}</small></div><div>${version.parent_version_id ? `<button class="btn ghost sm" id="esVersionDiff"><i data-lucide="git-compare"></i>版本差异</button>` : ""}${version.status === "draft" ? `<button class="btn ghost sm" id="esDraftQualityAll"><i data-lucide="shield-check"></i>自动质检全部</button><button class="btn ghost sm" id="esDraftReviewAll"><i data-lucide="user-round-check"></i>全部人工通过</button><button class="btn primary sm" id="esDraftFreeze"><i data-lucide="snowflake"></i>冻结版本</button>` : `<button class="btn primary sm" id="esVersionClone"><i data-lucide="copy-plus"></i>优化评测集</button>`}</div></div>` : "";
+  target.innerHTML = `${options.fullscreen ? "" : `<div class="lib-head"><div class="lh-ic"><i data-lucide="message-square-text"></i></div><div><div class="lh-title">${escapeHTML(name)}</div><div class="lh-sub">评测集 · ${rows.length} 条</div></div></div>`}${lifecycleActions}
     ${options.fullscreen ? "" : esQualityDashboardHTML(kind, id, quality, rows)}
     <div class="qa-toolbar">
       <div><button class="btn ghost sm" id="esCaseExport"><i data-lucide="download"></i>导出评测集</button></div>
       <div class="qa-toolbar-right"><div class="qa-search"><i data-lucide="search"></i><input id="esCaseSearch" type="text" placeholder="搜索问题/答案/证据/来源…" /></div>${options.fullscreen ? "" : `<button class="btn ghost icon-only sm" id="esCaseFullscreen" title="放大查看"><i data-lucide="maximize"></i></button>`}</div>
     </div>
-    <div class="card card-pad"><div class="sec-h">评测集</div><div class="qa-table es-template-table es-template-four"><div class="qa-col-head es-template-head"><div class="qa-cell qa-q-cell">${filterHead("问题", "q")}</div><div class="qa-cell qa-a-cell">${filterHead("标准答案", "a")}</div><div class="qa-cell qa-ev-cell">${filterHead("证据", "evidence")}</div><div class="qa-cell qa-src-cell">${filterHead("来源", "src")}</div>${editable ? "<div class=\"qa-cell qa-act-cell\">操作</div>" : ""}</div><div id="esTemplateRows">${rows.length ? rows.map(row => esTemplateRow(row, editable)).join("") : `<div class="es-template-empty">暂无可展示评测集</div>`}</div></div></div>`;
+    <div class="card card-pad"><div class="sec-h">评测集问题 <span class="muted">${version?.status === "draft" ? "可编辑并逐题审核" : "只读快照"}</span></div><div class="qa-table es-template-table es-template-four"><div class="qa-col-head es-template-head"><div class="qa-cell qa-q-cell">${filterHead("问题", "q")}</div><div class="qa-cell qa-a-cell">${filterHead("标准答案", "a")}</div><div class="qa-cell qa-ev-cell">${filterHead("证据", "evidence")}</div><div class="qa-cell qa-src-cell">${filterHead("来源 / 状态", "src")}</div>${editable ? "<div class=\"qa-cell qa-act-cell\">操作</div>" : ""}</div><div id="esTemplateRows">${rows.length ? rows.map(row => esTemplateRow(row, editable, detail)).join("") : `<div class="es-template-empty">暂无可展示评测集</div>`}</div></div></div>`;
   if (kind === "generate" && !options.fullscreen && /^doc\d+$/.test(String(id))) esBindPurposePreview(target, Number(String(id).slice(3)));
   const refreshRows = () => {
     const keyword = target.querySelector("#esCaseSearch")?.value.trim().toLowerCase() || "";
@@ -363,16 +397,55 @@ function esRenderTemplateDetail(target, detail, options = {}) {
     overlay.querySelector("[data-es-fullscreen-close]").onclick = () => { overlay.remove(); document.body.style.overflow = ""; };
   });
   if (editable) {
-    const cacheKey = `${kind}:${id}`;
     target.querySelectorAll("[data-es-case-field]").forEach(cell => cell.addEventListener("click", () => {
-      const record = window.__esDocumentRows[cacheKey].find(item => item.id === cell.closest(".es-template-row").dataset.esCaseId);
-      if (record) esOpenCellEditor(cell, record, cell.dataset.esCaseField);
+      const record = window.__esDocumentRows[cacheKey].find(item => String(item.id) === String(cell.closest(".es-template-row").dataset.esCaseId));
+      if (record) esOpenCellEditor(cell, record, cell.dataset.esCaseField, detail);
     }));
-    target.querySelectorAll("[data-es-case-delete]").forEach(button => button.addEventListener("click", () => {
-      window.__esDocumentRows[cacheKey] = window.__esDocumentRows[cacheKey].filter(item => item.id !== button.dataset.esCaseDelete);
-      esRenderTemplateDetail(target, { ...detail, rows: window.__esDocumentRows[cacheKey] }, options);
+    target.querySelectorAll("[data-es-case-delete]").forEach(button => button.addEventListener("click", async () => {
+      const numericId = Number(button.dataset.esCaseDelete);
+      if (kind === "custom" && version?.status === "draft" && Number.isFinite(numericId)) {
+        try { await apiDeleteES(`/api/cases/${numericId}`); toast("题目已排除", "ok"); await reload(); } catch (error) { toast("排除失败：" + error.message, "warn"); }
+      } else {
+        window.__esDocumentRows[cacheKey] = window.__esDocumentRows[cacheKey].filter(item => item.id !== button.dataset.esCaseDelete);
+        esRenderTemplateDetail(target, { ...detail, rows: window.__esDocumentRows[cacheKey] }, options);
+      }
     }));
   }
+  const reload = async () => {
+    window.__esDocumentRows[cacheKey] = null;
+    await renderEvalSetLibrary();
+  };
+  target.querySelectorAll("[data-es-case-quality]").forEach(button => button.addEventListener("click", async event => {
+    event.stopPropagation();
+    try { await apiPostES(`/api/versions/${String(id).replace(/^version:/, "")}/cases/${button.dataset.esCaseQuality}/quality-check`); toast("自动质检完成", "ok"); await reload(); } catch (error) { toast("自动质检失败：" + error.message, "warn"); }
+  }));
+  target.querySelectorAll("[data-es-case-review]").forEach(button => button.addEventListener("click", async event => {
+    event.stopPropagation();
+    try { await apiPostES(`/api/versions/${String(id).replace(/^version:/, "")}/cases/${button.dataset.esCaseId}/review`, { status: button.dataset.esCaseReview, actor: "web" }); toast(button.dataset.esCaseReview === "approved" ? "已人工通过" : "已驳回", "ok"); await reload(); } catch (error) { toast("人工审核失败：" + error.message, "warn"); }
+  }));
+  target.querySelector("#esDraftQualityAll")?.addEventListener("click", async () => {
+    const buttons = [...target.querySelectorAll("[data-es-case-quality]")];
+    for (const button of buttons) { try { await apiPostES(`/api/versions/${String(id).replace(/^version:/, "")}/cases/${button.dataset.esCaseQuality}/quality-check`); } catch (_) {} }
+    toast("已完成草稿自动质检", "ok"); await reload();
+  });
+  target.querySelector("#esDraftReviewAll")?.addEventListener("click", async () => {
+    try { await apiPostES(`/api/versions/${String(id).replace(/^version:/, "")}/review-all`, { status: "approved", actor: "web" }); toast("已将自动质检通过的题目标记为人工通过", "ok"); await reload(); } catch (error) { toast("批量审核失败：" + error.message, "warn"); }
+  });
+  target.querySelector("#esDraftFreeze")?.addEventListener("click", async () => {
+    try { await apiPostES(`/api/versions/${String(id).replace(/^version:/, "")}/freeze?actor=web`, {}); toast("版本已冻结，可进入评测运行", "ok"); await reload(); } catch (error) { toast("冻结失败：" + error.message, "warn"); }
+  });
+  target.querySelector("#esVersionClone")?.addEventListener("click", async () => {
+    try { const cloned = await apiPostES(`/api/versions/${String(id).replace(/^version:/, "")}/clone?actor=web`, {}); toast(`已创建 ${cloned.version_number} 优化草稿`, "ok"); await reload(); } catch (error) { toast("创建优化草稿失败：" + error.message, "warn"); }
+  });
+  target.querySelector("#esVersionDiff")?.addEventListener("click", async () => {
+    try {
+      const diff = await apiGet(`/api/versions/${String(id).replace(/^version:/, "")}/diff`);
+      const mask = document.createElement("div"); mask.className = "modal-mask";
+      const itemList = (items, field) => (items || []).slice(0, 20).map(item => `<li>${escapeHTML(item.case?.question || item.after?.question || item.before?.question || "未提供问题")}</li>`).join("") || "<li>无</li>";
+      mask.innerHTML = `<div class="modal modal-wide"><div class="modal-head"><span>版本差异 · 基线 #${escapeHTML(diff.parent_version_id)}</span><button class="modal-x">×</button></div><div class="modal-body"><div class="es-diff-summary"><span>新增 ${diff.counts.added}</span><span>修改 ${diff.counts.modified}</span><span>排除 ${diff.counts.excluded}</span></div><div class="es-diff-lists"><div><b>新增题目</b><ul>${itemList(diff.added)}</ul></div><div><b>修改题目</b><ul>${itemList(diff.modified)}</ul></div><div><b>排除题目</b><ul>${itemList(diff.excluded)}</ul></div></div></div><div class="modal-foot"><button class="btn primary modal-x2">知道了</button></div></div>`;
+      document.body.appendChild(mask); const close = () => mask.remove(); mask.querySelector(".modal-x").onclick = close; mask.querySelector(".modal-x2").onclick = close;
+    } catch (error) { toast("读取版本差异失败：" + error.message, "warn"); }
+  });
   if (!options.fullscreen) esBindQualityCharts(target, kind, id, quality, rows);
   icons();
 }
@@ -509,6 +582,89 @@ async function esLoadPublic(navigationToken = window.__esNavigationToken) {
   esRenderLibraryTree("esPublicTree", ES_PUBLIC_DIMS.map(d => ({ id: d.key, kind: "public", name: d.file, meta: d.total + " 题" })));
 }
 
+function esScenarioStatusLabel(status) {
+  return ({ draft: "待校验", frozen: "可评测", published: "已发布" })[status] || status || "未知";
+}
+
+function esOpenScenarioModal() {
+  const mask = document.createElement("div");
+  mask.className = "modal-mask";
+  mask.innerHTML = `<div class="modal"><div class="modal-head"><span>新建业务场景</span><button class="modal-x" type="button">×</button></div><div class="modal-body"><label class="es-field">场景名称</label><input class="es-input" id="esScenarioNameInput" placeholder="例如：对公开户咨询"/><label class="es-field">场景说明</label><textarea class="es-input" id="esScenarioDescInput" rows="3" placeholder="描述业务边界和复用范围"></textarea><label class="es-field">标签</label><input class="es-input" id="esScenarioTagsInput" placeholder="例如：对公、开户、客服（用逗号分隔）"/><div id="esScenarioRecommendations" class="es-scenario-recommendations" hidden></div><p class="es-gen-hint">相似场景只用于辅助复用决策，需你确认后才会选择或克隆，不会自动合并。</p></div><div class="modal-foot"><button class="btn ghost modal-cancel">取消</button><button class="btn primary" id="esScenarioSave">创建场景</button></div></div>`;
+  document.body.appendChild(mask);
+  const close = () => mask.remove();
+  mask.querySelector(".modal-x").onclick = close;
+  mask.querySelector(".modal-cancel").onclick = close;
+  let recommendationTimer;
+  const loadRecommendations = async () => {
+    const name = mask.querySelector("#esScenarioNameInput").value.trim();
+    const description = mask.querySelector("#esScenarioDescInput").value.trim();
+    const tags = mask.querySelector("#esScenarioTagsInput").value.split(/[,，]/).map(s => s.trim()).filter(Boolean);
+    if (!name && !description && !tags.length) return;
+    const box = mask.querySelector("#esScenarioRecommendations");
+    try {
+      const query = [`name=${encodeURIComponent(name)}`, `description=${encodeURIComponent(description)}`, ...tags.map(tag => `tags=${encodeURIComponent(tag)}`)].join("&");
+      const items = await apiGet(`/api/scenarios/similar?${query}`);
+      if (!items.length) { box.hidden = true; return; }
+      box.hidden = false;
+      box.innerHTML = `<b>发现相似场景，请确认是否复用</b>${items.map(item => `<button type="button" class="es-scenario-recommend" data-es-scenario-id="${item.scenario_id}"><span>${escapeHTML(item.name)}</span><small>${escapeHTML((item.matched_fields || []).join("、"))} · 相似度 ${Math.round(Number(item.similarity_score || 0) * 100)}%</small></button>`).join("")}`;
+      box.querySelectorAll("[data-es-scenario-id]").forEach(button => button.onclick = () => {
+        window.__esScenarioId = Number(button.dataset.esScenarioId);
+        window.__esScenarioName = button.querySelector("span")?.textContent || "";
+        close();
+        esLoadCustom();
+        toast("已选择相似场景，可继续查看或克隆其版本", "ok");
+      });
+    } catch (_) { /* 推荐失败不阻断新建场景 */ }
+  };
+  ["#esScenarioNameInput", "#esScenarioDescInput", "#esScenarioTagsInput"].forEach(selector => mask.querySelector(selector).addEventListener("input", () => { clearTimeout(recommendationTimer); recommendationTimer = setTimeout(loadRecommendations, 280); }));
+  mask.querySelector("#esScenarioSave").onclick = async () => {
+    const name = mask.querySelector("#esScenarioNameInput").value.trim();
+    if (!name) return toast("请填写场景名称", "warn");
+    try {
+      const scenario = await apiPostES("/api/scenarios", { name, description: mask.querySelector("#esScenarioDescInput").value.trim(), tags: mask.querySelector("#esScenarioTagsInput").value.split(/[,，]/).map(s => s.trim()).filter(Boolean), created_by: "web" });
+      window.__esScenarioId = scenario.scenario_id;
+      window.__esScenarioName = scenario.name;
+      close();
+      await esLoadCustom();
+      toast("业务场景已创建", "ok");
+    } catch (error) { toast("场景创建失败：" + error.message, "warn"); }
+  };
+  mask.querySelector("#esScenarioNameInput").focus();
+}
+
+function esRenderScenarioWorkbench(target, scenarios, versions, runs, latestStats = null) {
+  if (!target) return;
+  const scenarioId = Number(window.__esScenarioId) || null;
+  const current = scenarios.find(item => Number(item.scenario_id) === scenarioId) || null;
+  const scoped = scenarioId ? versions.filter(item => Number(item.scenario_id) === scenarioId) : versions;
+  const drafts = scoped.filter(item => item.status === "draft").length;
+  const frozen = scoped.filter(item => ["frozen", "published"].includes(item.status)).length;
+  const latest = scoped[0];
+  const latestRun = runs.find(run => Number(run.dataset_version_id) === Number(latest?.version_id));
+  const autoQuality = latestStats?.auto_quality || {};
+  const manualReview = latestStats?.manual_review || {};
+  target.innerHTML = `<section class="es-scenario-workbench card card-pad">
+    <div class="es-scenario-head"><div><div class="card-t"><i data-lucide="workflow"></i>场景迭代工作台</div><p>生成 → 人工校验 → 评测 → 优化；每轮都保留版本和报告，适合汇报场景沉淀效果。</p></div><div class="es-scenario-actions"><select class="es-input" id="esScenarioSelect"><option value="">全部场景</option>${scenarios.map(item => `<option value="${item.scenario_id}" ${Number(item.scenario_id) === scenarioId ? "selected" : ""}>${escapeHTML(item.name)}</option>`).join("")}</select><button class="btn ghost sm" id="esScenarioCreate"><i data-lucide="plus"></i>新建场景</button><button class="btn primary sm" id="esScenarioDraft" ${current ? "" : "disabled"}><i data-lucide="sparkles"></i>新建草稿</button></div></div>
+    <div class="es-scenario-metrics"><div><small>当前场景</small><b>${escapeHTML(current?.name || "全部场景")}</b><em>${current?.tags?.length ? escapeHTML(current.tags.join(" · ")) : "可按场景沉淀复用"}</em></div><div><small>草稿版本</small><b>${drafts}</b><em>等待质检/人工校验</em></div><div><small>可评测版本</small><b>${frozen}</b><em>冻结后不可修改</em></div><div><small>最近版本自动质检</small><b>${latestStats ? `${autoQuality.passed || 0}/${latestStats.total || 0}` : "—"}</b><em>${autoQuality.failed ? `${autoQuality.failed} 条未通过` : "质检通过"}</em></div><div><small>最近版本人工校验</small><b>${latestStats ? `${manualReview.approved || 0}/${latestStats.total || 0}` : "—"}</b><em>${manualReview.pending ? `${manualReview.pending} 条待确认` : "已全部确认"}</em></div><div><small>最近评测</small><b>${latestRun?.pass_rate == null ? (latestRun ? esScenarioStatusLabel(latestRun.status) : "—") : Math.round(Number(latestRun.pass_rate) * 100) + "%"}</b><em>${latestRun?.agent_version ? escapeHTML(latestRun.agent_version) : latestRun ? "智能体回归结果" : "尚未运行"}</em></div></div>
+    <div class="es-scenario-timeline"><span class="done"><i data-lucide="sparkles"></i>生成草稿</span><i data-lucide="chevron-right"></i><span class="${latest?.status === "draft" ? "current" : frozen ? "done" : ""}"><i data-lucide="user-round-check"></i>人工校验</span><i data-lucide="chevron-right"></i><span class="${latestRun ? "done" : ""}"><i data-lucide="gauge"></i>评测</span><i data-lucide="chevron-right"></i><span><i data-lucide="wand-sparkles"></i>优化沉淀</span></div>
+    ${latest ? `<div class="es-scenario-latest"><div><b>最近版本 ${escapeHTML(latest.version_number || "")}</b><span class="es-tag ${latest.status === "draft" ? "warn" : "ok"}">${esScenarioStatusLabel(latest.status)}</span><small>${Number(latest.case_count || 0)} 题 · 第 ${Number(latest.iteration_no || 1)} 轮${latest.parent_version_id ? ` · 基线版本 #${latest.parent_version_id}` : ""}</small></div><button class="btn ghost sm" data-es-optimize-version="${latest.version_id}"><i data-lucide="copy-plus"></i>${latest.status === "draft" ? "继续校验" : "优化评测集"}</button></div>` : `<div class="es-scenario-empty">还没有该场景的版本，点击“新建草稿”开始沉淀。</div>`}
+  </section>`;
+  target.querySelector("#esScenarioSelect").onchange = event => { window.__esScenarioId = Number(event.target.value) || null; const chosen = scenarios.find(item => Number(item.scenario_id) === window.__esScenarioId); window.__esScenarioName = chosen?.name || ""; esLoadCustom(); };
+  target.querySelector("#esScenarioCreate").onclick = esOpenScenarioModal;
+  target.querySelector("#esScenarioDraft")?.addEventListener("click", () => { window.__esScenarioName = current?.name || ""; openEvalSetGeneratorModal(); });
+  target.querySelector("[data-es-optimize-version]")?.addEventListener("click", async event => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    try {
+      const version = await apiPostES(`/api/versions/${button.dataset.esOptimizeVersion}/clone?actor=web`, {});
+      window.__esView = "custom";
+      await esLoadCustom();
+      toast(`已创建 ${version.version_number} 优化草稿，请人工校验`, "ok");
+    } catch (error) { toast("创建优化草稿失败：" + error.message, "warn"); button.disabled = false; }
+  });
+  icons();
+}
+
 function esPubCount() {
   const v = ES_PUBLIC_DIMS.reduce((s, d) => s + (d.picked || 0), 0);
   const el = $("#gcsPub");
@@ -517,14 +673,29 @@ function esPubCount() {
 
 async function esLoadCustom(navigationToken = window.__esNavigationToken) {
   if (navigationToken !== window.__esNavigationToken) return;
-  const versions = await apiGet(`/api/versions`).catch(() => []);
+  const [versions, scenarios, runs] = await Promise.all([
+    apiGet(`/api/versions`).catch(() => []),
+    apiGet(`/api/scenarios`).catch(() => []),
+    apiGet(`/api/evaluation-runs`).catch(() => []),
+  ]);
   if (navigationToken !== window.__esNavigationToken) return;
-  const persistent = versions.filter(version => version.snapshot_metadata?.composition_name).map(version => ({ id: `version:${version.version_id}`, name: version.snapshot_metadata.composition_name, total_cases: version.case_count || 0 }));
+  if (!window.__esScenarioInitialized) {
+    window.__esScenarioId = Number(scenarios[0]?.scenario_id) || null;
+    window.__esScenarioName = scenarios[0]?.name || "";
+    window.__esScenarioInitialized = true;
+  }
+  const scenarioId = Number(window.__esScenarioId) || null;
+  const scopedVersions = scenarioId ? versions.filter(version => Number(version.scenario_id) === scenarioId) : versions;
+  const latestVersion = scopedVersions[0];
+  const latestStats = latestVersion ? await apiGet(`/api/versions/${latestVersion.version_id}/stats`).catch(() => null) : null;
+  if (navigationToken !== window.__esNavigationToken) return;
+  esRenderScenarioWorkbench($("#esScenarioWorkbench"), scenarios, versions, runs, latestStats);
+  const persistent = scopedVersions.filter(version => version.snapshot_metadata?.composition_name).map(version => ({ id: `version:${version.version_id}`, name: version.snapshot_metadata.composition_name, total_cases: version.case_count || 0, status: version.status, version_number: version.version_number }));
   const local = (window.__customSets && window.__customSets.length) ? window.__customSets.map((set, index) => ({ ...set, id: `local:${index}` })) : (persistent.length ? [] : ES_CUSTOM_SAMPLES.map((set, index) => ({ ...set, id: `local:${index}` })));
   const sets = [...persistent, ...local];
   const box = $("#esCustomList");
   esRenderLibraryTree("esCustomTree", sets.map(set => ({ id: set.id, kind: "custom", name: set.name, meta: `${set.total_cases || 0} 题` })));
-  if (box) box.innerHTML = sets.length ? sets.map(set => esHomeRow({ id: set.id, kind: "custom", name: set.name, meta: `${set.total_cases || 0} 题`, color: "#7A4FB0" })).join("") : `<div class="es-gen-hint">暂无评测集库文档。</div>`;
+  if (box) box.innerHTML = sets.length ? sets.map(set => esHomeRow({ id: set.id, kind: "custom", name: set.name, meta: `${set.status ? esScenarioStatusLabel(set.status) + " · " : ""}${set.total_cases || 0} 题`, color: set.status === "draft" ? "#B9770E" : "#7A4FB0" })).join("") : `<div class="es-gen-hint">暂无评测集库文档。</div>`;
 }
 
 // 上传评测集

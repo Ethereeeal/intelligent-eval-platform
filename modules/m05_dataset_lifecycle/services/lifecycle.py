@@ -86,6 +86,207 @@ class DatasetLifecycleService:
             if quality.get("data_completeness_rate", 0) < 1 or quality.get("valid_qa_ratio", 0) < 1:
                 raise ValueError(f"上传评测集“{item.get('name', set_id)}”未通过质量门禁（需问题/答案完整且有效）")
 
+    def _scenario_for_draft(
+        self,
+        *,
+        scenario_id: int | None,
+        name: str,
+        description: str | None,
+        tags: list[str] | None,
+        created_by: str | None,
+    ) -> dict:
+        if scenario_id is not None:
+            scenario = self.db.get_scenario(scenario_id)
+            if scenario is None:
+                raise ValueError(f"业务场景 {scenario_id} 不存在")
+            return scenario
+        # 同名场景复用，避免每次生成都产生一个无法检索的新场景。
+        existing = next((item for item in self.db.list_scenarios() if item["name"] == name.strip()), None)
+        return existing or self.db.create_scenario(
+            name=name,
+            description=description,
+            tags=tags,
+            created_by=created_by,
+        )
+
+    def create_draft(
+        self,
+        *,
+        name: str,
+        scenario_id: int | None = None,
+        scenario_name: str | None = None,
+        scenario_description: str | None = None,
+        scenario_tags: list[str] | None = None,
+        created_by: str | None = None,
+        document_ids: list[int] | None = None,
+        uploaded_set_ids: list[int] | None = None,
+        public_selections: list[dict] | None = None,
+        generation_config: dict | None = None,
+        parent_version_id: int | None = None,
+    ) -> dict:
+        """将本次生成结果保存为可人工校验的 draft，不直接进入可执行评测。"""
+        has_external = bool(uploaded_set_ids) or any(
+            int(item.get("count", 0)) > 0 for item in (public_selections or []) if isinstance(item, dict)
+        )
+        scenario = self._scenario_for_draft(
+            scenario_id=scenario_id,
+            name=scenario_name or name,
+            description=scenario_description,
+            tags=scenario_tags,
+            created_by=created_by,
+        )
+        self._assert_selected_uploads_quality(uploaded_set_ids)
+        if not document_ids and not has_external:
+            raise ValueError("草稿至少需要选择一个文档、上传评测集或公共库题目")
+        latest = self.db.get_latest_version_number()
+        version_number = _next_version_number(latest)
+        snapshot_metadata = self._build_snapshot_metadata(
+            coverage={"scope": "draft_selected_eval_set"}, created_by=created_by
+        )
+        snapshot_metadata.update({
+            "composition_name": name,
+            "lifecycle_stage": "draft",
+            "scenario_name": scenario["name"],
+            "generation_config": generation_config or {},
+            "document_ids": document_ids or [],
+            "uploaded_set_ids": uploaded_set_ids or [],
+            "public_selections": public_selections or [],
+            "generated_library": {"role": "intermediate_artifact", "origin": "document_library"},
+        })
+        version_id = self.db.save_dataset_version(
+            scenario_id=scenario["scenario_id"],
+            parent_version_id=parent_version_id,
+            iteration_no=self._next_iteration_no(scenario["scenario_id"]),
+            version_number=version_number,
+            status="draft",
+            case_count=0,
+            split_config={"format": "full", "include_retired": False},
+            snapshot_metadata=snapshot_metadata,
+        )
+        case_count = self._snapshot_cases(
+            version_id=version_id,
+            # [] 表示本次没有选文档；不能因为 document_ids 为空就把生成库全量带入外部题草稿。
+            document_ids=document_ids or [],
+            include_all=True,
+        )
+        case_count += self._materialize_external(
+            version_id=version_id,
+            uploaded_set_ids=uploaded_set_ids,
+            public_selections=public_selections,
+        )
+        if case_count <= 0:
+            raise ValueError("所选来源没有可保存的评测题，请先完成生成或导入")
+        self.db.update_dataset_version(version_id, case_count=case_count)
+        self.db.save_evaluation_iteration(
+            scenario_id=scenario["scenario_id"],
+            version_id=version_id,
+            parent_version_id=parent_version_id,
+            optimization_type="dataset",
+            status="draft",
+            summary="首次生成草稿，等待质量检查与人工校验",
+            metadata_json={"stage": "generation"},
+            created_by=created_by or "web",
+        )
+        return self.db.get_dataset_version(version_id) or {}
+
+    def _next_iteration_no(self, scenario_id: int) -> int:
+        versions = [item for item in self.db.list_dataset_versions() if item.get("scenario_id") == scenario_id]
+        return max([int(item.get("iteration_no") or 0) for item in versions] + [0]) + 1
+
+    def clone_version(self, version_id: int, *, created_by: str | None = None) -> dict:
+        source = self.db.get_dataset_version(version_id)
+        if source is None:
+            raise ValueError("source version not found")
+        if source.get("status") not in {"frozen", "published"}:
+            raise ValueError("只有冻结或发布版本可以克隆草稿")
+        scenario_id = source.get("scenario_id")
+        if scenario_id is None:
+            scenario = self._scenario_for_draft(
+                scenario_id=None,
+                name=(source.get("snapshot_metadata") or {}).get("composition_name") or "未命名业务场景",
+                description="从历史评测集版本补建的业务场景",
+                tags=[],
+                created_by=created_by,
+            )
+            scenario_id = scenario["scenario_id"]
+        name = f"{(source.get('snapshot_metadata') or {}).get('composition_name') or source.get('version_number') or '评测集'} · 草稿"
+        metadata = dict(source.get("snapshot_metadata") or {})
+        metadata.update({"composition_name": name, "lifecycle_stage": "draft", "cloned_from_version_id": version_id})
+        new_id = self.db.save_dataset_version(
+            scenario_id=scenario_id,
+            parent_version_id=version_id,
+            iteration_no=self._next_iteration_no(scenario_id),
+            version_number=_next_version_number(self.db.get_latest_version_number()),
+            status="draft",
+            case_count=0,
+            split_config=source.get("split_config") or {"format": "full", "include_retired": False},
+            snapshot_metadata=metadata,
+        )
+        count = 0
+        for case in self.db.get_eval_cases(version_id, include_retired=False, limit=100000):
+            self.db.save_eval_case(
+                version_id=new_id,
+                case_uid=f"draft_{new_id:04d}_{case['case_id']:06d}",
+                intent_id=case.get("intent_id"),
+                question=case["question"],
+                type=case.get("type"),
+                scope=case.get("scope"),
+                difficulty=case.get("difficulty"),
+                gold_answer=case.get("gold_answer"),
+                must_have_points=case.get("must_have_points"),
+                acceptable_answers=case.get("acceptable_answers"),
+                evidence=case.get("evidence"),
+                eiu_ids=case.get("eiu_ids"),
+                content_priority=case.get("content_priority"),
+                review_status="candidate",
+                auto_quality_status=case.get("auto_quality_status") or "pending",
+                manual_review_status="pending",
+                source=case.get("source") or "native",
+            )
+            count += 1
+        self.db.update_dataset_version(new_id, case_count=count)
+        self.db.save_evaluation_iteration(
+            scenario_id=scenario_id,
+            version_id=new_id,
+            parent_version_id=version_id,
+            optimization_type="dataset",
+            status="draft",
+            summary="从冻结版本克隆，等待评测集优化",
+            metadata_json={"stage": "clone"},
+            created_by=created_by or "web",
+        )
+        return self.db.get_dataset_version(new_id) or {}
+
+    def freeze_draft(self, version_id: int, *, actor: str | None = None) -> dict:
+        version = self.db.get_dataset_version(version_id)
+        if version is None:
+            raise ValueError("version not found")
+        if version.get("status") != "draft":
+            raise ValueError("只有草稿版本可以冻结")
+        cases = self.db.get_eval_cases(version_id, include_retired=False, limit=100000)
+        if not cases:
+            raise ValueError("草稿没有可冻结的评测题")
+        blocked = [case for case in cases if case.get("auto_quality_status") != "passed" or case.get("manual_review_status") != "approved"]
+        if blocked:
+            pending_quality = sum(case.get("auto_quality_status") != "passed" for case in blocked)
+            pending_review = sum(case.get("manual_review_status") != "approved" for case in blocked)
+            raise ValueError(f"草稿尚未满足冻结门禁：{pending_quality} 条自动质检未通过，{pending_review} 条未完成人工确认")
+        metadata = dict(version.get("snapshot_metadata") or {})
+        metadata.update({"lifecycle_stage": "frozen", "frozen_by": actor or "web", "frozen_at": datetime.utcnow().isoformat() + "Z"})
+        self.db.update_dataset_version(version_id, status="frozen", snapshot_metadata=metadata, freeze=True)
+        if version.get("scenario_id") is not None:
+            self.db.save_evaluation_iteration(
+                scenario_id=version["scenario_id"],
+                version_id=version_id,
+                parent_version_id=version.get("parent_version_id"),
+                optimization_type="dataset",
+                status="frozen",
+                summary="人工校验完成，版本已冻结，可进入评测运行",
+                metadata_json={"stage": "freeze"},
+                created_by=actor or "web",
+            )
+        return self.db.get_dataset_version(version_id) or {}
+
     # ------------------------------------------------------------------
     # 版本冻结
     # ------------------------------------------------------------------
@@ -190,7 +391,11 @@ class DatasetLifecycleService:
         return self.db.get_dataset_version(version_id)
 
     def _snapshot_cases(
-        self, *, version_id: int, document_ids: list[int] | None = None
+        self,
+        *,
+        version_id: int,
+        document_ids: list[int] | None = None,
+        include_all: bool = False,
     ) -> int:
         """将可发布态的 generated_case 复制为 eval_case 快照（冻结后不可变）。
 
@@ -198,7 +403,13 @@ class DatasetLifecycleService:
         快照保存，保证用户选择的题目数量和来源不被静默改变。
         document_ids 非空时仅快照所选文档的可发布 case。
         """
-        cases = self._publishable_cases(document_ids=document_ids)
+        cases = self.db.list_generated_cases()
+        if document_ids is not None:
+            doc_set = set(document_ids)
+            cases = [case for case in cases if case.get("document_id") in doc_set]
+        cases = [case for case in cases if case.get("review_status") != "retired"]
+        if not include_all:
+            cases = [case for case in cases if case.get("review_status") in PUBLISHABLE_STATUSES]
         count = 0
         for case in cases:
             self.db.save_eval_case(
@@ -216,6 +427,8 @@ class DatasetLifecycleService:
                 eiu_ids=[case.get("eiu_id")] if case.get("eiu_id") else [],
                 content_priority=case.get("content_priority"),
                 review_status=case.get("review_status"),
+                auto_quality_status="passed" if case.get("review_status") in PUBLISHABLE_STATUSES else "pending",
+                manual_review_status="pending",
                 source="native",
             )
             count += 1
@@ -255,6 +468,8 @@ class DatasetLifecycleService:
                     evidence=case.get("evidence"),
                     source="uploaded",
                     review_status="quality_checked",
+                    auto_quality_status="passed",
+                    manual_review_status="pending",
                 )
                 added += 1
 
@@ -278,6 +493,8 @@ class DatasetLifecycleService:
                     evidence=case.get("evidence"),
                     source="public",
                     review_status="quality_checked",
+                    auto_quality_status="passed",
+                    manual_review_status="pending",
                 )
                 added += 1
 
@@ -399,8 +616,80 @@ class DatasetLifecycleService:
             must_have_points=must_have_points,
             acceptable_answers=acceptable_answers,
             evidence=evidence,
+            auto_quality_status="pending",
+            manual_review_status="pending",
+            manual_review_by=None,
+            manual_review_reason=None,
         )
+        changed_fields = [
+            field for field, value in {
+                "question": question,
+                "gold_answer": gold_answer,
+                "type": type,
+                "scope": scope,
+                "difficulty": difficulty,
+                "content_priority": content_priority,
+                "must_have_points": must_have_points,
+                "acceptable_answers": acceptable_answers,
+                "evidence": evidence,
+            }.items() if value is not None
+        ]
+        if hasattr(self.db, "save_audit"):
+            self.db.save_audit(
+                operation="dataset_case.edit",
+                target_type="eval_case",
+                target_id=str(case_id),
+                actor="web",
+                detail={"changed_fields": changed_fields},
+            )
         return self.db.get_eval_case(case_id)
+
+    def review_case(
+        self,
+        case_id: int,
+        *,
+        status: str,
+        actor: str | None = None,
+        reason: str | None = None,
+    ) -> dict | None:
+        case = self.db.get_eval_case(case_id)
+        if case is None:
+            return None
+        version = self.db.get_dataset_version(case["version_id"])
+        if version and version.get("status") != "draft":
+            raise ValueError("冻结或发布版本不可修改人工审核状态，请先克隆草稿")
+        if status == "approved" and case.get("auto_quality_status") != "passed":
+            raise ValueError("自动质检未通过，不能人工确认")
+        result = self.db.review_eval_case(case_id, status=status, actor=actor or "web", reason=reason)
+        self.db.save_audit(
+            operation="dataset_case.manual_review",
+            target_type="eval_case",
+            target_id=str(case_id),
+            actor=actor or "web",
+            detail={"status": status, "reason": (reason or "").strip()[:500]},
+        )
+        return result
+
+    def check_draft_case(self, case_id: int) -> dict | None:
+        case = self.db.get_eval_case(case_id)
+        if case is None:
+            return None
+        version = self.db.get_dataset_version(case["version_id"])
+        if not version or version.get("status") != "draft":
+            raise ValueError("仅草稿题目可以执行自动质检")
+        question_ok = bool(str(case.get("question") or "").strip())
+        answer_ok = bool(str(case.get("gold_answer") or "").strip())
+        status = "passed" if question_ok and answer_ok else "failed"
+        reason = "问题和标准答案完整" if status == "passed" else "问题与标准答案均不能为空"
+        self.db.update_eval_case(case_id, auto_quality_status=status, manual_review_status="pending")
+        self.db.save_audit(
+            operation="dataset_case.quality_check",
+            target_type="eval_case",
+            target_id=str(case_id),
+            actor="web",
+            detail={"status": status, "reason": reason},
+        )
+        return {"case_id": case_id, "auto_quality_status": status, "reason": reason, "case": self.db.get_eval_case(case_id)}
 
     def delete_case(self, case_id: int) -> bool:
         case = self.db.get_eval_case(case_id)
@@ -410,7 +699,42 @@ class DatasetLifecycleService:
         if version and version.get("status") in {"frozen", "published"}:
             raise ValueError("frozen or published versions are read-only; create a draft first")
         self.db.retire_eval_case(case_id)
+        self.db.update_dataset_version(case["version_id"], case_count=self.db.count_eval_cases(case["version_id"]))
         return True
+
+    @staticmethod
+    def _case_lineage_key(case: dict) -> str:
+        """克隆版本沿用原 case id 尾段；外部题没有稳定 lineage 时退回题目键。"""
+        uid = str(case.get("case_uid") or "")
+        match = re.search(r"_(\d+)$", uid)
+        return f"case:{int(match.group(1))}" if match else f"text:{str(case.get('question') or '').strip().lower()}"
+
+    def version_diff(self, version_id: int) -> dict:
+        version = self.db.get_dataset_version(version_id)
+        if version is None:
+            raise ValueError("version not found")
+        parent_id = version.get("parent_version_id")
+        if parent_id is None:
+            return {"version_id": version_id, "parent_version_id": None, "added": [], "modified": [], "excluded": [], "counts": {"added": 0, "modified": 0, "excluded": 0}}
+        current_cases = self.db.get_eval_cases(version_id, include_retired=True, limit=100000)
+        parent_cases = self.db.get_eval_cases(parent_id, include_retired=False, limit=100000)
+        current = {self._case_lineage_key(case): case for case in current_cases if not case.get("retired")}
+        parent = {self._case_lineage_key(case): case for case in parent_cases}
+        comparable_fields = ("question", "gold_answer", "evidence", "must_have_points", "acceptable_answers", "difficulty")
+        modified = []
+        for key in sorted(current.keys() & parent.keys()):
+            if any(current[key].get(field) != parent[key].get(field) for field in comparable_fields):
+                modified.append({"key": key, "before": parent[key], "after": current[key]})
+        added = [{"key": key, "case": current[key]} for key in sorted(current.keys() - parent.keys())]
+        excluded = [{"key": key, "case": parent[key]} for key in sorted(parent.keys() - current.keys())]
+        return {
+            "version_id": version_id,
+            "parent_version_id": parent_id,
+            "added": added,
+            "modified": modified,
+            "excluded": excluded,
+            "counts": {"added": len(added), "modified": len(modified), "excluded": len(excluded)},
+        }
 
     # ------------------------------------------------------------------
     # 表格视图 / 统计
@@ -433,13 +757,28 @@ class DatasetLifecycleService:
         )
 
     def case_stats(self, version_id: int) -> dict:
-        cases = self.db.get_eval_cases(version_id)
+        cases = self.db.get_eval_cases(version_id, include_retired=True, limit=100000)
         stats: dict[str, int] = {}
-        for case in cases:
+        active_cases = [case for case in cases if not case.get("retired")]
+        for case in active_cases:
             for dim in ("difficulty", "content_priority", "type", "scope", "source"):
                 key = case.get(dim) or "unknown"
                 stats[f"{dim}:{key}"] = stats.get(f"{dim}:{key}", 0) + 1
-        return {"total": len(cases), "by_dimension": stats}
+        return {
+            "total": len(active_cases),
+            "retired": len(cases) - len(active_cases),
+            "by_dimension": stats,
+            "auto_quality": {
+                "passed": sum(case.get("auto_quality_status") == "passed" for case in active_cases),
+                "failed": sum(case.get("auto_quality_status") == "failed" for case in active_cases),
+                "pending": sum(case.get("auto_quality_status") not in {"passed", "failed"} for case in active_cases),
+            },
+            "manual_review": {
+                "approved": sum(case.get("manual_review_status") == "approved" for case in active_cases),
+                "rejected": sum(case.get("manual_review_status") == "rejected" for case in active_cases),
+                "pending": sum(case.get("manual_review_status") not in {"approved", "rejected"} for case in active_cases),
+            },
+        }
 
     # ------------------------------------------------------------------
     # 树形浏览（FR-DS-TREE-001）
