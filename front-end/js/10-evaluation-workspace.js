@@ -14,14 +14,14 @@
     renderedResultsSignature: null,
     pollTimer: null,
     taskProfile: "question_answering",
-    evaluationMethods: ["answer_comparison", "rules"],
+    evaluationMethods: [],
     intermediateNodes: [],
     judgePrompt: "",
     judgeContext: { history: false, intermediate: false, retrieved: false },
     summary: {},
   };
   state.taskProfile ||= "question_answering";
-  state.evaluationMethods ||= ["answer_comparison", "rules"];
+  state.evaluationMethods ||= [];
   state.intermediateNodes ||= [];
   state.judgeContext ||= { history: false, intermediate: false, retrieved: false };
   const $w = () => document.getElementById("evWorkspace");
