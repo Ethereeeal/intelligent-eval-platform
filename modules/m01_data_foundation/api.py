@@ -8,8 +8,6 @@ from pathlib import Path
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 
-from modules.m02_eiu_coverage.services.eiu_extractor import EiuExtractorService
-from modules.m05_dataset_lifecycle.services.lifecycle import DatasetLifecycleService
 from modules.m01_data_foundation.schemas import (
     BlockOut,
     DocumentProcessingTraceOut,
@@ -19,6 +17,8 @@ from modules.m01_data_foundation.schemas import (
     ReuploadResponse,
 )
 from modules.m01_data_foundation.services.pipeline import PipelineService
+from modules.m02_eiu_coverage.services.eiu_extractor import EiuExtractorService
+from modules.m05_dataset_lifecycle.services.lifecycle import DatasetLifecycleService
 from modules.shared.core.config import settings
 from modules.shared.services.database import repair_legacy_filename
 

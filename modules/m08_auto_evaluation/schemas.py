@@ -30,6 +30,10 @@ class EvaluationRunRequest(BaseModel):
     name: str | None = None
     adapter: str = "mock"
     adapter_config: dict | None = None
+    multi_turn: bool = Field(
+        default=False,
+        description="是否按多轮对话模式运行；开启时组合内每条样本都必须包含有效 turns",
+    )
     task_profile: Literal["question_answering", "translation", "text_generation"] = "question_answering"
     evaluation_methods: list[
         Literal["answer_comparison", "rules", "llm_as_judge", "bleu", "rouge_l"]

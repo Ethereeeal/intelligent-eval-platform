@@ -551,10 +551,11 @@ async function esHandleUpload(files) {
         toast("请上传 JSON、CSV 或从模板下载的 Excel（.xls）文件");
         continue;
       }
+      const isMultiTurn = cases.some(item => Array.isArray(item?.turns));
       await apiPostES(`/api/eval-sets/upload`, {
         name: f.name.replace(/\.[^.]+$/, ""),
         version: "v1",
-        multi_turn: false,
+        template_type: isMultiTurn ? "multi" : "single",
         folder_path: "",
         cases,
       });

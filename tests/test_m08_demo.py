@@ -7,7 +7,11 @@ from openpyxl import load_workbook
 
 from modules.m08_auto_evaluation import api
 from modules.m08_auto_evaluation.api import _build_evaluation_workbook
-from modules.m08_auto_evaluation.schemas import AdapterTestRequest, ErrorBookUpdateRequest
+from modules.m08_auto_evaluation.schemas import (
+    AdapterTestRequest,
+    ErrorBookUpdateRequest,
+    EvaluationRunRequest,
+)
 from modules.m08_auto_evaluation.services import runner
 from modules.m08_auto_evaluation.services.adapter import HttpAdapter, MockAdapter, OpenAiCompatibleAdapter
 from modules.m08_auto_evaluation.services.diagnosis import diagnose
@@ -186,6 +190,19 @@ class M08DemoTests(unittest.TestCase):
         self.assertEqual(result["scores"], {"score": 0.1})
         self.assertEqual(result["context_analysis"]["category"], "memory_failure")
         self.assertEqual(save.call_args.kwargs["context_analysis"]["note"], "忘记前文限制")
+
+    def test_multi_turn_mode_requires_turns(self):
+        payload = EvaluationRunRequest(composition_id=1, multi_turn=True)
+        with self.assertRaises(ValueError):
+            api._validate_multi_turn_mode([{"question": "q", "turns": None}], payload.multi_turn)
+
+    def test_single_turn_mode_rejects_multi_turn_samples(self):
+        payload = EvaluationRunRequest(composition_id=1)
+        with self.assertRaises(ValueError):
+            api._validate_multi_turn_mode(
+                [{"question": "q", "turns": [{"q": "first", "a": "answer"}]}],
+                payload.multi_turn,
+            )
 
     def test_black_box_failure_is_not_assigned_a_retrieval_or_generation_cause(self):
         diagnosis = diagnose(

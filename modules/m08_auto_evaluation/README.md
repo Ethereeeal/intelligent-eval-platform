@@ -64,7 +64,7 @@ modules/m08_auto_evaluation/
 ## 4. 运行与指标
 
 ```
-POST /api/evaluation-runs {composition_id, adapter, adapter_config, task_profile?, evaluation_methods?, intermediate_eval?, judge_eval?}
+POST /api/evaluation-runs {composition_id, adapter, adapter_config, multi_turn?, task_profile?, evaluation_methods?, intermediate_eval?, judge_eval?}
   → 组合解析为统一输入样本（m05 composition.resolve_composition；文档生成来源必须是 frozen 版本）
   → 异步线程逐题调用适配器
   → score_case（短答案精确匹配 / 长答案语义相似度，并独立执行评测集约束规则与可选 Judge）
@@ -139,6 +139,7 @@ Judge 配置示例：
 输入字段通过评测样本的 `intermediate_reference` / `node_contract` 传递。外部评测集可以只提供它能提供的字段；缺少某个节点的标准数据、实际节点输出或实际检索文本时，该节点状态为 `data_missing`，指标保持 `null`，不参与均值计算。RAGAS 依赖未安装、评测模型未配置或调用失败时分别返回 `unavailable` / `error`，不伪造 0 分。
 
 - **Demo 指标**：短答案规范化精确匹配；长答案尝试 BGE 余弦相似度（不可用时回退精确匹配）；评测集有约束时额外执行 `must_have_points` / `acceptable_answers` 规则评测；按难度/维度/归因汇总通过率，并累计耗时、Token、成本和错误率。
+评测配置页提供“多轮对话评测”勾选。勾选后，组合内每条样本都必须包含非空 `turns`；未勾选但组合包含多轮样本时，发起请求会被拒绝并提示用户切换模式。前端先提示，后端再次校验，避免仅依赖界面状态。
 - **Demo 失败记录**：答错统一标记 `E2E`（端到端失败、原因不可定位）；调用异常标记 `D9`。待测智能体不返回可与内部 Block/EIU 比对的检索轨迹，因此 D1–D8 不属于本平台的自动归因范围。
 - **复测与对比**：单题复测通过 `POST /api/evaluation-results/{id}/retry` 创建关联尝试，不覆盖原结果；只有达到发起复测时的分析阈值才自动把异常项置为 `verified`。运行对比固定同一评测集版本，展示新增失败、已修复和持续失败。平台不执行智能体调优，m08 运行结果不驱动评测集修订。
 - **可观察说明**：后端保留 `E2E` / `D9` 诊断代码用于审计，前端默认显示“答案未通过”或“调用异常”，避免把内部编码直接暴露给测试人员。

@@ -82,6 +82,23 @@ def _sanitize_adapter_config(config: dict | None) -> dict | None:
     return sanitized
 
 
+def _validate_multi_turn_mode(samples: list[dict], multi_turn: bool) -> None:
+    """保证前端选择的运行模式与组合内样本结构一致。"""
+    has_turns = [
+        isinstance(sample.get("turns"), list) and bool(sample.get("turns"))
+        for sample in samples
+    ]
+    if multi_turn:
+        missing_count = sum(not value for value in has_turns)
+        if missing_count:
+            raise ValueError(
+                "已勾选多轮对话评测，但所选评测集存在 "
+                f"{missing_count} 条样本缺少有效 turns"
+            )
+    elif any(has_turns):
+        raise ValueError("所选评测集包含多轮样本，请勾选“多轮对话评测”后再发起")
+
+
 @evaluation_router.post("/evaluation-runs", status_code=202)
 def create_evaluation_run(payload: EvaluationRunRequest):
     """发起批量运行：组合解析为统一输入样本 → 异步线程逐题调用适配器。"""
@@ -89,6 +106,7 @@ def create_evaluation_run(payload: EvaluationRunRequest):
         raise HTTPException(status_code=404, detail="composition not found")
     try:
         samples = resolve_composition(_db, payload.composition_id)
+        _validate_multi_turn_mode(samples, payload.multi_turn)
         adapter = get_adapter(payload.adapter, payload.adapter_config)
         intermediate_config = normalize_intermediate_config(payload.intermediate_eval.model_dump())
         selection = normalize_evaluation_selection(
@@ -135,6 +153,7 @@ def create_evaluation_run(payload: EvaluationRunRequest):
             detail={
                 "composition_id": payload.composition_id,
                 "adapter": payload.adapter,
+                "multi_turn": payload.multi_turn,
                 "total": len(samples),
                 "intermediate_eval": intermediate_config,
                 "judge_eval": judge_config,

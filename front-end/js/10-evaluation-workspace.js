@@ -4,6 +4,7 @@
     tab: "config",
     compositionId: null,
     selectedSource: null,
+    multiTurn: false,
     runId: null,
     results: [],
     filteredResults: [],
@@ -238,7 +239,7 @@
       <div id="evAdapterFields"></div></div>
       <div class="card card-pad ev-section"><div class="card-t">选择评测集</div><p class="es-gen-hint">评测库同时展示冻结版本和已创建的组合；冻结版本首次发起评测时会自动登记为可执行组合。</p><div class="ev-set-actions"><button class="btn ghost" id="evCreateSet"><i data-lucide="combine"></i>创建 / 合并评测集</button></div><div class="ev-compositions">${sourceRows || `<div class="es-gen-hint">暂无已冻结的评测集，请先生成并冻结评测集。</div>`}</div></div>
       <div class="card card-pad ev-section"><div class="card-t">评测方法与中间节点</div><div id="evEvaluationControls"></div></div>
-      <div class="ev-run-foot"><label class="es-field">运行名称（可选）</label><input class="es-input" id="evRunName" placeholder="例如：客服智能体 v0.1 回归测试"/><button class="btn primary" id="evStart"><i data-lucide="play"></i>发起评测</button></div>`);
+      <div class="ev-run-foot"><label class="ev-multi-toggle" for="evMultiTurn"><input type="checkbox" id="evMultiTurn" ${state.multiTurn ? "checked" : ""}/><span><b>多轮对话评测</b><small>开启后，所选评测集的每条样本都必须包含 turns</small></span></label><button class="btn primary" id="evStart"><i data-lucide="play"></i>发起评测</button></div>`);
     // Demo 不提供 Mock 入口；评测集以可展开的“评测库”目录展示。
     document.querySelector('[data-adapter="mock"]').remove();
     const compositionBox = document.querySelector(".ev-compositions");
@@ -247,8 +248,6 @@
     folder.innerHTML = `<i data-lucide="chevron-down"></i><i data-lucide="folder-open"></i><b>评测库</b><span>${sourceItems.length}</span>`;
     compositionBox.parentNode.insertBefore(folder, compositionBox);
     folder.onclick = () => { const closed = compositionBox.classList.toggle("collapsed"); folder.querySelector("svg").setAttribute("data-lucide", closed ? "chevron-right" : "chevron-down"); icons(); };
-    const nameInput = document.getElementById("evRunName");
-    nameInput.previousElementSibling.remove(); nameInput.remove();
     bindEvaluationControls();
     setAdapter(state.draftAdapter || "openai_compatible");
     if (state.draftConfig) applyAdapterConfig(state.adapter, state.draftConfig);
@@ -278,6 +277,7 @@
     };
     document.getElementById("evSaveProfile").onclick = saveCurrentProfile;
     document.getElementById("evTestAdapter").onclick = testCurrentAdapter;
+    document.getElementById("evMultiTurn").onchange = event => { state.multiTurn = event.target.checked; };
     document.getElementById("evStart").onclick = start;
     icons();
   }
@@ -390,6 +390,17 @@
         composition = compositions.find(item => Number(item.composition_id) === Number(selectedSource.compositionId));
       }
       if (!composition) return toast("所选评测集版本不存在，请重新选择");
+      const compositionDetail = await apiGet(`/api/compositions/${composition.composition_id}`);
+      const samples = Array.isArray(compositionDetail.samples) ? compositionDetail.samples : [];
+      const multiTurn = Boolean(document.getElementById("evMultiTurn")?.checked ?? state.multiTurn);
+      state.multiTurn = multiTurn;
+      const hasTurns = samples.map(sample => Array.isArray(sample?.turns) && sample.turns.length > 0);
+      if (multiTurn && hasTurns.some(value => !value)) {
+        return toast("已勾选多轮对话评测，但所选评测集存在缺少 turns 的样本");
+      }
+      if (!multiTurn && hasTurns.some(Boolean)) {
+        return toast("所选评测集包含多轮样本，请勾选“多轮对话评测”后再发起");
+      }
       openRunConfirmation(composition, requestConfig, evaluationConfig);
     } catch (e) { toast("发起失败：" + e.message); }
   }
@@ -426,7 +437,7 @@
         <input class="es-input" id="evConfirmName" maxlength="255" value="${esc(defaultRunName(composition.name || `评测集-${composition.composition_id}`))}" />
         <div class="ev-confirm-grid">
           <section class="ev-confirm-card"><div class="ev-confirm-label">请求配置</div><b>${esc(adapterLabel)}</b><pre>${esc(JSON.stringify(requestSummary, null, 2))}</pre></section>
-          <section class="ev-confirm-card"><div class="ev-confirm-label">可执行评测集</div><b>${esc(composition.name || `评测集 #${composition.composition_id}`)}</b><dl><div><dt>版本</dt><dd>#${composition.composition_id}</dd></div><div><dt>来源数</dt><dd>${Array.isArray(composition.items) ? composition.items.length : 0}</dd></div><div><dt>创建时间</dt><dd>${esc(formatDateTime(composition.created_at))}</dd></div></dl></section>
+          <section class="ev-confirm-card"><div class="ev-confirm-label">可执行评测集</div><b>${esc(composition.name || `评测集 #${composition.composition_id}`)}</b><dl><div><dt>版本</dt><dd>#${composition.composition_id}</dd></div><div><dt>运行模式</dt><dd>${state.multiTurn ? "多轮对话" : "单轮问答"}</dd></div><div><dt>来源数</dt><dd>${Array.isArray(composition.items) ? composition.items.length : 0}</dd></div><div><dt>创建时间</dt><dd>${esc(formatDateTime(composition.created_at))}</dd></div></dl></section>
         </div>
         <section class="ev-confirm-card ev-confirm-evaluation"><div class="ev-confirm-label">本次评测方案</div><dl><div><dt>任务类型</dt><dd>${esc(taskProfileLabels[evaluationConfig.task_profile])}</dd></div><div><dt>评测方法</dt><dd>${esc(evaluationConfig.evaluation_methods.map(id => methodOptions.find(item => item.id === id)?.label || id).join("、") || "无")}</dd></div><div><dt>中间节点</dt><dd>${esc(evaluationConfig.intermediate_eval.nodes.map(id => nodeOptions.find(item => item.id === id)?.label || id).join("、") || "未启用")}</dd></div><div><dt>Judge附加输入</dt><dd>${esc([["include_history", "多轮历史"], ["include_intermediate", "中间节点结果"], ["include_retrieved", "检索结果"]].filter(([key]) => evaluationConfig.judge_eval[key]).map(([, label]) => label).join("、") || "无")}</dd></div></dl></section>
         <p class="ev-confirm-note"><i data-lucide="shield-check"></i>密钥及请求头敏感值仅以掩码展示，不会写入评测报告。</p>
@@ -452,6 +463,7 @@
           adapter: state.adapter,
           adapter_config: config,
           ...evaluationConfig,
+          multi_turn: state.multiTurn,
         });
         state.runId = run.run_id;
         state.tab = "results";
